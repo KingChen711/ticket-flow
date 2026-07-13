@@ -82,18 +82,21 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 
 ### Commit 4 — `feat(reservation): Redis connection + hold store wiring`
 - Thêm `StackExchange.Redis`. Đăng ký `IConnectionMultiplexer` (singleton) đọc `Redis:ConnectionString` từ config (`redis:6379` trong Docker, `localhost:6379` local).
-- Khung `RedisSeatHoldStore : ISeatHoldStore` (chưa có Lua — chỉ connect + healthcheck Redis).
-- Bổ sung Redis vào health check (`AddTicketFlowWeb` hoặc riêng) để `/health` phản ánh cả Redis.
+- Khung `RedisSeatHoldStore : ISeatHoldStore` — `LoadInventoryAsync` implement thật (không tranh chấp), 4 method còn lại `NotImplementedException` ghi rõ commit nào làm.
+- `RedisHealthCheck` tự viết bằng `PingAsync()` sẵn có trong `StackExchange.Redis` — **không** thêm package `AspNetCore.HealthChecks.Redis` riêng cho 1 check.
+- **Bug thật gặp:** `IHealthCheck`/`HealthCheckResult` nằm trong ASP.NET Core shared framework, không phải BCL — `Reservation.Infrastructure` là classlib thường nên thiếu reference (`CS0246`). Sửa bằng `<FrameworkReference Include="Microsoft.AspNetCore.App" />` (đúng pattern `TicketFlow.Web`). Hệ quả: `Microsoft.Extensions.Configuration.Abstractions` PackageReference cũ thành dư thừa (`NU1510`) — xoá.
+- **Quyết định:** `ISeatHoldStore` giờ có implementation nên kỹ thuật đủ điều kiện gọi `AddReservationApplication()`, nhưng **cố tình chưa gọi** trong `Program.cs` — để dành Commit 7 cho nhất quán với Catalog (Application wire cùng lúc REST endpoint dùng nó).
 
 ### Commit 5 — `feat(reservation): atomic multi-seat hold via Lua (anti-oversell)` ⭐
-- **Đây là commit lõi của cả phase.** Lua script all-or-nothing:
-  - Input: `eventId`, `seatIds[]`, `holdId`, `ttlSeconds`.
-  - Với mỗi seat: kiểm tra `seat ∈ seats:{eventId}` (hợp lệ) **AND** `seat ∉ sold:{eventId}` **AND** không có key `hold:{eventId}:{seatId}`.
-  - Nếu **tất cả** trống → `SET hold:{eventId}:{seatId} = holdId EX ttl` cho từng ghế, trả success.
-  - Nếu **bất kỳ** ghế nào bận → **không set gì cả**, trả danh sách seatId hết chỗ.
+- **Đây là commit lõi của cả phase.** Lua script (`HoldSeatsScript.cs`) all-or-nothing:
+  - `KEYS[1]`=seats set, `KEYS[2]`=sold set, `KEYS[3..]`=hold key mỗi ghế. `ARGV[1]`=holdId, `ARGV[2]`=ttl giây, `ARGV[3..]`=seatId song song với `KEYS[3..]`.
+  - Với mỗi seat: kiểm tra `seat ∈ seats set` (hợp lệ) **AND** `seat ∉ sold set` **AND** không có key `hold:{eventId}:{seatId}`.
+  - Nếu **tất cả** trống → `SET hold key = holdId EX ttl` cho từng ghế, trả `{}` rỗng.
+  - Nếu **bất kỳ** ghế nào bận → **không set gì cả**, trả mảng seatId hết chỗ.
 - Atomic vì Redis chạy Lua single-threaded → giữa check và set không ai chen được → **đúng 1 request thắng** mỗi ghế.
-- `HoldSeats` trả `holdId` (GUID) + `expiresAt`, hoặc `409 + unavailableSeatIds`.
-- **Ch8/Redis:** `SET NX` + Lua atomicity là bản chất chống double-hold. Ghi chú so sánh với RedLock (xem quyết định kiến trúc).
+- `TryHoldAsync` (C#) build `RedisKey[]`/`RedisValue[]` động theo số ghế, gọi `IDatabase.ScriptEvaluateAsync` (không dùng `LuaScript.Prepare` vì đó hợp cho script cố định tham số, không hợp cho KEYS/ARGV dài động theo số ghế).
+- **Ch8/Redis:** `SET`/`SISMEMBER`/`EXISTS` trong 1 Lua atomic là bản chất chống double-hold. So sánh với RedLock (xem quyết định kiến trúc) — RedLock là mutex đặt tên, sẽ tuần tự hoá cả event; ở đây chỉ khoá đúng những ghế liên quan.
+- Verify: build sạch. Verify **runtime thật** (Testcontainers Redis — 1000 hold đồng thời cùng 1 ghế) là Commit 10, không lặp lại ở đây.
 
 ### Commit 6 — `feat(reservation): confirm, release & availability query`
 - **Release:** Lua/atomic xoá các key `hold:{eventId}:{seatId}` **nếu** value = đúng `holdId` (chỉ chủ hold mới nhả được, tránh nhả nhầm hold người khác).
@@ -110,7 +113,7 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 - Endpoints (qua gateway `/reservation/**`):
   - `POST /events/{eventId}/inventory` — provision seats (nội bộ/organizer).
   - `GET /events/{eventId}/availability` — ghế còn trống.
-  - `POST /holds` — giữ ghế (body: eventId, seatIds, holderId) → holdId + expiresAt / 409.
+  - `POST /holds` — giữ ghế (body: eventId, seatIds — **không có holderId**, quyền sở hữu hold = possession of holdId token, xem quyết định ở Commit 2) → holdId + expiresAt / 409.
   - `POST /holds/{holdId}/confirm`, `POST /holds/{holdId}/release`.
 - **Ch3:** service phơi REST cho gateway (khách "chọn ghế" gọi thẳng reservation, đúng mục 7 scope: `U->>R: Chọn ghế`).
 

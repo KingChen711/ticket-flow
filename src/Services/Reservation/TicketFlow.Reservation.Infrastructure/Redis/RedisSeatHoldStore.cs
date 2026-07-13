@@ -5,12 +5,9 @@ using TicketFlow.Reservation.Domain.Seats;
 namespace TicketFlow.Reservation.Infrastructure.Redis;
 
 /// <summary>
-/// Skeleton only (Commit 4, see docs/phase-2-plan.md) — proves the Redis connection and lets
-/// AddReservationApplication() be wired into DI without failing service-provider validation
-/// (same trap as Identity Commit 11). LoadInventoryAsync has no concurrency concerns, so it's
-/// implemented for real here. The four methods that ARE the anti-oversell mechanism
-/// (TryHoldAsync via atomic Lua, then Release/Confirm/GetLiveStatuses) are still
-/// NotImplementedException — Commit 5 and Commit 6 fill them in.
+/// LoadInventoryAsync and TryHoldAsync (Commit 4 + Commit 5, see docs/phase-2-plan.md) are
+/// real. Release/Confirm/GetLiveStatuses are still NotImplementedException — Commit 6 fills
+/// them in.
 /// </summary>
 public sealed class RedisSeatHoldStore(IConnectionMultiplexer redis) : ISeatHoldStore
 {
@@ -25,8 +22,28 @@ public sealed class RedisSeatHoldStore(IConnectionMultiplexer redis) : ISeatHold
         await Db.SetAddAsync(RedisKeys.SeatsSet(eventId), values);
     }
 
-    public Task<IReadOnlyList<Guid>> TryHoldAsync(Guid eventId, IReadOnlyList<Guid> seatIds, Guid holdId, TimeSpan ttl, CancellationToken cancellationToken = default) =>
-        throw new NotImplementedException("Atomic Lua hold lands in Commit 5 — see docs/phase-2-plan.md.");
+    public async Task<IReadOnlyList<Guid>> TryHoldAsync(Guid eventId, IReadOnlyList<Guid> seatIds, Guid holdId, TimeSpan ttl, CancellationToken cancellationToken = default)
+    {
+        if (seatIds.Count == 0)
+            return [];
+
+        var keys = new RedisKey[2 + seatIds.Count];
+        keys[0] = RedisKeys.SeatsSet(eventId);
+        keys[1] = RedisKeys.SoldSet(eventId);
+        for (var i = 0; i < seatIds.Count; i++)
+            keys[i + 2] = RedisKeys.Hold(eventId, seatIds[i]);
+
+        var values = new RedisValue[2 + seatIds.Count];
+        values[0] = holdId.ToString();
+        values[1] = (long)ttl.TotalSeconds;
+        for (var i = 0; i < seatIds.Count; i++)
+            values[i + 2] = seatIds[i].ToString();
+
+        var result = await Db.ScriptEvaluateAsync(HoldSeatsScript.Source, keys, values);
+        var unavailable = (RedisValue[]?)result ?? [];
+
+        return unavailable.Select(seatId => Guid.Parse((string)seatId!)).ToList();
+    }
 
     public Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default) =>
         throw new NotImplementedException("Lands in Commit 6 — see docs/phase-2-plan.md.");
