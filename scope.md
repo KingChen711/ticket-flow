@@ -302,10 +302,10 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 ### Phase 2 — Reservation & bài toán overselling *(Ch8 + Redis)* — ~1.5 tuần
 **Mục tiêu:** giải quyết concurrency — điểm nhấn distributed systems.
 1. `reservation-service`: model tình trạng ghế (available/held/sold).
-2. Giữ ghế bằng **Redis distributed lock** (RedLock) + key TTL 10 phút.
-3. Chốt/nhả ghế; xử lý hết hạn hold tự động.
-4. **Load test**: mô phỏng 1000 request giành cùng 1 ghế → chứng minh không oversell.
-- **DoD:** chạy k6/NBomber song song, đúng 1 request thắng ghế, phần còn lại nhận "hết chỗ".
+2. Giữ ghế bằng **Lua script nguyên tử trên Redis** (`SET NX EX` cho từng ghế trong 1 script — atomic all-or-nothing, không dùng RedLock vì đây không phải bài toán khóa tài nguyên chia sẻ giữa nhiều node mà là "giành quyền sở hữu" từng key, `SET NX` đã đủ) + key TTL 10 phút.
+3. Chốt/nhả ghế; xử lý hết hạn hold tự động (TTL Redis tự dọn).
+4. **Load test**: NBomber mô phỏng 1000 request giành 100 ghế qua HTTP thật → chứng minh không oversell; Testcontainers test giành 1000 request/1 ghế trong Redis thật → chứng minh đúng 1 người thắng.
+- **DoD:** ✅ NBomber load test qua gateway, đúng số ghế được bán = số ghế cung cấp, phần còn lại nhận 409 "hết chỗ"; ✅ Testcontainers test 1000 concurrent hold/1 ghế → đúng 1 thắng. **Hoàn thành 2026-07-13** — verify qua `docker compose up` + smoke test 4 route gateway (catalog/identity/ordering/reservation đều 200), xem [docs/phase-2-plan.md](docs/phase-2-plan.md) để biết chi tiết từng commit và các lệch kế hoạch có lý do.
 
 ### Phase 3 — Async messaging & event-driven *(Ch4)* — ~1.5 tuần
 **Mục tiêu:** chuyển từ gọi trực tiếp sang event.

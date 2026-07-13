@@ -4,6 +4,7 @@ using TicketFlow.Catalog.Api.Endpoints;
 using TicketFlow.Catalog.Application;
 using TicketFlow.Catalog.Infrastructure;
 using TicketFlow.Catalog.Infrastructure.Seeding;
+using TicketFlow.Messaging;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddCatalogApplication();
 builder.Services.AddCatalogInfrastructure(builder.Configuration);
+// Commit 1 (Phase 3): bare bus wiring only, to prove BuildingBlocks.Messaging connects and
+// surfaces on /health. No consumers/outbox yet — that lands in Commit 3-4 once the Outbox
+// needs to be chained onto this same AddMassTransit call, at which point this likely moves
+// into AddCatalogInfrastructure alongside CatalogDbContext.
+builder.Services.AddTicketFlowMessaging(builder.Configuration);
 builder.Services.AddOpenApi();
 
 var app = builder.Build();

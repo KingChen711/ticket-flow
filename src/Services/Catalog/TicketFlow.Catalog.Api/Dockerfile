@@ -4,6 +4,7 @@ WORKDIR /src
 COPY Directory.Packages.props ./
 COPY src/BuildingBlocks/TicketFlow.Domain/TicketFlow.Domain.csproj src/BuildingBlocks/TicketFlow.Domain/
 COPY src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj src/BuildingBlocks/TicketFlow.Web/
+COPY src/BuildingBlocks/TicketFlow.Messaging/TicketFlow.Messaging.csproj src/BuildingBlocks/TicketFlow.Messaging/
 COPY src/Services/Catalog/TicketFlow.Catalog.Domain/TicketFlow.Catalog.Domain.csproj src/Services/Catalog/TicketFlow.Catalog.Domain/
 COPY src/Services/Catalog/TicketFlow.Catalog.Application/TicketFlow.Catalog.Application.csproj src/Services/Catalog/TicketFlow.Catalog.Application/
 COPY src/Services/Catalog/TicketFlow.Catalog.Infrastructure/TicketFlow.Catalog.Infrastructure.csproj src/Services/Catalog/TicketFlow.Catalog.Infrastructure/

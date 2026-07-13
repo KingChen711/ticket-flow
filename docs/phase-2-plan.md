@@ -164,6 +164,14 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 - Add mọi project mới vào `TicketFlow.slnx`.
 - Rà gateway routes (`/catalog`, `/identity`, `/ordering`, `/reservation`) + compose (postgres/redis healthy).
 - Tick DoD Phase 2 trong `scope.md`; cập nhật doc này với các lệch kế hoạch/bug thực tế gặp khi code.
+- **Verify thật:**
+  - `dotnet sln list` (thật ra dùng `.slnx`) → đủ 19 project, kể cả các project thêm dần trong Phase 2 (Reservation Domain/Application/Infrastructure/Api/IntegrationTests/LoadTests).
+  - `dotnet build` toàn solution → 0 Warning, 0 Error.
+  - `docker-compose.yml`: `reservation` có `depends_on: postgres(healthy) + redis(healthy)`; `gateway` có `depends_on` đủ 4 service (catalog/identity/reservation/ordering).
+  - `appsettings.json` của Gateway: đủ 4 route (`catalog-route`, `identity-route`, `ordering-route`, `reservation-route`), mỗi route có `PathRemovePrefix` transform trỏ đúng cluster.
+  - `docker compose ps`: đủ 9 container Up (catalog, gateway, identity, kafka, ordering, postgres, rabbitmq, redis, reservation).
+  - Smoke test qua gateway cho cả 4 route (dùng data thật, không mock) → catalog 200, identity 200, ordering 200, reservation 200.
+- **Điều tưởng là bug nhưng không phải:** lần đầu smoke test, `ordering` trả về 500 thay vì 200. Điều tra bằng `docker logs ticketflow-ordering` cho thấy nguyên nhân không phải regression — request test dùng seatId `"A1"` (sót lại từ lúc test Phase 1, trước khi Commit 8 thêm validate `Guid.TryParse` cho seatId ở gRPC handler phía Reservation). Từ Commit 8, seatId không hợp lệ khiến `RpcException(InvalidArgument)` ném ra phía Reservation, và Ordering chưa có exception mapping riêng cho lỗi này nên rơi vào nhánh 500 mặc định của middleware — **đúng theo thiết kế hiện tại** (seatId sai định dạng là lỗi client, nhưng chưa được phân loại thành 400 ở Ordering; để improvement backlog, không chặn DoD Phase 2 vì gRPC contract nội bộ luôn nhận Guid hợp lệ từ Reservation thật). Thay `"A1"` bằng Guid hợp lệ → 200 ngay, lặp lại được.
 
 ---
 
@@ -175,6 +183,28 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 | Không oversell ở quy mô tải | NBomber (Commit 11): tổng sold ≤ tổng inventory dưới tải đồng thời |
 | Hold có TTL, tự hết hạn | Test: hold → chờ quá TTL → availability trả ghế trống lại (Redis TTL, không background job) |
 | Reservation có DB riêng | psql: `ticketflow_reservation` tách biệt cạnh `_catalog`/`_identity`; hold sống ở Redis |
+
+## Hướng mở rộng (backlog — KHÔNG thuộc Phase 2)
+
+Ghi lại sau khi bàn về 3 mô hình bán ghế phổ biến (Reserved / General Admission / Auto-assign). **Không** làm ở Phase 2 — Phase 2 chỉ chứng minh overselling per-seat, đã xong. Ghi ở đây để Phase 8 (sơ đồ ghế) nhớ và để tránh dựng nhầm.
+
+**Điểm cốt lõi: GA không phải "Reserved bỏ số ghế đi" — nó là concurrency primitive KHÁC.**
+
+| Mô hình | Bài toán tranh chấp | Redis primitive |
+|---|---|---|
+| Reserved seating | giành **quyền sở hữu 1 key ghế cụ thể** | `SET NX` từng ghế ← **đã build ở Phase 2** |
+| Auto-assign | như Reserved + thuật toán chọn N ghế liền kề | `SET NX` + logic chọn ghế server-side |
+| General Admission (GA) | **đếm ngược 1 counter, không cho âm** | `DECRBY` có sàn 0 (Lua) |
+
+- Model hiện tại (`SeatInventory.ForSection` nổ `capacity` thành N `Seat` định danh) đang ép GA vào khuôn per-seat = tạo N **ghế giả**. Chạy được và tái dùng toàn bộ Lua/Redis machinery, **nhưng** GA festival 50.000 chỗ = 50.000 row Postgres + 50.000 key Redis cho thứ chẳng ai quan tâm định danh. Counter là O(1) bộ nhớ → GA xứng đáng có primitive riêng, đừng bê nguyên khuôn per-seat.
+
+**Hai điểm mô hình dữ liệu phải giữ đúng khi mở rộng:**
+1. **Seating mode là thuộc tính của SECTION**, không phải event, không phải seat. Cùng 1 event có thể vừa reserved lower bowl, vừa GA pit, vừa GA lawn. → khi tới Phase 8: thêm `enum SeatingMode { Reserved, GeneralAdmission, AutoAssign }` **ở tầng Section**, đó là chỗ khóa mô hình lại.
+2. **Section vật lý ≠ PriceTier/Category.** Section = hình học (lower bowl, floor, lawn); PriceTier (VIP, CAT1, CAT2) là orthogonal — VIP có thể trải nhiều section, 1 section có thể nhiều giá theo hàng. Catalog **đã tách đúng** (`PriceTier` riêng) — Reservation đừng trộn lại.
+
+**Thứ tự làm khi mở rộng (rẻ → đắt):**
+- **Auto-assign** rẻ nhất: chỉ là thuật toán "tìm N ghế liền kề `Available`" trên store per-seat sẵn có, **không đổi concurrency primitive**.
+- **GA-as-counter** là pattern concurrency mới, làm như một thứ riêng (Lua `DECRBY` sàn 0), không dùng lại đường per-seat.
 
 ## Thứ tự đọc sách trước khi code (scope mục 13)
 Đọc lại **Ch8 (Database strategies)** — trọng tâm phần **polyglot persistence** (Redis + Postgres trong 1 service) và **distributed data**. Bổ sung ngoài sách: đọc Redis docs về `SET NX EX`, `EVAL`/Lua atomicity, keyspace notifications; và tài liệu RedLock để hiểu **khi nào** cần mutex phân tán (để biết vì sao ở đây ta *không* cần nó).

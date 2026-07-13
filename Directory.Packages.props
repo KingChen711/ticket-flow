@@ -46,5 +46,13 @@
     <!-- Throughput/load measurement (Commit 11) — companion to Commit 10's correctness proof,
          not a replacement for it. -->
     <PackageVersion Include="NBomber" Version="6.5.0" />
+    <!--
+      Pinned to the last OSS release line. MassTransit 9.x (latest on NuGet as of this pin,
+      9.1.2) moved to a commercial license — 8.x is the final free line and still receives
+      patches. 8.5.10 is the newest 8.x and ships a first-class net10.0 target (not just
+      netstandard2.0 fallback), confirmed via its nuspec before pinning.
+    -->
+    <PackageVersion Include="MassTransit" Version="8.5.10" />
+    <PackageVersion Include="MassTransit.RabbitMQ" Version="8.5.10" />
   </ItemGroup>
 </Project>
