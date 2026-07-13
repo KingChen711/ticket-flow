@@ -1,12 +1,19 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+COPY Directory.Packages.props ./
 COPY src/BuildingBlocks/TicketFlow.Domain/TicketFlow.Domain.csproj src/BuildingBlocks/TicketFlow.Domain/
 COPY src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj src/BuildingBlocks/TicketFlow.Web/
+COPY src/Services/Catalog/TicketFlow.Catalog.Domain/TicketFlow.Catalog.Domain.csproj src/Services/Catalog/TicketFlow.Catalog.Domain/
+COPY src/Services/Catalog/TicketFlow.Catalog.Application/TicketFlow.Catalog.Application.csproj src/Services/Catalog/TicketFlow.Catalog.Application/
+COPY src/Services/Catalog/TicketFlow.Catalog.Infrastructure/TicketFlow.Catalog.Infrastructure.csproj src/Services/Catalog/TicketFlow.Catalog.Infrastructure/
 COPY src/Services/Catalog/TicketFlow.Catalog.Api/TicketFlow.Catalog.Api.csproj src/Services/Catalog/TicketFlow.Catalog.Api/
 RUN dotnet restore src/Services/Catalog/TicketFlow.Catalog.Api/TicketFlow.Catalog.Api.csproj
 
 COPY src/BuildingBlocks/ src/BuildingBlocks/
+COPY src/Services/Catalog/TicketFlow.Catalog.Domain/ src/Services/Catalog/TicketFlow.Catalog.Domain/
+COPY src/Services/Catalog/TicketFlow.Catalog.Application/ src/Services/Catalog/TicketFlow.Catalog.Application/
+COPY src/Services/Catalog/TicketFlow.Catalog.Infrastructure/ src/Services/Catalog/TicketFlow.Catalog.Infrastructure/
 COPY src/Services/Catalog/TicketFlow.Catalog.Api/ src/Services/Catalog/TicketFlow.Catalog.Api/
 RUN dotnet publish src/Services/Catalog/TicketFlow.Catalog.Api/TicketFlow.Catalog.Api.csproj -c Release -o /app
 

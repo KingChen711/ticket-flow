@@ -1,6 +1,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+COPY Directory.Packages.props ./
 COPY src/Gateway/TicketFlow.Gateway/TicketFlow.Gateway.csproj src/Gateway/TicketFlow.Gateway/
 RUN dotnet restore src/Gateway/TicketFlow.Gateway/TicketFlow.Gateway.csproj
 
