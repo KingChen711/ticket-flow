@@ -40,15 +40,20 @@ public sealed class Event : AggregateRoot<Guid>
         return @event;
     }
 
-    public void AddPriceTier(string sectionName, Money price)
+    /// <summary>
+    /// Only enforces invariants local to this aggregate (draft-only, no duplicate section).
+    /// Whether <paramref name="sectionId"/> actually exists in this event's SeatMap is a
+    /// cross-aggregate rule, validated by the application layer before calling this method.
+    /// </summary>
+    public void AddPriceTier(Guid sectionId, Money price)
     {
         if (Status != EventStatus.Draft)
             throw new InvalidOperationException("Price tiers can only be added while the event is in draft.");
 
-        if (_priceTiers.Any(p => p.SectionName.Equals(sectionName, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException($"A price tier for section '{sectionName}' already exists.");
+        if (_priceTiers.Any(p => p.SectionId == sectionId))
+            throw new InvalidOperationException($"A price tier for section '{sectionId}' already exists.");
 
-        _priceTiers.Add(PriceTier.Create(sectionName, price));
+        _priceTiers.Add(PriceTier.Create(sectionId, price));
     }
 
     public void Publish(DateTimeOffset now)

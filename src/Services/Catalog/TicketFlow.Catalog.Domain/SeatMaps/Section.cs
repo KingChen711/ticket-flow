@@ -1,6 +1,6 @@
 using TicketFlow.Domain;
 
-namespace TicketFlow.Catalog.Domain.Venues;
+namespace TicketFlow.Catalog.Domain.SeatMaps;
 
 public sealed class Section : Entity<Guid>
 {

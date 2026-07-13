@@ -19,6 +19,7 @@ tags: [ticketflow, phase-1, plan, ddd, grpc, efcore]
 - **CQRS/MediatR:** CHƯA dùng ở Phase 1 (đó là Phase 4). CRUD đi qua service class + repository trực tiếp để giữ commit nhỏ, tránh gold-plating.
 - **Auth:** dùng **fake JWT** (ký bằng symmetric key, dev-only). OAuth2/OIDC thật là Phase 7 (Ch13).
 - **Ports:** theo scope mục 4 — catalog 8002, identity 8001, reservation 8003/gRPC 9003, ordering 8004/gRPC 9004.
+- **SeatMap thuộc về Event, không thuộc về Venue** (quyết định sửa lại sau khi code Commit 2/3 — xem Commit 3.1): cùng 1 địa điểm vật lý có thể dựng sân khấu/sơ đồ ghế hoàn toàn khác nhau giữa các sự kiện (GA floor, catwalk, sân khấu 360°...). `Venue` chỉ còn là địa điểm thuần (Name, Address). `SeatMap` là aggregate riêng, 1-1 với `Event` (mỗi Event tự tạo `SeatMap` của riêng nó khi cần mở bán). **Chưa** model `Seat` (Row/Number) ở mức cá thể trong Phase 1 — `Section` chỉ giữ `Capacity` dạng số đếm; việc "giữ đúng 1 ghế cụ thể" là bài toán của `reservation-service` ở Phase 2, lúc đó mới cần quyết định có explode ra `Seat` entity hay không (tránh vàng hoá sớm — mục 12 scope.md).
 
 ---
 
@@ -50,35 +51,44 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
 
 ### Commit 2 — `feat(catalog): model Venue aggregate (DDD tactical patterns)`
 - Tạo project `TicketFlow.Catalog.Domain` (classlib, ref `TicketFlow.Domain`).
-- `Venue : AggregateRoot<Guid>` { `Name`, `Address` (VO), `SeatMap` }.
+- `Venue : AggregateRoot<Guid>` { `Name`, `Address` (VO) } — **chỉ là địa điểm thuần**, không giữ sơ đồ ghế (xem Commit 3.1).
 - `Address` VO (Street, City, Country, PostalCode).
-- `SeatMap` (owned) chứa `Section : Entity<Guid>` { `Name`, `Capacity` }.
 - Factory `Venue.Register(...)` → raise `VenueRegistered`.
-- **Ch2:** Aggregate root, Entity, Value Object, Domain Event, ubiquitous language.
+- **Ch2:** Aggregate root, Value Object, Domain Event, ubiquitous language.
 
 ### Commit 3 — `feat(catalog): model Event aggregate with Money & schedule VOs`
 - `Money` VO (Amount ≥ 0, Currency), `EventSchedule` VO (StartsAt < EndsAt).
 - `Event : AggregateRoot<Guid>` { `Title`, `Description`, `Artist`, `VenueId` (Guid — tham chiếu aggregate khác **bằng id**), `Schedule`, `Status` (Draft/Published/Cancelled), `PriceTiers` }.
-- `PriceTier : Entity<Guid>` { `SectionName`, `Price` (Money) }.
+- `PriceTier : Entity<Guid>` { `SectionId` (Guid — tham chiếu `Section` bên trong `SeatMap` của chính Event này), `Price` (Money) }.
 - Behavior + guard: `Event.Create()` (raise `EventCreated`), `Publish()` (chặn nếu chưa có price tier / lịch trong quá khứ → raise `EventPublished`), `Reschedule()` (`EventRescheduled`), `Cancel()` (`EventCancelled`).
 - **Ch2:** aggregate boundary, reference-by-id, behavior-rich domain, domain events.
 
-### Commit 4 — `test(catalog): unit tests for Event & Venue invariants`
+### Commit 3.1 — `refactor(catalog): move SeatMap ownership from Venue to Event`
+- **Tại sao (bài học DDD thật, không phải kế hoạch từ đầu):** review lại thấy Commit 2 gắn `SeatMap` cứng vào `Venue` — sai với thực tế: cùng 1 nhà thi đấu có thể dựng sân khấu 1 đầu + GA floor cho concert này, sân khấu 360° không ghế sàn cho concert khác. Sơ đồ ghế là thuộc tính của **từng lần diễn (Event)**, không phải thuộc tính cố định của toà nhà.
+- Aggregate mới `SeatMap : AggregateRoot<Guid>` { `EventId` (Guid, 1 SeatMap ứng với đúng 1 Event), `Sections: List<Section>` }, factory `SeatMap.CreateForEvent(eventId)` → raise `SeatMapCreated`.
+- `Section : Entity<Guid>` { `Name`, `Capacity` } — chuyển từ `Venues/` sang `SeatMaps/`, không đổi logic.
+- `Venue` bỏ hẳn `SeatMap`/`AddSection`.
+- `PriceTier.SectionName` (string) → `PriceTier.SectionId` (Guid) — tham chiếu đúng `Section` trong `SeatMap` của Event đó.
+- **Cross-aggregate invariant** ("SectionId phải thật sự tồn tại trong SeatMap của Event") **không** enforce trong `Event` hay `SeatMap` — để dành cho Application layer (Commit 5) load cả hai rồi validate trước khi gọi `event.AddPriceTier(...)`.
+- **Ch2:** ví dụ thực tế về việc vẽ sai ranh giới aggregate lúc đầu và sửa lại khi hiểu rõ invariant hơn — đúng quy trình DDD thật (không ai vẽ đúng aggregate boundary ngay từ lần đầu).
+
+### Commit 4 — `test(catalog): unit tests for Event, Venue & SeatMap invariants`
 - Project `TicketFlow.Catalog.Domain.Tests` (xUnit).
-- Test: publish thiếu price tier → fail; reschedule về quá khứ → fail; Money âm → throw; publish thành công raise đúng event.
+- Test: publish thiếu price tier → fail; reschedule về quá khứ → fail; Money âm → throw; publish thành công raise đúng event; `SeatMap.AddSection` trùng tên → fail; `PriceTier` với `SectionId` rỗng → throw.
 - **Scope mục 11:** unit test domain/aggregate.
 
 ### Commit 5 — `feat(catalog): application layer (DTOs, repository ports, services)`
 - Project `TicketFlow.Catalog.Application` (ref Domain).
-- Ports: `IEventRepository`, `IVenueRepository`, `IUnitOfWork`.
-- `EventService`, `VenueService` (orchestrate domain + repo).
+- Ports: `IEventRepository`, `IVenueRepository`, `ISeatMapRepository`, `IUnitOfWork`.
+- `EventService`, `VenueService`, `SeatMapService` (orchestrate domain + repo).
+- `EventService.AddPriceTier(eventId, sectionId, price)`: load `Event` + `SeatMap` (theo `EventId`), validate `sectionId` tồn tại trong `SeatMap.Sections` (**cross-aggregate invariant**, xem Commit 3.1) rồi mới gọi `event.AddPriceTier(...)`.
 - Request/Response DTOs + mapping (Create/Update/Publish/Get/List).
-- **Ch2 (application boundary):** thin orchestration, domain giữ business rule.
+- **Ch2 (application boundary):** thin orchestration, domain giữ business rule cục bộ, cross-aggregate rule sống ở đây.
 
 ### Commit 6 — `feat(catalog): EF Core + Postgres persistence (Ch8 DB-per-service)`
 - Project `TicketFlow.Catalog.Infrastructure` (ref Application; add `Npgsql.EntityFrameworkCore.PostgreSQL`).
-- `CatalogDbContext` (schema `catalog`), DbSet<Event>, DbSet<Venue>.
-- EF configs: owned types cho `Address`/`Money`/`SeatMap`/`Section`/`PriceTier`; snake_case naming convention.
+- `CatalogDbContext` (schema `catalog`), `DbSet<Event>`, `DbSet<Venue>`, `DbSet<SeatMap>`.
+- EF configs: owned types cho `Address`/`Money`/`EventSchedule`/`PriceTier`; `SeatMap` có bảng riêng chứa `Section` (owned collection); snake_case naming convention.
 - Repository implementations + `UnitOfWork`.
 - `AddCatalogInfrastructure(config)` DI extension đọc `ConnectionStrings:Default`.
 - **Ch8:** DB riêng, polyglot persistence (Postgres), mapping domain ↔ table.
@@ -88,6 +98,7 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
 - Endpoints:
   - `POST /venues`, `GET /venues`, `GET /venues/{id}`
   - `POST /events`, `GET /events`, `GET /events/{id}`, `PUT /events/{id}`, `POST /events/{id}/publish`, `POST /events/{id}/cancel`
+  - `POST /events/{id}/seatmap` (tạo SeatMap cho Event), `POST /events/{id}/seatmap/sections` (thêm Section), `POST /events/{id}/price-tiers` (gắn PriceTier vào Section)
 - Swagger cập nhật; giữ `/health`.
 - **Ch3 (REST phía ngoài):** service phơi REST cho gateway.
 
