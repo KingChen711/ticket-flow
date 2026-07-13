@@ -26,5 +26,6 @@
   </Folder>
   <Folder Name="/src/Services/Reservation/">
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.Api/TicketFlow.Reservation.Api.csproj" />
+    <Project Path="src/Services/Reservation/TicketFlow.Reservation.Domain/TicketFlow.Reservation.Domain.csproj" />
   </Folder>
 </Solution>

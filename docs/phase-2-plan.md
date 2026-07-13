@@ -1,0 +1,161 @@
+---
+title: "Phase 2 — Reservation & bài toán overselling — Kế hoạch commit"
+phase: 2
+chapters: [Ch8 Database strategies, Redis distributed locking]
+created: 2026-07-13
+tags: [ticketflow, phase-2, plan, redis, concurrency, overselling]
+---
+
+# Phase 2 — Kế hoạch chi tiết theo commit
+
+> **Mục tiêu (từ scope mục 10):** giải quyết concurrency — điểm nhấn distributed systems. Giữ ghế bằng Redis (hold có TTL), chống overselling.
+> **DoD:** chạy k6/NBomber song song 1000 request giành **cùng 1 ghế** → đúng 1 request thắng ghế, phần còn lại nhận "hết chỗ".
+
+> ⚠️ **Khác với [phase-1-plan.md](phase-1-plan.md):** file đó được viết *trong lúc* code nên đã ghi sẵn các bug/lệch kế hoạch thực tế. File này viết **trước khi code** — các mục "lệch kế hoạch / bug tự bắt được" sẽ được bổ sung dần khi thực thi từng commit (giống cách Phase 1 tiến hoá).
+
+---
+
+## Câu hỏi Phase 1 để ngỏ, giờ chốt
+
+Phase 1 (Commit 3.1) cố tình **chưa** model `Seat` cá thể — `Section` chỉ giữ `Capacity` dạng số đếm, và ghi rõ: *"việc giữ đúng 1 ghế cụ thể là bài toán của reservation-service ở Phase 2, lúc đó mới quyết định có explode ra Seat entity hay không."*
+
+**Quyết định:** **CÓ, explode thành `Seat` cá thể.** Bắt buộc, vì DoD yêu cầu "1000 request giành **cùng 1 ghế**, đúng 1 thắng" — muốn có "cùng 1 ghế" để 1000 người tranh thì ghế phải **định danh được**. Không thể chứng minh overselling bằng số đếm thuần.
+
+Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan (Row/Number/toạ độ) — đó là bài toán của `organizer-dashboard`/`gate-scanner` ở **Phase 8** (frontend). Phase 2 chỉ cần ghế có **id + nhãn** (`{sectionName}-{n}`, ví dụ `VIP-1`..`VIP-500`), sinh ra từ `Capacity` của section. Tránh vàng hoá (mục 12 scope.md).
+
+---
+
+## Quyết định kiến trúc cho Phase 2
+
+- **Seat-level inventory:** `reservation-service` (hiện chỉ là skeleton 1 project `Api` từ Phase 1) được mổ xẻ đầy đủ 4 tầng Clean Architecture như catalog/identity. Sinh `Seat` cá thể từ section + capacity.
+
+- **Polyglot persistence trong CÙNG 1 service (điểm học Ch8 mới):** khác Phase 1 (mỗi service 1 Postgres), reservation dùng **2 store cho 2 vai trò khác nhau** — đúng bảng scope mục 4 (DB chính = Redis, phụ = Postgres):
+  - **Redis** = nguồn sự thật cho *"ghế còn trống ngay lúc này"*: hold (TTL 10'), sold-set, danh sách seatId hợp lệ. Đây là fast-path, atomic.
+  - **Postgres** (`ticketflow_reservation`) = bản ghi **bền vững**: định nghĩa seat inventory + bản ghi ghế đã bán (sold) để audit/rebuild. Nếu Redis mất dữ liệu, Postgres là nguồn dựng lại.
+
+- **Chống overselling = Lua script atomic, KHÔNG phải RedLock** — đây là chỗ tôi **phản biện scope.md** (mục 5 & Phase 2 ghi "Redis distributed lock (RedLock)"):
+  - **RedLock** cho một *named mutex* (khoá loại trừ lẫn nhau). Nếu dùng RedLock kiểu `acquire lock:event:{eventId}` → check → set hold → release, thì **mọi** request giữ ghế của cùng 1 event bị **tuần tự hoá qua 1 khoá** — đúng về correctness nhưng **giết throughput** đúng lúc cần nhất (flash sale). Sai công cụ cho bài toán.
+  - **Lua script** chạy **atomic** trên Redis (single-threaded execution): 1 script "check tất cả ghế yêu cầu có trống không, nếu trống thì set hold tất cả (all-or-nothing)" — chỉ khoá đúng những ghế đó, không tuần tự hoá cả event. Vừa đúng vừa nhanh. Bản chất chống double-hold nằm ở `SET NX` (set-if-not-exists) atomic.
+  - **Kết luận:** dùng **StackExchange.Redis + Lua script** làm primitive chính. Vẫn ghi chú RedLock.net là công cụ đúng cho *tình huống khác* (khoá loại trừ xuyên nhiều thao tác độc lập, Redis multi-master) — để hiểu **khi nào** mới cần nó, không dùng bừa. Xem lại scope.md mục 5 nên sửa "RedLock" → "atomic Lua / SET NX (RedLock chỉ khi cần mutex xuyên thao tác)".
+
+- **Hold sống HOÀN TOÀN trong Redis (ephemeral), TTL = auto-expire:** hold không ghi vào Postgres. Hết TTL → key tự biến mất → ghế tự trống lại. **Không cần background worker** để dọn hold hết hạn (item 3 "xử lý hết hạn hold tự động" được Redis TTL lo miễn phí). Nếu Phase sau cần *phản ứng* với sự kiện "hold hết hạn" (ví dụ notify), dùng **Redis keyspace notifications** — nhưng đó là hook Phase 3+, Phase 2 không cần vì availability tự đúng khi key mất.
+
+- **Reservation domain CỐ TÌNH mỏng:** khác catalog (aggregate giàu behavior), consistency của reservation **do Redis atomicity đảm bảo**, không phải do load 1 aggregate vào bộ nhớ rồi enforce invariant. `Seat` gần như chỉ là record + `SeatStatus`. Logic distributed-systems thật nằm ở **Infrastructure** (Redis hold store + Lua script), không phải Domain. Đây là quan sát kiến trúc thật: **không phải bounded context nào cũng domain-rich** — có cái nặng về điều phối/hạ tầng. Ghi rõ để không gượng ép nhét behavior giả vào `Seat`.
+
+- **Confirm (Held→Sold) chưa phải distributed transaction đầy đủ:** confirm ghi Postgres (durable) + cập nhật Redis sold-set. Hai bước này **chưa** atomic xuyên Redis+Postgres — đó là địa hạt của Saga/Outbox (**Phase 4/5**). Chấp nhận được ở Phase 2 vì **chỉ người đang giữ hold độc quyền** mới confirm được, không có tranh chấp lúc confirm; nếu crash giữa chừng, Postgres là nguồn sự thật, Redis rebuild được.
+
+- **Self-provision inventory (chưa event-driven):** Phase 2 chưa có message bus (Phase 3). Nên reservation tự nạp seat inventory qua **REST endpoint nội bộ** (`POST /events/{eventId}/inventory` nhận sections + số ghế). Việc *tự động* provision khi catalog publish event (`EventPublished` → provision seats) là **Phase 3** (event-driven). **Không** cho reservation đọc thẳng DB catalog (phá DB-per-service), cũng chưa thêm gRPC catalog→reservation (tránh scope creep — chỉ thêm khi thật cần).
+
+- **Redis client để ở reservation Infrastructure, chưa lên BuildingBlocks:** hiện chỉ reservation dùng Redis. Khi service thứ 2 cần (cache/pubsub — Phase sau) mới trích lên `BuildingBlocks`. Tránh vàng hoá.
+
+- **Ports:** giữ nguyên như đã dựng — reservation REST 8003, gRPC 9003 (Kestrel 2 cổng đã cấu hình từ Phase 1 Commit 14). DB `ticketflow_reservation`. Redis đã có sẵn trong `docker-compose.infra.yml` từ Phase 0 (6379) — không cần đổi infra.
+
+- **Kế thừa mọi convention Phase 1:** Central Package Management (`Directory.Packages.props`), native OpenAPI + Scalar, EF Core snake_case + `Ignore(DomainEvents)` + constructor rỗng cho EF, `Guard`/`ValueObject` từ BuildingBlocks, exception middleware map lỗi nghiệp vụ → 4xx.
+
+---
+
+## Nhóm A — Seat inventory: domain + Postgres (bản bền vững)
+
+### Commit 1 — `feat(reservation): model Seat + SeatStatus (thin domain)`
+- Mổ `reservation` từ skeleton thành có tầng `Domain`. Tạo project `TicketFlow.Reservation.Domain` (ref `TicketFlow.Domain`).
+- `Seat : Entity<Guid>` { `EventId`, `SectionId`, `Label` (ví dụ `VIP-12`), `Status` }. `SeatStatus` enum (Available/Held/Sold).
+- (Tuỳ) `SeatInventory` — factory sinh danh sách `Seat` từ (eventId, sectionId, sectionName, capacity): tạo `capacity` ghế nhãn `{sectionName}-{1..n}`.
+- **Ghi rõ trong code/doc:** domain mỏng có chủ đích — consistency do Redis lo (xem quyết định kiến trúc), `Seat` không mang behavior tranh chấp.
+- **Ch2/Ch8:** vẫn giữ `Seat` là entity định danh, nhưng thừa nhận đây là bounded context infra-heavy.
+
+### Commit 2 — `feat(reservation): application layer — ports, DTOs, services`
+- Project `TicketFlow.Reservation.Application` (ref Domain).
+- Ports: `ISeatRepository` (Postgres — inventory + sold), `ISeatHoldStore` (Redis — hold/availability/confirm/release, **abstraction, impl ở Nhóm B**), `IUnitOfWork`.
+- `InventoryService` (provision seats cho event), `ReservationService` (hold/release/confirm/query availability — orchestrate 2 store).
+- DTOs: `ProvisionInventoryRequest`, `HoldSeatsRequest/Response` (trả `holdId` + `expiresAt` hoặc danh sách ghế hết chỗ), `Confirm/ReleaseRequest`, `SeatAvailabilityResponse`.
+- **Ch2 (application boundary):** service điều phối Postgres ↔ Redis; đây là nơi "orchestrate polyglot", không phải trong domain.
+
+### Commit 3 — `feat(reservation): EF Core + Postgres seat inventory (Ch8)`
+- Project `TicketFlow.Reservation.Infrastructure` (ref Application; `Npgsql.EntityFrameworkCore.PostgreSQL`, EFCore.NamingConventions...).
+- `ReservationDbContext` (schema `reservation`, DB `ticketflow_reservation`), `DbSet<Seat>`, config (index `(EventId, SectionId)`, unique `(EventId, Label)`), `SeatRepository`, `UnitOfWork`.
+- Migration `InitialReservation` + startup migrate (dev-only, đúng pattern catalog/identity). Nhớ `Ignore(DomainEvents)` + constructor rỗng cho EF (bài học Phase 1).
+- **Ch8:** DB thứ 3 tách biệt — verify `ticketflow_reservation` đứng riêng cạnh `_catalog`/`_identity`.
+
+---
+
+## Nhóm B — Redis holds: trái tim chống overselling
+
+### Commit 4 — `feat(reservation): Redis connection + hold store wiring`
+- Thêm `StackExchange.Redis`. Đăng ký `IConnectionMultiplexer` (singleton) đọc `Redis:ConnectionString` từ config (`redis:6379` trong Docker, `localhost:6379` local).
+- Khung `RedisSeatHoldStore : ISeatHoldStore` (chưa có Lua — chỉ connect + healthcheck Redis).
+- Bổ sung Redis vào health check (`AddTicketFlowWeb` hoặc riêng) để `/health` phản ánh cả Redis.
+
+### Commit 5 — `feat(reservation): atomic multi-seat hold via Lua (anti-oversell)` ⭐
+- **Đây là commit lõi của cả phase.** Lua script all-or-nothing:
+  - Input: `eventId`, `seatIds[]`, `holdId`, `ttlSeconds`.
+  - Với mỗi seat: kiểm tra `seat ∈ seats:{eventId}` (hợp lệ) **AND** `seat ∉ sold:{eventId}` **AND** không có key `hold:{eventId}:{seatId}`.
+  - Nếu **tất cả** trống → `SET hold:{eventId}:{seatId} = holdId EX ttl` cho từng ghế, trả success.
+  - Nếu **bất kỳ** ghế nào bận → **không set gì cả**, trả danh sách seatId hết chỗ.
+- Atomic vì Redis chạy Lua single-threaded → giữa check và set không ai chen được → **đúng 1 request thắng** mỗi ghế.
+- `HoldSeats` trả `holdId` (GUID) + `expiresAt`, hoặc `409 + unavailableSeatIds`.
+- **Ch8/Redis:** `SET NX` + Lua atomicity là bản chất chống double-hold. Ghi chú so sánh với RedLock (xem quyết định kiến trúc).
+
+### Commit 6 — `feat(reservation): confirm, release & availability query`
+- **Release:** Lua/atomic xoá các key `hold:{eventId}:{seatId}` **nếu** value = đúng `holdId` (chỉ chủ hold mới nhả được, tránh nhả nhầm hold người khác).
+- **Confirm (Held→Sold):** kiểm tra hold thuộc `holdId` còn sống → thêm seatIds vào `sold:{eventId}` (Redis) + ghi bản ghi sold vào Postgres (durable) → xoá hold keys. Ghi rõ đây **chưa** atomic Redis+Postgres (Saga = Phase 5).
+- **Availability query:** ghế available nếu `∈ seats set` AND `∉ sold set` AND không có hold key. Endpoint trả trạng thái từng ghế / danh sách ghế trống của event.
+- **Auto-expire:** không code gì thêm — Redis TTL tự lo. Ghi chú keyspace notifications là hook Phase 3+.
+
+---
+
+## Nhóm C — Phơi ra ngoài + nối dây
+
+### Commit 7 — `feat(reservation): REST endpoints (provision, hold, release, confirm, availability)`
+- Viết lại `Reservation.Api/Program.cs`: đăng ký Application + Infrastructure (Postgres + Redis), OpenAPI/Scalar, migrate lúc khởi động.
+- Endpoints (qua gateway `/reservation/**`):
+  - `POST /events/{eventId}/inventory` — provision seats (nội bộ/organizer).
+  - `GET /events/{eventId}/availability` — ghế còn trống.
+  - `POST /holds` — giữ ghế (body: eventId, seatIds, holderId) → holdId + expiresAt / 409.
+  - `POST /holds/{holdId}/confirm`, `POST /holds/{holdId}/release`.
+- **Ch3:** service phơi REST cho gateway (khách "chọn ghế" gọi thẳng reservation, đúng mục 7 scope: `U->>R: Chọn ghế`).
+
+### Commit 8 — `feat(reservation): gRPC CheckSeatAvailability phản ánh state thật; ordering thấy state thật`
+- Thay implementation gRPC hardcoded `all_available: true` (Phase 1 Commit 14) bằng **query availability thật** từ Redis/Postgres.
+- `ordering` `POST /check-seats` (Phase 1 Commit 15) giờ trả kết quả thật. Verify round-trip vẫn chạy, nhưng nay phản ánh ghế đã hold/sold.
+- (Chưa thêm ConfirmSeats gRPC cho saga — đó là Phase 5. Giữ Phase 2 gọn.)
+
+### Commit 9 — `feat(reservation): dockerize with Redis + Postgres`
+- `Dockerfile` (multi-stage, copy `Directory.Packages.props` + proto — bài học Phase 1 Commit 9/14).
+- Compose: reservation thêm `ConnectionStrings__Default` (Postgres) + `Redis__ConnectionString`, `depends_on: postgres (healthy) + redis (healthy)`.
+- Gateway route `/reservation/**` (appsettings + Development). Verify qua `docker compose up`.
+
+---
+
+## Nhóm D — Chứng minh DoD (điểm nhấn của phase)
+
+### Commit 10 — `test(reservation): Testcontainers integration test — 1000 concurrent holds, exactly 1 wins` ⭐
+- **Đây là bằng chứng correctness thật của DoD** (không phải throughput). Project `TicketFlow.Reservation.IntegrationTests` (xUnit + `Testcontainers.Redis` — Redis THẬT trong container, đúng scope mục 11).
+- Test: provision 1 event có 1 ghế → `Task.WhenAll` 1000 hold request đồng thời **cùng ghế đó** → assert **đúng 1 success, 999 fail**. Deterministic, chạy được trong CI.
+- Test phụ: hold N ghế all-or-nothing (1 ghế bận → cả lô fail, không hold lẻ); release trả ghế về available; TTL hết → ghế tự trống.
+- **Scope mục 11:** integration test với Testcontainers — lần đầu tiên dùng trong dự án.
+
+### Commit 11 — `test(reservation): NBomber load test — flash-sale throughput (companion)`
+- Project `TicketFlow.Reservation.LoadTests` (NBomber — .NET, ở trong solution, CI-friendly; k6 là lựa chọn thay thế nếu thích JS thuần).
+- Kịch bản: nhiều ghế, nhiều VU giành đồng thời → đo throughput/latency, xác nhận **tổng ghế bán ≤ tổng ghế tồn** (no oversell ở quy mô lớn).
+- **Ghi rõ:** đây là **đo đặc tính tải**, không phải bằng chứng correctness — bằng chứng "đúng 1 thắng" là Commit 10. scope mục 11 & DoD gọi tên "k6/NBomber" nên vẫn làm để đúng cam kết.
+
+---
+
+## Commit 12 — `chore: finalize Phase 2 — routes, DoD checklist`
+- Add mọi project mới vào `TicketFlow.slnx`.
+- Rà gateway routes (`/catalog`, `/identity`, `/ordering`, `/reservation`) + compose (postgres/redis healthy).
+- Tick DoD Phase 2 trong `scope.md`; cập nhật doc này với các lệch kế hoạch/bug thực tế gặp khi code.
+
+---
+
+## Kiểm chứng DoD cuối Phase 2
+
+| DoD | Kiểm chứng |
+|---|---|
+| 1000 request cùng 1 ghế → đúng 1 thắng | Testcontainers integration test (Commit 10): `Task.WhenAll` 1000 hold → assert 1 success + 999 "hết chỗ" |
+| Không oversell ở quy mô tải | NBomber (Commit 11): tổng sold ≤ tổng inventory dưới tải đồng thời |
+| Hold có TTL, tự hết hạn | Test: hold → chờ quá TTL → availability trả ghế trống lại (Redis TTL, không background job) |
+| Reservation có DB riêng | psql: `ticketflow_reservation` tách biệt cạnh `_catalog`/`_identity`; hold sống ở Redis |
+
+## Thứ tự đọc sách trước khi code (scope mục 13)
+Đọc lại **Ch8 (Database strategies)** — trọng tâm phần **polyglot persistence** (Redis + Postgres trong 1 service) và **distributed data**. Bổ sung ngoài sách: đọc Redis docs về `SET NX EX`, `EVAL`/Lua atomicity, keyspace notifications; và tài liệu RedLock để hiểu **khi nào** cần mutex phân tán (để biết vì sao ở đây ta *không* cần nó).
