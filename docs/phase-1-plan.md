@@ -20,6 +20,7 @@ tags: [ticketflow, phase-1, plan, ddd, grpc, efcore]
 - **Auth:** dùng **fake JWT** (ký bằng symmetric key, dev-only). OAuth2/OIDC thật là Phase 7 (Ch13).
 - **Ports:** theo scope mục 4 — catalog 8002, identity 8001, reservation 8003/gRPC 9003, ordering 8004/gRPC 9004.
 - **SeatMap thuộc về Event, không thuộc về Venue** (quyết định sửa lại sau khi code Commit 2/3 — xem Commit 3.1): cùng 1 địa điểm vật lý có thể dựng sân khấu/sơ đồ ghế hoàn toàn khác nhau giữa các sự kiện (GA floor, catwalk, sân khấu 360°...). `Venue` chỉ còn là địa điểm thuần (Name, Address). `SeatMap` là aggregate riêng, 1-1 với `Event` (mỗi Event tự tạo `SeatMap` của riêng nó khi cần mở bán). **Chưa** model `Seat` (Row/Number) ở mức cá thể trong Phase 1 — `Section` chỉ giữ `Capacity` dạng số đếm; việc "giữ đúng 1 ghế cụ thể" là bài toán của `reservation-service` ở Phase 2, lúc đó mới cần quyết định có explode ra `Seat` entity hay không (tránh vàng hoá sớm — mục 12 scope.md).
+- **API docs: native `Microsoft.AspNetCore.OpenApi` + Scalar, không dùng Swashbuckle** (đổi lại sau khi Catalog.Api đã chạy Swashbuckle từ Phase 0 — quyết định lúc đó chỉ vì template mặc định dính CVE và cần có UI ngay). Swashbuckle đang bảo trì cầm chừng; native OpenAPI là hướng chính chủ Microsoft đang đẩy mạnh. Lưu ý: `Microsoft.AspNetCore.OpenApi 10.0.9` (bản mới nhất tại thời điểm này) vẫn kéo theo `Microsoft.OpenApi 2.0.0` dính CVE cao (GHSA-v5pm-xwqc-g5wc, chưa được vá ở tầng package chính chủ) — phải ghim tường minh `Microsoft.OpenApi` lên `2.10.0` qua `Directory.Packages.props` (giữ nhánh 2.x vì `Microsoft.AspNetCore.OpenApi`'s source generator sinh code không compile được với 3.x — `IOpenApiMediaType.Example` đổi thành read-only). Áp dụng nhất quán cho `identity-service` và các service sau.
 
 ---
 
@@ -99,7 +100,7 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
   - `POST /venues`, `GET /venues`, `GET /venues/{id}`
   - `POST /events`, `GET /events`, `GET /events/{id}`, `PUT /events/{id}`, `POST /events/{id}/publish`, `POST /events/{id}/cancel`
   - `POST /events/{id}/seatmap` (tạo SeatMap cho Event), `POST /events/{id}/seatmap/sections` (thêm Section), `POST /events/{id}/price-tiers` (gắn PriceTier vào Section)
-- Swagger cập nhật; giữ `/health`.
+- API docs (Swagger lúc code, sau đổi sang native OpenAPI + Scalar — xem quyết định kiến trúc) cập nhật; giữ `/health`.
 - **Ch3 (REST phía ngoài):** service phơi REST cho gateway.
 
 ### Commit 8 — `feat(catalog): initial migration, startup migrate & seed data`

@@ -7,7 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Swashbuckle.AspNetCore" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Scalar.AspNetCore" />
     <!-- dotnet-ef requires the STARTUP project to reference Design directly; Infrastructure's
          own reference is PrivateAssets="all" and doesn't flow through ProjectReference. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">

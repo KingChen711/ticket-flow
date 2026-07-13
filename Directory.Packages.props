@@ -15,11 +15,23 @@
     -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
-    <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="EFCore.NamingConventions" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
+
+    <!--
+      API docs: native OpenAPI generation + Scalar UI (not Swashbuckle — deprecated in this
+      repo, see docs/phase-1-plan.md). Microsoft.AspNetCore.OpenApi 10.0.9 still floors
+      Microsoft.OpenApi at the vulnerable 2.0.0 (GHSA-v5pm-xwqc-g5wc, not yet patched
+      upstream). Pinned to the latest 2.x patch instead of jumping to 3.x — AspNetCore.OpenApi's
+      bundled XML-comment source generator is compiled against the 2.x API shape (3.x made
+      IOpenApiMediaType.Example read-only, which breaks that generator at compile time).
+    -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.10.0" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.16.11" />
+
+    <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.9" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
