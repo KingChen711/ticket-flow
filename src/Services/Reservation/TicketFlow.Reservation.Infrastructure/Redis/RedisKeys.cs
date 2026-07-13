@@ -11,4 +11,12 @@ internal static class RedisKeys
 
     /// <summary>Per-seat hold key. Value = holdId, TTL = hold duration. Presence == Held.</summary>
     public static string Hold(Guid eventId, Guid seatId) => $"hold:{eventId}:{seatId}";
+
+    /// <summary>
+    /// Reverse index: which seat ids does this hold cover? Without this, Release/Confirm
+    /// (which only receive holdId, not the seat ids) would have no way to find the right
+    /// "hold:{eventId}:{seatId}" keys short of scanning every seat in the event. Written
+    /// atomically alongside the hold keys in the same Lua script (Commit 5), with the same TTL.
+    /// </summary>
+    public static string HoldSeatsSet(Guid holdId) => $"holdseats:{holdId}";
 }

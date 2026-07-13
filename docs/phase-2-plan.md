@@ -89,20 +89,23 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 
 ### Commit 5 — `feat(reservation): atomic multi-seat hold via Lua (anti-oversell)` ⭐
 - **Đây là commit lõi của cả phase.** Lua script (`HoldSeatsScript.cs`) all-or-nothing:
-  - `KEYS[1]`=seats set, `KEYS[2]`=sold set, `KEYS[3..]`=hold key mỗi ghế. `ARGV[1]`=holdId, `ARGV[2]`=ttl giây, `ARGV[3..]`=seatId song song với `KEYS[3..]`.
+  - `KEYS[1]`=seats set, `KEYS[2]`=sold set, `KEYS[3]`=`holdseats:{holdId}` (reverse-index, xem Commit 6), `KEYS[4..]`=hold key mỗi ghế. `ARGV[1]`=holdId, `ARGV[2]`=ttl giây, `ARGV[3..]`=seatId song song với `KEYS[4..]`.
   - Với mỗi seat: kiểm tra `seat ∈ seats set` (hợp lệ) **AND** `seat ∉ sold set` **AND** không có key `hold:{eventId}:{seatId}`.
-  - Nếu **tất cả** trống → `SET hold key = holdId EX ttl` cho từng ghế, trả `{}` rỗng.
+  - Nếu **tất cả** trống → `SET hold key = holdId EX ttl` + `SADD` vào `holdseats:{holdId}` cho từng ghế, trả `{}` rỗng.
   - Nếu **bất kỳ** ghế nào bận → **không set gì cả**, trả mảng seatId hết chỗ.
 - Atomic vì Redis chạy Lua single-threaded → giữa check và set không ai chen được → **đúng 1 request thắng** mỗi ghế.
 - `TryHoldAsync` (C#) build `RedisKey[]`/`RedisValue[]` động theo số ghế, gọi `IDatabase.ScriptEvaluateAsync` (không dùng `LuaScript.Prepare` vì đó hợp cho script cố định tham số, không hợp cho KEYS/ARGV dài động theo số ghế).
 - **Ch8/Redis:** `SET`/`SISMEMBER`/`EXISTS` trong 1 Lua atomic là bản chất chống double-hold. So sánh với RedLock (xem quyết định kiến trúc) — RedLock là mutex đặt tên, sẽ tuần tự hoá cả event; ở đây chỉ khoá đúng những ghế liên quan.
-- Verify: build sạch. Verify **runtime thật** (Testcontainers Redis — 1000 hold đồng thời cùng 1 ghế) là Commit 10, không lặp lại ở đây.
+- **Verify runtime thật** (script tạm gọi `RedisSeatHoldStore` qua Redis thật — không chỉ build): hold ghế trống → thành công; hold lại đúng ghế đó (holder khác) → đúng 1 bị từ chối; hold 2 ghế độc lập → cả 2 thành công; all-or-nothing với 1 ghế bận + 1 ghế không tồn tại → không set gì, cả 2 trả "unavailable"; **50 request đồng thời tranh đúng 1 ghế → đúng 1 người thắng** (bằng chứng atomicity, bản thu nhỏ của DoD chính — Commit 10 lặp lại ở quy mô 1000 bằng Testcontainers, không phải lần đầu tiên được chứng minh).
 
 ### Commit 6 — `feat(reservation): confirm, release & availability query`
-- **Release:** Lua/atomic xoá các key `hold:{eventId}:{seatId}` **nếu** value = đúng `holdId` (chỉ chủ hold mới nhả được, tránh nhả nhầm hold người khác).
-- **Confirm (Held→Sold):** kiểm tra hold thuộc `holdId` còn sống → thêm seatIds vào `sold:{eventId}` (Redis) + ghi bản ghi sold vào Postgres (durable) → xoá hold keys. Ghi rõ đây **chưa** atomic Redis+Postgres (Saga = Phase 5).
-- **Availability query:** ghế available nếu `∈ seats set` AND `∉ sold set` AND không có hold key. Endpoint trả trạng thái từng ghế / danh sách ghế trống của event.
-- **Auto-expire:** không code gì thêm — Redis TTL tự lo. Ghi chú keyspace notifications là hook Phase 3+.
+- **Lỗ hổng thật phát hiện trước khi code Commit 6, phải quay lại sửa Commit 5:** `ReleaseAsync`/`ConfirmAsync` trong `ISeatHoldStore` chỉ nhận `(eventId, holdId)` — nhưng để biết xoá/xác nhận đúng key `hold:{eventId}:{seatId}` nào thì cần biết **ghế nào** thuộc về `holdId` đó, và không có cách nào tra ngược hiệu quả trong Redis nếu không có index. Sửa `HoldSeatsScript` (Commit 5) để ghi thêm 1 set `holdseats:{holdId}` (danh sách seatId thuộc hold đó) **atomic cùng lúc** với việc set các `hold:*` key, cùng TTL. Đây là ví dụ thực tế: thiết kế API trước (`ISeatHoldStore`, Commit 2) đôi khi bỏ sót chi tiết hiện thực hoá, phải quay lại sửa lớp dưới khi code lớp trên.
+- **Release** (`ReleaseHoldScript`): đọc `SMEMBERS holdseats:{holdId}` → với mỗi seatId, `GET hold:{eventId}:{seatId}` — nếu đúng bằng `holdId` mới `DEL` (chỉ chủ hold mới nhả được, tránh nhả nhầm hold người khác đã chiếm lại ghế sau khi hold cũ hết hạn) → xoá luôn `holdseats:{holdId}`. Trả về số ghế đã nhả.
+- **Confirm** (`ConfirmHoldScript`): cùng cấu trúc, nhưng thay vì `DEL` thì `SADD` seatId vào `sold:{eventId}` trước khi `DEL` hold key. Trả về danh sách seatId đã confirm — `ReservationService.ConfirmAsync` (Commit 2) dùng đúng danh sách này để `MarkSold()` + `SaveChanges` vào Postgres.
+- **Đơn giản hoá có ghi chú:** cả 2 script tự dựng chuỗi `'hold:' .. event_id .. ':' .. seat_id` **bên trong Lua** thay vì truyền q qua `KEYS[]` từ C# — không an toàn cho Redis Cluster (cluster bắt buộc khai báo hết key chạm tới để định tuyến hash-slot đúng), nhưng chấp nhận được vì cả project chỉ chạy Redis **1 node** (`docker-compose.infra.yml`), và tránh phải tốn 1 round-trip đọc `SMEMBERS` từ C# trước khi gọi script.
+- **Availability query** (`GetLiveStatusesAsync`): không cần Lua (không có yêu cầu atomic — đọc lệch nhau vài mili-giây giữa các ghế chấp nhận được cho hiển thị). Check `sold` bằng `SetContainsAsync` dạng bulk (1 round-trip); check `hold:*` bằng nhiều `KeyExistsAsync` chạy song song — `StackExchange.Redis` tự pipeline các lệnh gọi đồng thời trên cùng multiplexed connection nên vẫn chỉ tốn ~1 round-trip thực tế, không phải N.
+- **Auto-expire:** không code gì thêm — Redis TTL tự lo, kể cả `holdseats:{holdId}` (có `EXPIRE` khớp TTL). Ghi chú keyspace notifications là hook Phase 3+.
+- **Verify runtime thật** (script tạm gọi `RedisSeatHoldStore` qua Redis thật, không phải chỉ build): release nhầm `holdId` → không có tác dụng; release đúng `holdId` → ghế về Available; confirm 2 ghế → cả 2 thành Sold, list trả về đúng; confirm lại lần 2 cùng `holdId` → no-op (rỗng); không hold lại được ghế đã Sold; TTL 2 giây → sau 4 giây tự về Available không cần background job.
 
 ---
 

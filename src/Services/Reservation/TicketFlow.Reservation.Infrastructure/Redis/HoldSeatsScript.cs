@@ -12,10 +12,12 @@ internal static class HoldSeatsScript
     /// <remarks>
     /// KEYS[1]        = seats set key (valid seat ids for the event)
     /// KEYS[2]        = sold set key
-    /// KEYS[3..N+2]   = one hold key per requested seat
+    /// KEYS[3]        = holdseats:{holdId} reverse-index set (Commit 6 needs this to find which
+    ///                  seats a holdId covers when it only has eventId+holdId to work with)
+    /// KEYS[4..N+3]   = one hold key per requested seat
     /// ARGV[1]        = holdId
     /// ARGV[2]        = ttl in seconds
-    /// ARGV[3..N+2]   = seat id for each requested seat, parallel to KEYS[3..N+2]
+    /// ARGV[3..N+2]   = seat id for each requested seat, parallel to KEYS[4..N+3]
     ///
     /// Returns an empty array on success (every seat now held under holdId), or the list of
     /// seat ids that were NOT available — in which case NOTHING was set, by design.
@@ -23,14 +25,15 @@ internal static class HoldSeatsScript
     public const string Source = """
         local seats_key = KEYS[1]
         local sold_key = KEYS[2]
+        local hold_seats_key = KEYS[3]
         local hold_id = ARGV[1]
         local ttl_seconds = ARGV[2]
-        local seat_count = #KEYS - 2
+        local seat_count = #KEYS - 3
 
         local unavailable = {}
 
         for i = 1, seat_count do
-            local hold_key = KEYS[i + 2]
+            local hold_key = KEYS[i + 3]
             local seat_id = ARGV[i + 2]
 
             local is_valid_seat = redis.call('SISMEMBER', seats_key, seat_id)
@@ -47,8 +50,12 @@ internal static class HoldSeatsScript
         end
 
         for i = 1, seat_count do
-            redis.call('SET', KEYS[i + 2], hold_id, 'EX', ttl_seconds)
+            local hold_key = KEYS[i + 3]
+            local seat_id = ARGV[i + 2]
+            redis.call('SET', hold_key, hold_id, 'EX', ttl_seconds)
+            redis.call('SADD', hold_seats_key, seat_id)
         end
+        redis.call('EXPIRE', hold_seats_key, ttl_seconds)
 
         return {}
         """;
