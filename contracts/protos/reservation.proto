@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+option csharp_namespace = "TicketFlow.Contracts.Reservation";
+
+package ticketflow.reservation.v1;
+
+// Contract-first (Ch3): ordering-service (client) and reservation-service (server) both
+// compile this same file — neither owns the shape, the .proto does. Phase 1 only needs a
+// single sync round-trip to prove gRPC works; real seat-holding logic lands in Phase 2.
+service ReservationService {
+  rpc CheckSeatAvailability (CheckSeatAvailabilityRequest) returns (CheckSeatAvailabilityResponse);
+}
+
+message CheckSeatAvailabilityRequest {
+  string event_id = 1;
+  repeated string seat_ids = 2;
+}
+
+message CheckSeatAvailabilityResponse {
+  bool all_available = 1;
+  repeated string unavailable_seat_ids = 2;
+}
