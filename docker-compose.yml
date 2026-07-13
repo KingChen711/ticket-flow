@@ -38,6 +38,11 @@ services:
     ports:
       - "8003:8003"
       - "9003:9003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   ordering:
     build:
@@ -63,6 +68,7 @@ services:
     depends_on:
       - catalog
       - identity
+      - reservation
       - ordering
 
 networks:

@@ -131,9 +131,11 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 - **Verify runtime thật** (rebuild Docker, gọi qua `ordering` → gRPC → `reservation`, không chỉ build): 1 ghế Available → `all_available:true`; 1 ghế đã Sold (từ Commit 7) + 1 ghế Available → `all_available:false`, đúng `unavailableSeatIds`; 1 seatId bịa (chưa từng provision) → đúng bị coi unavailable (xác nhận guard ở trên thực sự cần thiết, không phải phòng thủ thừa). Regression: catalog/identity qua gateway + reservation REST vẫn 200, 35/35 test Catalog xanh.
 
 ### Commit 9 — `feat(reservation): dockerize with Redis + Postgres`
-- `Dockerfile` (multi-stage, copy `Directory.Packages.props` + proto — bài học Phase 1 Commit 9/14).
-- Compose: reservation thêm `ConnectionStrings__Default` (Postgres) + `Redis__ConnectionString`, `depends_on: postgres (healthy) + redis (healthy)`.
-- Gateway route `/reservation/**` (appsettings + Development). Verify qua `docker compose up`.
+- `Dockerfile` + `ConnectionStrings__Default`/`Redis__ConnectionString` qua `appsettings.json` (Docker) đã có sẵn từ Commit 3/4 (verify runtime dọc theo mỗi commit từ đó tới giờ luôn build lại image) — Commit 9 chỉ còn thiếu 2 việc: `depends_on` trong compose và route gateway.
+- `docker-compose.yml`: `reservation` thêm `depends_on: postgres (healthy) + redis (healthy)`; `gateway` thêm `reservation` vào `depends_on`.
+- Gateway: route `reservation-route` (`/reservation/{**catch-all}` → strip prefix → `http://reservation:8003`, đúng pattern PathRemovePrefix của catalog/identity/ordering) trong `appsettings.json`; override `http://localhost:8003` trong `appsettings.Development.json` cho local dev (reservation không đổi port giữa Docker/local vì `Program.cs` tự cấu hình Kestrel qua `Kestrel:HttpPort`/`Kestrel:GrpcPort`, không dùng `ASPNETCORE_URLS` như các service khác — nên cả 2 môi trường đều là `:8003`).
+- **Không route gRPC (9003) qua gateway** — gateway chỉ là REST reverse-proxy (YARP), giao tiếp gRPC nội bộ ordering→reservation đi thẳng qua Docker network, không qua gateway (đúng thiết kế mục 3 scope.md: gateway chỉ nằm giữa client và service layer).
+- **Verify runtime thật đầy đủ** (`docker compose up -d --build` toàn stack, không chỉ reservation riêng lẻ): 9 container Up; provision + availability qua `http://localhost:8080/reservation/**` lần đầu tiên (trước giờ luôn test thẳng port 8003); xác nhận data cũ (từ Commit 7/8, tạo trước khi thêm route) **vẫn còn nguyên** sau khi rebuild toàn bộ — Postgres/Redis volume không mất; **vòng đời đầy đủ qua gateway**: hold → confirm → `ordering` (gRPC) thấy ngay ghế vừa confirm là `Sold` (`all_available:false`) — chứng minh tính nhất quán real-time xuyên suốt cả chuỗi Client→Gateway→Reservation→(Redis+Postgres) và Gateway→Ordering→gRPC→Reservation. Regression: catalog/identity/ordering qua gateway vẫn 200, 35/35 test Catalog xanh.
 
 ---
 
