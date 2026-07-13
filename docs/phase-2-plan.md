@@ -143,9 +143,12 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 
 ### Commit 10 — `test(reservation): Testcontainers integration test — 1000 concurrent holds, exactly 1 wins` ⭐
 - **Đây là bằng chứng correctness thật của DoD** (không phải throughput). Project `TicketFlow.Reservation.IntegrationTests` (xUnit + `Testcontainers.Redis` — Redis THẬT trong container, đúng scope mục 11).
-- Test: provision 1 event có 1 ghế → `Task.WhenAll` 1000 hold request đồng thời **cùng ghế đó** → assert **đúng 1 success, 999 fail**. Deterministic, chạy được trong CI.
-- Test phụ: hold N ghế all-or-nothing (1 ghế bận → cả lô fail, không hold lẻ); release trả ghế về available; TTL hết → ghế tự trống.
+- `RedisFixture` (`IAsyncLifetime` + `IClassFixture`) — 1 container Redis dùng chung cho cả class test (khởi động container mỗi `[Fact]` sẽ chậm không cần thiết); cô lập giữa các test bằng GUID `eventId`/`seatId` mới mỗi lần, không phải reset container.
+- Test ở tầng `RedisSeatHoldStore` (Infrastructure) trực tiếp, **không** qua `ReservationService`/`InventoryService` (Application) — vì `ProvisionAsync` cần Postgres, còn cơ chế chống-oversell nằm hoàn toàn ở Redis; đúng phạm vi gói `Testcontainers.Redis` (không kèm Postgres) mà plan đã chọn.
+- Test chính: provision 1 ghế → `Task.WhenAll` 1000 hold request đồng thời **cùng ghế đó** → assert **đúng 1 success (unavailable rỗng), 999 fail (unavailable chứa đúng seatId)**.
+- Test phụ: all-or-nothing (1 trong 2 ghế đã bận → cả lô fail, ghế còn lại **không** bị hold ngoài ý muốn); release trả ghế về Available; confirm chuyển Sold **và** chặn hold lại; TTL 2 giây hết hạn tự động không cần background job.
 - **Scope mục 11:** integration test với Testcontainers — lần đầu tiên dùng trong dự án.
+- **Verify:** `dotnet test` thật (Docker tự pull + khởi động container `redis:7`, không mock) — **5/5 pass trong 4 giây**, gồm cả bài test lõi 1000-concurrent. Đây là phiên bản **chính thức, chạy lại được, CI-friendly** của các lần verify thủ công bằng script tạm đã làm ở Commit 5/6 (50 request lúc đó, giờ nâng lên đúng 1000 theo DoD và biến thành test thường trực trong repo).
 
 ### Commit 11 — `test(reservation): NBomber load test — flash-sale throughput (companion)`
 - Project `TicketFlow.Reservation.LoadTests` (NBomber — .NET, ở trong solution, CI-friendly; k6 là lựa chọn thay thế nếu thích JS thuần).
