@@ -8,6 +8,12 @@
 
   <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" />
+    <!-- dotnet-ef requires the STARTUP project to reference Design directly; Infrastructure's
+         own reference is PrivateAssets="all" and doesn't flow through ProjectReference. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
@@ -16,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\TicketFlow.Reservation.Infrastructure\TicketFlow.Reservation.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

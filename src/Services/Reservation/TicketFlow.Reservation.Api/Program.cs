@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.EntityFrameworkCore;
 using TicketFlow.Reservation.Api.Services;
+using TicketFlow.Reservation.Infrastructure;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,7 +21,22 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddGrpc();
 
+// Postgres side only for now (durable seat inventory). AddReservationApplication() is NOT
+// wired yet — it would register ReservationService/InventoryService, which need
+// ISeatHoldStore (Redis), and that has no implementation until Commit 4+. Wiring it early
+// would fail DI validation at Build() (same trap as Identity Commit 11).
+builder.Services.AddReservationInfrastructure(builder.Configuration);
+
 var app = builder.Build();
+
+// Dev-only: auto-migrate on startup. A real deployment would run migrations as a separate
+// CI/CD step instead of on every app boot (avoids races across multiple instances).
+if (!app.Environment.IsProduction())
+{
+    using var scope = app.Services.CreateScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<ReservationDbContext>();
+    await dbContext.Database.MigrateAsync();
+}
 
 app.UseTicketFlowWeb();
 
