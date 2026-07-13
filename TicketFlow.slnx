@@ -30,5 +30,6 @@
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.Domain/TicketFlow.Reservation.Domain.csproj" />
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.Infrastructure/TicketFlow.Reservation.Infrastructure.csproj" />
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.IntegrationTests/TicketFlow.Reservation.IntegrationTests.csproj" />
+    <Project Path="src/Services/Reservation/TicketFlow.Reservation.LoadTests/TicketFlow.Reservation.LoadTests.csproj" />
   </Folder>
 </Solution>

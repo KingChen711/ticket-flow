@@ -43,5 +43,8 @@
     <!-- Real Redis in a container (Commit 10, docs/phase-2-plan.md) — no mocking the
          concurrency primitive that's the actual thing under test. -->
     <PackageVersion Include="Testcontainers.Redis" Version="4.13.0" />
+    <!-- Throughput/load measurement (Commit 11) — companion to Commit 10's correctness proof,
+         not a replacement for it. -->
+    <PackageVersion Include="NBomber" Version="6.5.0" />
   </ItemGroup>
 </Project>

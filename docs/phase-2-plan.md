@@ -151,9 +151,12 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 - **Verify:** `dotnet test` thật (Docker tự pull + khởi động container `redis:7`, không mock) — **5/5 pass trong 4 giây**, gồm cả bài test lõi 1000-concurrent. Đây là phiên bản **chính thức, chạy lại được, CI-friendly** của các lần verify thủ công bằng script tạm đã làm ở Commit 5/6 (50 request lúc đó, giờ nâng lên đúng 1000 theo DoD và biến thành test thường trực trong repo).
 
 ### Commit 11 — `test(reservation): NBomber load test — flash-sale throughput (companion)`
-- Project `TicketFlow.Reservation.LoadTests` (NBomber — .NET, ở trong solution, CI-friendly; k6 là lựa chọn thay thế nếu thích JS thuần).
-- Kịch bản: nhiều ghế, nhiều VU giành đồng thời → đo throughput/latency, xác nhận **tổng ghế bán ≤ tổng ghế tồn** (no oversell ở quy mô lớn).
+- Project `TicketFlow.Reservation.LoadTests` (console app, `NBomber` — .NET, ở trong solution, CI-friendly; k6 là lựa chọn thay thế nếu thích JS thuần).
+- **Khác Commit 10 ở tầng đo:** Commit 10 gọi thẳng `RedisSeatHoldStore` in-process (nhanh, deterministic). Commit 11 gọi qua **HTTP thật** vào `Reservation.Api` đang chạy (mặc định `http://localhost:8003`, đổi được qua env `RESERVATION_BASE_URL`) — đo được cả tầng ASP.NET Core/JSON/network mà Commit 10 không chạm tới.
+- Kịch bản: provision pool 100 ghế → 1000 lần gọi trong 20s (50 req/s, tự oversubscribe 10x để đảm bảo tranh chấp thật) → mỗi lần chọn ngẫu nhiên 1 ghế trong pool, `POST /holds`, nếu thành công thì `POST confirm` ngay. Sau khi chạy xong, gọi lại `GET availability`, đếm `Sold`, in PASS/FAIL nếu `sold > provisioned`.
 - **Ghi rõ:** đây là **đo đặc tính tải**, không phải bằng chứng correctness — bằng chứng "đúng 1 thắng" là Commit 10. scope mục 11 & DoD gọi tên "k6/NBomber" nên vẫn làm để đúng cam kết.
+- **Bug thật gặp & sửa:** `WithReportFolder("load-test-reports")` dùng path tương đối → phụ thuộc CWD lúc `dotnet run` (chạy từ repo root qua `--project` thì path resolve ra ngay **repo root**, không phải trong project) → rác thư mục report ra ngoài, không nằm trong `bin/` (vốn đã gitignore). Sửa bằng `Path.Combine(AppContext.BaseDirectory, "load-test-reports")` — luôn neo theo thư mục assembly build ra, bất kể chạy từ đâu.
+- **Verify thật** (chạy 2 lần liên tiếp nhắm vào container `reservation` đang chạy sẵn, không mock): cả 2 lần đều **1000 request → đúng 100/100 ghế bán (khớp chính xác pool size), 900 bị từ chối 409** — không oversell, không undersell, lặp lại được. Latency thật qua HTTP: p50 ~2.4ms, p99 ~11-148ms (lần đầu có cold-start JIT). Report `.md`/`.html`/`.csv` nằm trong `bin/`. Regression: catalog/identity/reservation qua gateway vẫn 200, 35/35 test Catalog + 5/5 integration test Reservation vẫn xanh.
 
 ---
 
