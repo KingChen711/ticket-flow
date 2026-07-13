@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
+using Scalar.AspNetCore;
+using TicketFlow.Reservation.Api.Endpoints;
 using TicketFlow.Reservation.Api.Services;
+using TicketFlow.Reservation.Application;
 using TicketFlow.Reservation.Infrastructure;
 using TicketFlow.Web;
 
@@ -20,12 +23,13 @@ builder.WebHost.ConfigureKestrel(options =>
 
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddGrpc();
+builder.Services.AddOpenApi();
 
-// Postgres side only for now (durable seat inventory). AddReservationApplication() is NOT
-// wired yet — it would register ReservationService/InventoryService, which need
-// ISeatHoldStore (Redis), and that has no implementation until Commit 4+. Wiring it early
-// would fail DI validation at Build() (same trap as Identity Commit 11).
+// Postgres + Redis wiring (Infrastructure), then the orchestration services on top
+// (Application) — ISeatHoldStore now has a real implementation (Commit 4-6), so this no
+// longer trips ASP.NET Core's DI validation at Build() the way it would have in Commit 3/4.
 builder.Services.AddReservationInfrastructure(builder.Configuration);
+builder.Services.AddReservationApplication();
 
 var app = builder.Build();
 
@@ -39,6 +43,13 @@ if (!app.Environment.IsProduction())
 }
 
 app.UseTicketFlowWeb();
+
+app.MapOpenApi();
+app.MapScalarApiReference();
+
+app.MapInventoryEndpoints();
+app.MapAvailabilityEndpoints();
+app.MapHoldEndpoints();
 
 app.MapGrpcService<ReservationServiceImpl>();
 

@@ -112,13 +112,15 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 ## Nhóm C — Phơi ra ngoài + nối dây
 
 ### Commit 7 — `feat(reservation): REST endpoints (provision, hold, release, confirm, availability)`
-- Viết lại `Reservation.Api/Program.cs`: đăng ký Application + Infrastructure (Postgres + Redis), OpenAPI/Scalar, migrate lúc khởi động.
-- Endpoints (qua gateway `/reservation/**`):
-  - `POST /events/{eventId}/inventory` — provision seats (nội bộ/organizer).
-  - `GET /events/{eventId}/availability` — ghế còn trống.
-  - `POST /holds` — giữ ghế (body: eventId, seatIds — **không có holderId**, quyền sở hữu hold = possession of holdId token, xem quyết định ở Commit 2) → holdId + expiresAt / 409.
-  - `POST /holds/{holdId}/confirm`, `POST /holds/{holdId}/release`.
-- **Ch3:** service phơi REST cho gateway (khách "chọn ghế" gọi thẳng reservation, đúng mục 7 scope: `U->>R: Chọn ghế`).
+- Viết lại `Reservation.Api/Program.cs`: giờ mới gọi `AddReservationApplication()` (hoãn từ Commit 4, đúng như dự định — wire cùng lúc REST endpoint dùng nó), `AddOpenApi()` + `MapScalarApiReference()` (native OpenAPI/Scalar, đúng convention Phase 1), migrate lúc khởi động (giữ nguyên từ Commit 3).
+- Endpoints (chưa qua gateway — route `/reservation/**` là Commit 9):
+  - `POST /events/{eventId}/inventory` — body chỉ có `Sections` (không lặp lại `eventId` trong JSON, lấy từ route, tránh case route/body lệch nhau).
+  - `GET /events/{eventId}/availability`.
+  - `POST /holds` — body: `eventId`, `seatIds` (**không có `holderId`**, đúng quyết định Commit 2) → 200 + holdId/expiresAt hoặc **409** + `unavailableSeatIds`.
+  - `POST /holds/{holdId}/confirm` → 200 / 404 (hold hết hạn/không tồn tại). `POST /holds/{holdId}/release` → 204 / 404.
+  - **Thiết kế:** `confirm`/`release` cần thêm `eventId` trong body dù `holdId` đã ở route — vì Redis key scheme (`hold:{eventId}:{seatId}`) cần `eventId` để dựng đúng key, và không có cách suy ra `eventId` chỉ từ `holdId`. Client vốn đã biết `eventId` (đang mua vé sự kiện đó) nên không phải gánh nặng thêm.
+- **Ch3:** service phơi REST — khách "chọn ghế" gọi thẳng reservation, đúng mục 7 scope: `U->>R: Chọn ghế`.
+- **Verify runtime thật** (Postgres + Redis thật qua Docker, không chỉ build): provision 5 ghế → availability đúng 5 `Available` → hold 2 ghế → 200 → hold lại đúng 1 trong 2 ghế đó (holder khác) → **409** đúng `unavailableSeatIds` → availability giữa chừng thấy đúng `Held` → confirm → 200, ghế thành `Sold` **cả Redis lẫn Postgres** (`psql` xác nhận durable) → confirm lại lần 2 → **404** (đã dùng hết) → hold ghế khác rồi release → **204** → về lại `Available`. Regression: catalog/identity/ordering qua gateway vẫn 200, 35/35 test Catalog vẫn xanh.
 
 ### Commit 8 — `feat(reservation): gRPC CheckSeatAvailability phản ánh state thật; ordering thấy state thật`
 - Thay implementation gRPC hardcoded `all_available: true` (Phase 1 Commit 14) bằng **query availability thật** từ Redis/Postgres.

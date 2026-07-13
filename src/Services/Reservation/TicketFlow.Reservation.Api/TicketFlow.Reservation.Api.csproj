@@ -8,6 +8,9 @@
 
   <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Scalar.AspNetCore" />
     <!-- dotnet-ef requires the STARTUP project to reference Design directly; Infrastructure's
          own reference is PrivateAssets="all" and doesn't flow through ProjectReference. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
@@ -22,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\TicketFlow.Reservation.Application\TicketFlow.Reservation.Application.csproj" />
     <ProjectReference Include="..\TicketFlow.Reservation.Infrastructure\TicketFlow.Reservation.Infrastructure.csproj" />
   </ItemGroup>
 
