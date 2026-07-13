@@ -1,0 +1,32 @@
+include:
+  - infrastructure/docker/docker-compose.infra.yml
+
+services:
+  catalog:
+    build:
+      context: .
+      dockerfile: src/Services/Catalog/TicketFlow.Catalog.Api/Dockerfile
+    container_name: ticketflow-catalog
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: src/Gateway/TicketFlow.Gateway/Dockerfile
+    container_name: ticketflow-gateway
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      - catalog
+
+networks:
+  default:
+    name: ticketflow-network
