@@ -297,7 +297,7 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 3. Định nghĩa domain event (chưa publish, mới raise nội bộ).
 4. Thêm gRPC: `ordering` (skeleton) gọi `reservation` (skeleton) kiểm tra ghế — luyện sync comm.
 5. Migration + seed data (vài sự kiện mẫu).
-- **DoD:** CRUD sự kiện qua gateway; mỗi service DB riêng; 1 lời gọi gRPC nội bộ chạy được.
+- **DoD:** ✅ CRUD sự kiện qua gateway; ✅ mỗi service DB riêng; ✅ 1 lời gọi gRPC nội bộ chạy được. **Hoàn thành 2026-07-13** — verify qua `docker compose up`, xem [docs/phase-1-plan.md](docs/phase-1-plan.md) để biết chi tiết từng commit và các lệch kế hoạch có lý do.
 
 ### Phase 2 — Reservation & bài toán overselling *(Ch8 + Redis)* — ~1.5 tuần
 **Mục tiêu:** giải quyết concurrency — điểm nhấn distributed systems.

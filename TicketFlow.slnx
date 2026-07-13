@@ -21,4 +21,10 @@
     <Project Path="src/Services/Identity/TicketFlow.Identity.Domain/TicketFlow.Identity.Domain.csproj" />
     <Project Path="src/Services/Identity/TicketFlow.Identity.Infrastructure/TicketFlow.Identity.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/src/Services/Ordering/">
+    <Project Path="src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Services/Reservation/">
+    <Project Path="src/Services/Reservation/TicketFlow.Reservation.Api/TicketFlow.Reservation.Api.csproj" />
+  </Folder>
 </Solution>

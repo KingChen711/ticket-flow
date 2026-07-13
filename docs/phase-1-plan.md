@@ -149,14 +149,16 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
 ### Commit 14 — `feat(reservation): gRPC server skeleton (in-memory seat check)`
 - Project `TicketFlow.Reservation.Api` (`Grpc.AspNetCore`), `<Protobuf ... GrpcServices="Server">`.
 - Implement `CheckSeatAvailability` trả kết quả **in-memory/hardcoded** (giả định còn chỗ) — logic thật là Phase 2.
-- HTTP 8003 (health) + gRPC 9003 (HTTP/2). Thêm vào compose.
+- **Kestrel 2 cổng riêng**: HTTP/1.1 tại 8003 (health, plain REST) + HTTP/2 tại 9003 (gRPC) — cấu hình tường minh qua `ConfigureKestrel`/`ListenAnyIP`, vì Kestrel không TLS thì không tự thương lượng HTTP/1.1 và HTTP/2 (h2c) trên cùng 1 cổng như khi có TLS ALPN. Thêm vào compose.
 
 ### Commit 15 — `feat(ordering): gRPC client skeleton calling reservation`
 - Project `TicketFlow.Ordering.Api`, `<Protobuf ... GrpcServices="Client">` cùng .proto.
 - Đăng ký gRPC client (`AddGrpcClient<ReservationService.ReservationServiceClient>`) trỏ `http://reservation:9003`.
-- REST `POST /ordering/check-seats` → gọi reservation qua gRPC → trả kết quả (chứng minh sync comm end-to-end).
-- Compose: service `ordering` (8004/9004). Gateway route `/ordering/**`.
-- **Ch3:** sync request/response qua gRPC giữa 2 service.
+- REST `POST /check-seats` (gateway map thành `/ordering/check-seats`, đúng pattern PathRemovePrefix của catalog/identity) → gọi reservation qua gRPC → trả kết quả (chứng minh sync comm end-to-end).
+- **Sửa lại "8004/9004" trong scope.md mục 4** — Ordering ở Phase 1 chỉ là REST bridge, chưa tự host gRPC server nào (không cần cổng 9004), chỉ nghe REST ở 8004. Cổng gRPC riêng của ordering (nếu cần) chỉ phát sinh khi nó trở thành 1 gRPC service thật ở phase sau.
+- Compose: service `ordering` (8004) + `reservation` (8003/9003). Gateway route `/ordering/**`.
+- **Package cần thêm ngoài dự kiến ban đầu:** `Grpc.Net.ClientFactory` không tự kéo `Google.Protobuf` (khác `Grpc.AspNetCore` gói sẵn đủ cho server) — phải thêm cả `Google.Protobuf` + `Grpc.Tools` tường minh cho project client.
+- **Ch3:** sync request/response qua gRPC giữa 2 service — verify thật bằng cách chạy song song 2 service local, gọi `POST /check-seats` → xác nhận round-trip gRPC hoạt động (không chỉ build).
 
 ---
 

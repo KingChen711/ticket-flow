@@ -15,6 +15,42 @@ services:
       postgres:
         condition: service_healthy
 
+  identity:
+    build:
+      context: .
+      dockerfile: src/Services/Identity/TicketFlow.Identity.Api/Dockerfile
+    container_name: ticketflow-identity
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  reservation:
+    build:
+      context: .
+      dockerfile: src/Services/Reservation/TicketFlow.Reservation.Api/Dockerfile
+    container_name: ticketflow-reservation
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8003:8003"
+      - "9003:9003"
+
+  ordering:
+    build:
+      context: .
+      dockerfile: src/Services/Ordering/TicketFlow.Ordering.Api/Dockerfile
+    container_name: ticketflow-ordering
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8004:8004"
+    depends_on:
+      - reservation
+
   gateway:
     build:
       context: .
@@ -26,6 +62,8 @@ services:
       - "8080:8080"
     depends_on:
       - catalog
+      - identity
+      - ordering
 
 networks:
   default:
