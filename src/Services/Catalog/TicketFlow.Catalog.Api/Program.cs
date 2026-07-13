@@ -1,8 +1,13 @@
+using TicketFlow.Catalog.Api.Endpoints;
+using TicketFlow.Catalog.Application;
+using TicketFlow.Catalog.Infrastructure;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddCatalogApplication();
+builder.Services.AddCatalogInfrastructure(builder.Configuration);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -20,7 +25,8 @@ app.UseTicketFlowWeb();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapGet("/hello", () => Results.Ok(new { message = "hello from catalog-service" }))
-   .WithName("Hello");
+app.MapVenueEndpoints();
+app.MapEventEndpoints();
+app.MapSeatMapEndpoints();
 
 app.Run();
