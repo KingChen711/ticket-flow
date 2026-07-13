@@ -93,9 +93,11 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
   7. `dotnet build` toàn solution: 0 Warning, 0 Error.
 
 ### Commit 2 — `feat(contracts): integration event CatalogEventPublished`
-- Project mới `src/BuildingBlocks/TicketFlow.Contracts.Messaging` (classlib, không phụ thuộc gì ngoài BCL).
-- Định nghĩa contract `CatalogEventPublished` (tên tách khỏi domain event trùng tên — xem quyết định 2): `CatalogEventId`, `Title`, `VenueId`, `StartsAt`, `PublishedAt`.
-- **Ghi rõ trong code:** đây là **integration contract ổn định**, đổi = versioning cross-service; KHÔNG import kiểu domain của catalog.
+- Project mới `src/BuildingBlocks/TicketFlow.Contracts.Messaging` (classlib, không phụ thuộc gì ngoài BCL — xác nhận csproj scaffold mặc định đã đúng, không cần thêm `PackageReference` nào).
+- Định nghĩa contract `Catalog/CatalogEventPublished.cs` — `sealed record CatalogEventPublished(Guid CatalogEventId, string Title, Guid VenueId, DateTimeOffset StartsAt, DateTimeOffset PublishedAt)`. Đặt dưới namespace/thư mục `Catalog/` (không phải root) — chừa chỗ cho contract của service khác sau này (`Ordering/`, ...) mà không lẫn.
+- **Ghi rõ trong code:** đây là **integration contract ổn định**, đổi = versioning cross-service; KHÔNG import kiểu domain của catalog. Cũng ghi rõ đây KHÔNG phải domain event trùng tên (`TicketFlow.Catalog.Domain.Events.EventPublished`) — domain event đó chỉ mang `CatalogEventId` (id thuần), tiêu thụ in-process; integration event này mang đủ dữ liệu hiển thị cho consumer.
+- **Đối chiếu domain event thật** (đọc `Event.cs`/`EventPublished.cs` trước khi viết contract): `Event.Publish(now)` hiện chỉ `Raise(new EventPublished(Id))` — domain event **không** mang `Title`/`VenueId`/`StartsAt`. Nghĩa là **Commit 4** (handler dịch domain → integration event) sẽ phải tự load lại `Event` aggregate (qua `IEventRepository`, đã có sẵn) để lấy các field còn thiếu trước khi publish — ghi chú trước ở đây để Commit 4 không bất ngờ.
+- **Verify thật:** build project (0 Warning/0 Error) + build toàn solution; viết scratch console app (throwaway, đã xoá) reference thẳng `TicketFlow.Contracts.Messaging`, serialize/deserialize `CatalogEventPublished` qua `System.Text.Json` (đúng serializer MassTransit dùng mặc định) → round-trip giữ nguyên giá trị (record value equality) — xác nhận contract "sạch" để đi qua wire, không có surprise từ `DateTimeOffset`/`Guid` serialize.
 
 ---
 
