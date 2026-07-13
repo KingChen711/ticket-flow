@@ -124,14 +124,17 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
 - **Ch2:** thêm một bounded context với ubiquitous language riêng.
 
 ### Commit 11 — `feat(identity): EF Core persistence (own database)`
-- `TicketFlow.Identity.Application` (ports + `UserService`) + `TicketFlow.Identity.Infrastructure`.
-- `IdentityDbContext` (schema `identity`, DB `ticketflow_identity`), config, repo, migration `InitialIdentity`, startup migrate.
-- **Ch8:** DB-per-service — chứng minh 2 service = 2 database tách biệt.
+- `TicketFlow.Identity.Application` (ports `IUserRepository`/`IUnitOfWork`/`IPasswordHasher` + `UserService`) + `TicketFlow.Identity.Infrastructure`.
+- `IdentityDbContext` (schema `identity`, DB `ticketflow_identity`), config (`Roles` — list enum — lưu dạng chuỗi phân tách dấu phẩy qua `HasConversion`, không dùng "primitive collection" mới của EF Core 8 để tránh rủi ro chưa kiểm chứng), repo, migration `InitialIdentity`.
+- `TicketFlow.Identity.Api` — **scaffold tối thiểu** (chỉ `/health` + OpenAPI/Scalar + đăng ký DI + `Database.MigrateAsync()` lúc khởi động), **chưa có endpoint nghiệp vụ** (để dành Commit 12).
+- **Lệch kế hoạch so với bản gốc, có lý do:** ban đầu định để "Password hashing" hoàn toàn ở Commit 12, nhưng `WebApplicationBuilder.Build()` tự validate toàn bộ DI graph ở môi trường Development — `UserService` cần `IPasswordHasher` nên nếu không có implementation, **app không khởi động nổi**, kể cả `dotnet ef migrations add` cũng fail (cần dựng được app để tạo `DbContext` ở design-time). Nên đẩy `Pbkdf2PasswordHasher` (BCL `Rfc2898DeriveBytes.Pbkdf2`, không thêm package ngoài — xem quyết định kiến trúc) lên làm luôn ở đây thay vì Commit 12.
+- **Bug tự bắt được:** quên `builder.Ignore(u => u.DomainEvents)` trong `UserConfiguration` (đã làm đủ cho Catalog nhưng bỏ sót ở Identity) — EF báo lỗi "entity type DomainEvent requires a primary key" lúc tạo migration. Sửa ngay.
+- **Ch8:** DB-per-service — verify thật bằng psql: `ticketflow_catalog` và `ticketflow_identity` là 2 database tách biệt trên cùng Postgres container.
 
 ### Commit 12 — `feat(identity): registration, user list & dev JWT token`
 - `Identity.Api`: `POST /identity/register`, `GET /identity/users`, `POST /identity/dev-token` (ký JWT symmetric, claim `sub` + `role` — placeholder tới Phase 7).
-- Password hashing (PBKDF2/BCrypt).
-- Compose: thêm service `identity` (8001) + `ConnectionStrings__Default`.
+- ~~Password hashing (PBKDF2/BCrypt)~~ — đã làm ở Commit 11 (xem lý do ở trên).
+- Compose: thêm service `identity` (8001) + connection string qua `appsettings.json`/`appsettings.Development.json` (khớp pattern Catalog, không dùng env var `ConnectionStrings__Default`).
 - Gateway: route `/identity/**` → identity cluster.
 - **Ch13 (đặt nền, chưa hoàn thiện):** token, role — chỉ mức giả lập.
 

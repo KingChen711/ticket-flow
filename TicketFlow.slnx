@@ -16,6 +16,9 @@
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Infrastructure/TicketFlow.Catalog.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/src/Services/Identity/">
+    <Project Path="src/Services/Identity/TicketFlow.Identity.Api/TicketFlow.Identity.Api.csproj" />
+    <Project Path="src/Services/Identity/TicketFlow.Identity.Application/TicketFlow.Identity.Application.csproj" />
     <Project Path="src/Services/Identity/TicketFlow.Identity.Domain/TicketFlow.Identity.Domain.csproj" />
+    <Project Path="src/Services/Identity/TicketFlow.Identity.Infrastructure/TicketFlow.Identity.Infrastructure.csproj" />
   </Folder>
 </Solution>
