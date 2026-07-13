@@ -13,5 +13,6 @@
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Application/TicketFlow.Catalog.Application.csproj" />
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Domain.Tests/TicketFlow.Catalog.Domain.Tests.csproj" />
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Domain/TicketFlow.Catalog.Domain.csproj" />
+    <Project Path="src/Services/Catalog/TicketFlow.Catalog.Infrastructure/TicketFlow.Catalog.Infrastructure.csproj" />
   </Folder>
 </Solution>

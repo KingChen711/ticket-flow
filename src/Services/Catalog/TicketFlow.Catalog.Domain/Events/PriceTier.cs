@@ -5,7 +5,11 @@ namespace TicketFlow.Catalog.Domain.Events;
 public sealed class PriceTier : Entity<Guid>
 {
     public Guid SectionId { get; private set; }
-    public Money Price { get; private set; }
+    public Money Price { get; private set; } = null!;
+
+    // Required by EF Core: Price is an owned navigation, can't be bound through a
+    // constructor parameter — see Event's parameterless constructor for the same reason.
+    private PriceTier() { }
 
     private PriceTier(Guid id, Guid sectionId, Money price) : base(id)
     {

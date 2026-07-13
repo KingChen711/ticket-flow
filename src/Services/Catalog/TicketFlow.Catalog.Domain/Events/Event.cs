@@ -6,13 +6,18 @@ public sealed class Event : AggregateRoot<Guid>
 {
     private readonly List<PriceTier> _priceTiers = [];
 
-    public string Title { get; private set; }
-    public string Description { get; private set; }
-    public string Artist { get; private set; }
+    public string Title { get; private set; } = null!;
+    public string Description { get; private set; } = null!;
+    public string Artist { get; private set; } = null!;
     public Guid VenueId { get; private set; }
-    public EventSchedule Schedule { get; private set; }
+    public EventSchedule Schedule { get; private set; } = null!;
     public EventStatus Status { get; private set; }
     public IReadOnlyList<PriceTier> PriceTiers => _priceTiers.AsReadOnly();
+
+    // Required by EF Core: Schedule is an owned navigation, can't be bound through a
+    // constructor parameter — EF materializes via this parameterless constructor, then
+    // sets every property (including Schedule and the PriceTiers backing field) via reflection.
+    private Event() { }
 
     private Event(Guid id, string title, string description, string artist, Guid venueId, EventSchedule schedule)
         : base(id)
