@@ -24,6 +24,18 @@ public sealed class UserService(
         return Map(user);
     }
 
+    /// <summary>Returns null for both "no such user" and "wrong password" — never reveal which.</summary>
+    public async Task<UserResponse?> AuthenticateAsync(AuthenticateRequest request, CancellationToken cancellationToken = default)
+    {
+        var email = Email.Create(request.Email);
+        var user = await userRepository.GetByEmailAsync(email.Value, cancellationToken);
+
+        if (user is null || !passwordHasher.Verify(request.Password, user.PasswordHash))
+            return null;
+
+        return Map(user);
+    }
+
     public async Task<UserResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var user = await userRepository.GetByIdAsync(id, cancellationToken);
@@ -36,5 +48,9 @@ public sealed class UserService(
         return users.Select(Map).ToList();
     }
 
-    private static UserResponse Map(User user) => new(user.Id, user.Email.Value, user.DisplayName, user.Roles);
+    private static UserResponse Map(User user) => new(
+        user.Id,
+        user.Email.Value,
+        user.DisplayName,
+        user.Roles.Select(role => role.ToString()).ToList());
 }
