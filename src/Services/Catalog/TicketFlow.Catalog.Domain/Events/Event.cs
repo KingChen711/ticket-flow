@@ -1,0 +1,92 @@
+using TicketFlow.Domain;
+
+namespace TicketFlow.Catalog.Domain.Events;
+
+public sealed class Event : AggregateRoot<Guid>
+{
+    private readonly List<PriceTier> _priceTiers = [];
+
+    public string Title { get; private set; }
+    public string Description { get; private set; }
+    public string Artist { get; private set; }
+    public Guid VenueId { get; private set; }
+    public EventSchedule Schedule { get; private set; }
+    public EventStatus Status { get; private set; }
+    public IReadOnlyList<PriceTier> PriceTiers => _priceTiers.AsReadOnly();
+
+    private Event(Guid id, string title, string description, string artist, Guid venueId, EventSchedule schedule)
+        : base(id)
+    {
+        Title = title;
+        Description = description;
+        Artist = artist;
+        VenueId = venueId;
+        Schedule = schedule;
+        Status = EventStatus.Draft;
+    }
+
+    public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule)
+    {
+        var @event = new Event(
+            Guid.NewGuid(),
+            Guard.NotNullOrEmpty(title, nameof(title)),
+            description ?? string.Empty,
+            Guard.NotNullOrEmpty(artist, nameof(artist)),
+            venueId,
+            schedule ?? throw new ArgumentNullException(nameof(schedule)));
+
+        @event.Raise(new EventCreated(@event.Id, @event.Title, @event.VenueId));
+
+        return @event;
+    }
+
+    public void AddPriceTier(string sectionName, Money price)
+    {
+        if (Status != EventStatus.Draft)
+            throw new InvalidOperationException("Price tiers can only be added while the event is in draft.");
+
+        if (_priceTiers.Any(p => p.SectionName.Equals(sectionName, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"A price tier for section '{sectionName}' already exists.");
+
+        _priceTiers.Add(PriceTier.Create(sectionName, price));
+    }
+
+    public void Publish(DateTimeOffset now)
+    {
+        if (Status != EventStatus.Draft)
+            throw new InvalidOperationException("Only a draft event can be published.");
+
+        if (_priceTiers.Count == 0)
+            throw new InvalidOperationException("Cannot publish an event without at least one price tier.");
+
+        if (Schedule.IsInPast(now))
+            throw new InvalidOperationException("Cannot publish an event scheduled in the past.");
+
+        Status = EventStatus.Published;
+        Raise(new EventPublished(Id));
+    }
+
+    public void Reschedule(EventSchedule schedule, DateTimeOffset now)
+    {
+        if (Status == EventStatus.Cancelled)
+            throw new InvalidOperationException("Cannot reschedule a cancelled event.");
+
+        if (schedule is null)
+            throw new ArgumentNullException(nameof(schedule));
+
+        if (schedule.IsInPast(now))
+            throw new InvalidOperationException("Cannot reschedule an event to a time in the past.");
+
+        Schedule = schedule;
+        Raise(new EventRescheduled(Id, Schedule.StartsAt, Schedule.EndsAt));
+    }
+
+    public void Cancel()
+    {
+        if (Status == EventStatus.Cancelled)
+            throw new InvalidOperationException("Event is already cancelled.");
+
+        Status = EventStatus.Cancelled;
+        Raise(new EventCancelled(Id));
+    }
+}
