@@ -22,3 +22,11 @@ public sealed record HoldSeatsResult(
     public static HoldSeatsResult Succeeded(Guid holdId, DateTimeOffset expiresAt) => new(true, holdId, expiresAt, []);
     public static HoldSeatsResult Unavailable(IReadOnlyList<Guid> seatIds) => new(false, null, null, seatIds);
 }
+
+/// <summary>
+/// Answers "can these exact seats be sold right now" for a caller that doesn't already know the
+/// seat ids are legitimate (e.g. ordering, over gRPC) — unlike EventAvailabilityResponse, this
+/// must also treat an unknown/unprovisioned seat id as unavailable rather than silently reporting
+/// it Available (see docs/phase-2-plan.md, Commit 8).
+/// </summary>
+public sealed record CheckAvailabilityResult(bool AllAvailable, IReadOnlyList<Guid> UnavailableSeatIds);

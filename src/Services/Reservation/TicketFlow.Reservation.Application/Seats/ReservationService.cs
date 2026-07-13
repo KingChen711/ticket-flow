@@ -1,4 +1,5 @@
 using TicketFlow.Reservation.Application.Abstractions;
+using TicketFlow.Reservation.Domain.Seats;
 
 namespace TicketFlow.Reservation.Application.Seats;
 
@@ -60,5 +61,32 @@ public sealed class ReservationService(
             .ToList();
 
         return new EventAvailabilityResponse(eventId, dtos);
+    }
+
+    /// <summary>
+    /// Used by the gRPC endpoint (Commit 8) where the caller (ordering) supplies seat ids we
+    /// haven't validated yet — unlike GetAvailabilityAsync, which only ever asks Redis about
+    /// seat ids it already read from Postgres, this must treat any id NOT found in Postgres as
+    /// unavailable too, or a made-up seat id would come back as Available by default.
+    /// </summary>
+    public async Task<CheckAvailabilityResult> CheckAvailabilityAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
+    {
+        if (seatIds.Count == 0)
+            return new CheckAvailabilityResult(true, []);
+
+        var knownSeats = await seatRepository.GetByIdsAsync(eventId, seatIds, cancellationToken);
+        var knownIds = knownSeats.Select(seat => seat.Id).ToHashSet();
+
+        var unavailable = seatIds.Where(id => !knownIds.Contains(id)).ToList();
+
+        var liveStatuses = await holdStore.GetLiveStatusesAsync(eventId, seatIds, cancellationToken);
+        foreach (var seat in knownSeats)
+        {
+            var status = liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
+            if (status != SeatStatus.Available)
+                unavailable.Add(seat.Id);
+        }
+
+        return new CheckAvailabilityResult(unavailable.Count == 0, unavailable);
     }
 }
