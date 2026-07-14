@@ -317,11 +317,11 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 
 ### Phase 4 — CQRS + Event Sourcing (Ordering) *(Ch6, Ch7)* — ~2 tuần
 **Mục tiêu:** tách read/write, lưu lịch sử dạng event.
-1. Cài **Marten** (event store trên Postgres) cho `ordering`.
-2. Order là aggregate event-sourced: apply event để dựng lại state.
-3. MediatR: tách Command (PlaceOrder) và Query (GetMyOrders).
-4. **Projection** → read model "đơn/vé của tôi".
-- **DoD:** đặt 1 order sinh ra stream event; xóa read model rồi **replay** từ event dựng lại được.
+1. Cài **Marten** (event store trên Postgres, MIT license) cho `ordering`.
+2. Order là aggregate event-sourced: `Apply` event để dựng lại state (`Order.Load`/Marten `AggregateStreamAsync`).
+3. ~~MediatR~~ **tự cuộn dispatcher tối thiểu** (`ICommandHandler`/`IQueryHandler`, thuần convention đặt tên, không mediator runtime) — tách Command (`PlaceOrder`/`ConfirmOrder`/`CancelOrder`) và Query (`GetMyOrders`/`GetOrderById`). Lý do đổi: MediatR v13+ đã chuyển giấy phép thương mại (giống MassTransit v9); giá trị thật của nó (pipeline behaviors) không cần cho DoD Phase 4.
+4. **Projection** (`MyOrdersProjection`, inline) → read model "đơn/vé của tôi" (`MyOrderView`), tách riêng port đọc (`IOrderViewStore`) khỏi port ghi (`IOrderStore`).
+- **DoD:** ✅ đặt 1 order sinh ra stream event; ✅ xóa read model rồi **replay** từ event dựng lại được. **Hoàn thành 2026-07-14** — verify qua `docker compose up` (11 container) + kịch bản xoá/rebuild read model thật (toàn bộ 15 stream lịch sử khôi phục đúng), xem [docs/phase-4-plan.md](docs/phase-4-plan.md) để biết chi tiết từng commit và các bug thật gặp phải (nhiều lần liên quan JasperFx source generator: `partial` projection subclass, convention identity `Id`, và 1 bug rò rỉ dữ liệu chéo giữa aggregate với `Guid.Empty`).
 
 ### Phase 5 — PurchaseSaga + Payment + Ticketing + Resiliency *(Ch9, Ch10)* — ~2.5 tuần
 **Mục tiêu:** luồng nghiệp vụ đinh + chịu lỗi.

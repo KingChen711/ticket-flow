@@ -33,10 +33,55 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
   - **Redis** = nguồn sự thật cho *"ghế còn trống ngay lúc này"*: hold (TTL 10'), sold-set, danh sách seatId hợp lệ. Đây là fast-path, atomic.
   - **Postgres** (`ticketflow_reservation`) = bản ghi **bền vững**: định nghĩa seat inventory + bản ghi ghế đã bán (sold) để audit/rebuild. Nếu Redis mất dữ liệu, Postgres là nguồn dựng lại.
 
+```mermaid
+graph TB
+    App["ReservationService<br/>(Application)"]
+    App -->|"fast-path, atomic<br/>hold / availability / sold-set"| Redis[("Redis :6379<br/>hold key TTL 10'")]
+    App -->|"durable<br/>seat inventory + sold record"| PG[("Postgres<br/>ticketflow_reservation")]
+    Redis -.->|"nếu Redis mất dữ liệu<br/>Postgres là nguồn rebuild"| PG
+```
+
 - **Chống overselling = Lua script atomic, KHÔNG phải RedLock** — đây là chỗ tôi **phản biện scope.md** (mục 5 & Phase 2 ghi "Redis distributed lock (RedLock)"):
   - **RedLock** cho một *named mutex* (khoá loại trừ lẫn nhau). Nếu dùng RedLock kiểu `acquire lock:event:{eventId}` → check → set hold → release, thì **mọi** request giữ ghế của cùng 1 event bị **tuần tự hoá qua 1 khoá** — đúng về correctness nhưng **giết throughput** đúng lúc cần nhất (flash sale). Sai công cụ cho bài toán.
   - **Lua script** chạy **atomic** trên Redis (single-threaded execution): 1 script "check tất cả ghế yêu cầu có trống không, nếu trống thì set hold tất cả (all-or-nothing)" — chỉ khoá đúng những ghế đó, không tuần tự hoá cả event. Vừa đúng vừa nhanh. Bản chất chống double-hold nằm ở `SET NX` (set-if-not-exists) atomic.
   - **Kết luận:** dùng **StackExchange.Redis + Lua script** làm primitive chính. Vẫn ghi chú RedLock.net là công cụ đúng cho *tình huống khác* (khoá loại trừ xuyên nhiều thao tác độc lập, Redis multi-master) — để hiểu **khi nào** mới cần nó, không dùng bừa. Xem lại scope.md mục 5 nên sửa "RedLock" → "atomic Lua / SET NX (RedLock chỉ khi cần mutex xuyên thao tác)".
+
+```mermaid
+graph TD
+    subgraph RL["❌ RedLock — mutex đặt tên theo EVENT"]
+        direction TB
+        RLA["Request: hold seat A"] --> RLLock["acquire lock:event:X"]
+        RLB["Request: hold seat B"] --> RLLock
+        RLC["Request: hold seat C"] --> RLLock
+        RLLock --> RLNote["Mọi request của CÙNG 1 event<br/>bị tuần tự hoá qua 1 khoá —<br/>đúng nhưng giết throughput<br/>đúng lúc flash sale cần nhất"]
+    end
+
+    subgraph LUA["✅ Lua script — chỉ khoá đúng ghế liên quan"]
+        direction TB
+        LA["Request: hold seat A"] --> LKA["EVAL: check+set hold:X:A"]
+        LB["Request: hold seat B"] --> LKB["EVAL: check+set hold:X:B"]
+        LC["Request: hold seat C"] --> LKC["EVAL: check+set hold:X:C"]
+        LKA & LKB & LKC --> LNote["Chạy song song thật —<br/>chỉ 2 request TRÙNG ghế<br/>mới thật sự xung đột"]
+    end
+```
+
+*Cả 2 request cùng tranh **đúng 1 ghế** (all-or-nothing, minh hoạ bằng `HoldSeatsScript`):*
+
+```mermaid
+sequenceDiagram
+    participant A as Request A (holdId=A)
+    participant B as Request B (holdId=B)
+    participant Redis as Redis (Lua EVAL, single-threaded)
+
+    par Gửi gần như đồng thời
+        A->>Redis: EVAL HoldSeatsScript(seatX)
+    and
+        B->>Redis: EVAL HoldSeatsScript(seatX)
+    end
+    Note over Redis: Lua atomic — Redis xử lý<br/>tuần tự nội bộ, không ai chen<br/>giữa "check" và "set"
+    Redis-->>A: OK — seatX held (thắng)
+    Redis-->>B: unavailableSeatIds: [seatX] (409, thua)
+```
 
 - **Hold sống HOÀN TOÀN trong Redis (ephemeral), TTL = auto-expire:** hold không ghi vào Postgres. Hết TTL → key tự biến mất → ghế tự trống lại. **Không cần background worker** để dọn hold hết hạn (item 3 "xử lý hết hạn hold tự động" được Redis TTL lo miễn phí). Nếu Phase sau cần *phản ứng* với sự kiện "hold hết hạn" (ví dụ notify), dùng **Redis keyspace notifications** — nhưng đó là hook Phase 3+, Phase 2 không cần vì availability tự đúng khi key mất.
 
@@ -59,6 +104,17 @@ Nhưng **không** dựng sơ đồ ghế dạng lưới hàng×cột trực quan
 ### Commit 1 — `feat(reservation): model Seat + SeatStatus (thin domain)`
 - Mổ `reservation` từ skeleton thành có tầng `Domain`. Tạo project `TicketFlow.Reservation.Domain` (ref `TicketFlow.Domain`).
 - `Seat : Entity<Guid>` { `EventId`, `SectionId`, `Label` (ví dụ `VIP-12`), `Status` }. `SeatStatus` enum (Available/Held/Sold).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Available : provision (Postgres)
+    Available --> Held : hold (Lua SET NX, TTL 10')
+    Held --> Available : release / TTL hết hạn (Redis tự dọn)
+    Held --> Sold : confirm (Redis sold-set + Postgres MarkSold)
+    Sold --> [*]
+```
+
+*`Held` sống **hoàn toàn trong Redis** (ephemeral, không ghi Postgres) — hết TTL tự về `Available`, không cần background job. `Sold` là trạng thái duy nhất ghi cả 2 nơi (Redis sold-set + Postgres, cho audit/rebuild).*
 - (Tuỳ) `SeatInventory` — factory sinh danh sách `Seat` từ (eventId, sectionId, sectionName, capacity): tạo `capacity` ghế nhãn `{sectionName}-{1..n}`.
 - **Ghi rõ trong code/doc:** domain mỏng có chủ đích — consistency do Redis lo (xem quyết định kiến trúc), `Seat` không mang behavior tranh chấp.
 - **Ch2/Ch8:** vẫn giữ `Seat` là entity định danh, nhưng thừa nhận đây là bounded context infra-heavy.

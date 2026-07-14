@@ -20,6 +20,29 @@ tags: [ticketflow, phase-1, plan, ddd, grpc, efcore]
 - **Auth:** dùng **fake JWT** (ký bằng symmetric key, dev-only). OAuth2/OIDC thật là Phase 7 (Ch13).
 - **Ports:** theo scope mục 4 — catalog 8002, identity 8001, reservation 8003/gRPC 9003, ordering 8004/gRPC 9004.
 - **SeatMap thuộc về Event, không thuộc về Venue** (quyết định sửa lại sau khi code Commit 2/3 — xem Commit 3.1): cùng 1 địa điểm vật lý có thể dựng sân khấu/sơ đồ ghế hoàn toàn khác nhau giữa các sự kiện (GA floor, catwalk, sân khấu 360°...). `Venue` chỉ còn là địa điểm thuần (Name, Address). `SeatMap` là aggregate riêng, 1-1 với `Event` (mỗi Event tự tạo `SeatMap` của riêng nó khi cần mở bán). **Chưa** model `Seat` (Row/Number) ở mức cá thể trong Phase 1 — `Section` chỉ giữ `Capacity` dạng số đếm; việc "giữ đúng 1 ghế cụ thể" là bài toán của `reservation-service` ở Phase 2, lúc đó mới cần quyết định có explode ra `Seat` entity hay không (tránh vàng hoá sớm — mục 12 scope.md).
+
+### Sơ đồ kiến trúc Phase 1
+
+```mermaid
+graph LR
+    Client((Client)) --> GW["Gateway :8080<br/>(YARP)"]
+
+    GW -->|"/catalog/**"| Catalog["catalog :8002<br/>4 tầng Clean Architecture"]
+    GW -->|"/identity/**"| Identity["identity :8001<br/>4 tầng Clean Architecture"]
+    GW -->|"/ordering/**"| Ordering["ordering :8004<br/>skeleton — REST bridge"]
+
+    Ordering -->|"gRPC :9003<br/>CheckSeatAvailability"| Reservation["reservation :8003/9003<br/>skeleton — trả hardcoded"]
+
+    Catalog --> PGCatalog[("ticketflow_catalog")]
+    Identity --> PGIdentity[("ticketflow_identity")]
+
+    subgraph PG["Postgres container (Phase 0)"]
+        PGCatalog
+        PGIdentity
+    end
+```
+
+*DB-per-service (2 database tách biệt trên cùng Postgres container) + 1 đường gRPC đồng bộ nối `ordering`↔`reservation` — cả 2 điểm này chính là nội dung DoD Phase 1. `ordering`/`reservation` vẫn là skeleton, sẽ mổ xẻ đầy đủ ở Phase 4/5.*
 - **API docs: native `Microsoft.AspNetCore.OpenApi` + Scalar, không dùng Swashbuckle** (đổi lại sau khi Catalog.Api đã chạy Swashbuckle từ Phase 0 — quyết định lúc đó chỉ vì template mặc định dính CVE và cần có UI ngay). Swashbuckle đang bảo trì cầm chừng; native OpenAPI là hướng chính chủ Microsoft đang đẩy mạnh. Lưu ý: `Microsoft.AspNetCore.OpenApi 10.0.9` (bản mới nhất tại thời điểm này) vẫn kéo theo `Microsoft.OpenApi 2.0.0` dính CVE cao (GHSA-v5pm-xwqc-g5wc, chưa được vá ở tầng package chính chủ) — phải ghim tường minh `Microsoft.OpenApi` lên `2.10.0` qua `Directory.Packages.props` (giữ nhánh 2.x vì `Microsoft.AspNetCore.OpenApi`'s source generator sinh code không compile được với 3.x — `IOpenApiMediaType.Example` đổi thành read-only). Áp dụng nhất quán cho `identity-service` và các service sau.
 
 ---
@@ -72,6 +95,51 @@ chore: scaffold Phase 0 skeleton — BuildingBlocks, catalog, YARP gateway, dock
 - `PriceTier.SectionName` (string) → `PriceTier.SectionId` (Guid) — tham chiếu đúng `Section` trong `SeatMap` của Event đó.
 - **Cross-aggregate invariant** ("SectionId phải thật sự tồn tại trong SeatMap của Event") **không** enforce trong `Event` hay `SeatMap` — để dành cho Application layer (Commit 5) load cả hai rồi validate trước khi gọi `event.AddPriceTier(...)`.
 - **Ch2:** ví dụ thực tế về việc vẽ sai ranh giới aggregate lúc đầu và sửa lại khi hiểu rõ invariant hơn — đúng quy trình DDD thật (không ai vẽ đúng aggregate boundary ngay từ lần đầu).
+
+**Trước (Commit 2 — sai):**
+
+```mermaid
+classDiagram
+    class Venue {
+        Name
+        Address
+        SeatMap
+    }
+    class SeatMap {
+        Sections: List~Section~
+    }
+    Venue "1" --> "1" SeatMap : sở hữu cố định
+    note for Venue "Sai: cùng 1 địa điểm phải<br/>dùng chung 1 sơ đồ ghế cho<br/>mọi sự kiện — không đúng thực tế"
+```
+
+**Sau (Commit 3.1 — đúng):**
+
+```mermaid
+classDiagram
+    class Venue {
+        Name
+        Address
+    }
+    class Event {
+        Title
+        VenueId
+        Status
+    }
+    class SeatMap {
+        EventId
+        Sections: List~Section~
+    }
+    class PriceTier {
+        SectionId
+        Price
+    }
+    Event --> Venue : VenueId (reference-by-id)
+    Event "1" --> "1" SeatMap : EventId (mỗi Event tự có SeatMap riêng)
+    Event "1" --> "*" PriceTier : sở hữu
+    PriceTier ..> SeatMap : SectionId trỏ vào Section bên trong
+```
+
+*Bài học cụ thể: sơ đồ ghế là thuộc tính của **từng lần diễn** (Event), không phải thuộc tính cố định của toà nhà (Venue). `PriceTier.SectionId` giờ trỏ đúng vào `Section` nằm trong `SeatMap` của chính `Event` đó — nhưng invariant "SectionId có thật không" là **cross-aggregate**, cố tình không enforce trong Domain, để ở Application (Commit 5).*
 
 ### Commit 4 — `test(catalog): unit tests for Event, Venue & SeatMap invariants`
 - Project `TicketFlow.Catalog.Domain.Tests` (xUnit).

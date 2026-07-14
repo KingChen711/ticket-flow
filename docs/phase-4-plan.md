@@ -31,6 +31,29 @@ tags: [ticketflow, phase-4, plan, marten, event-sourcing, cqrs, ordering]
 - **Order aggregate = fold trái các event:** `Apply(OrderPlaced)`, `Apply(OrderConfirmed)`, `Apply(OrderCancelled)` — mỗi method biến đổi state hiện tại. Load 1 order = đọc stream + fold từ đầu (Marten `AggregateStreamAsync<Order>`). State không được lưu trực tiếp; nó là **kết quả tính toán** từ event.
 - **Domain event ở Phase 4 KHÁC domain event Phase 1-3:** ở Catalog, domain event chỉ là thông báo phụ (`Raise(...)`, đang `Ignore(DomainEvents)` ở EF). Ở Ordering, **event CHÍNH LÀ dữ liệu được lưu** — chúng là source of truth, không phải phụ phẩm. Đây là khác biệt tư duy cốt lõi.
 
+```mermaid
+sequenceDiagram
+    participant H as CommandHandler
+    participant O as "Order (fold từ Apply)"
+    participant S as IOrderStore
+    participant M as "Marten / Postgres"
+
+    H->>S: LoadAsync(orderId)
+    S->>M: AggregateStreamAsync (Order)
+    M-->>S: fold mt_events → Order (Pending)
+    S-->>H: Order
+
+    H->>O: order.Confirm(now)
+    Note over O: Decide thuần — validate rồi TRẢ VỀ<br/>event, KHÔNG tự mutate
+    O-->>H: OrderConfirmed
+
+    H->>S: Append(orderId, OrderConfirmed)
+    H->>S: SaveChangesAsync()
+    S->>M: ghi event mới vào stream<br/>+ cập nhật projection inline
+```
+
+*"Decide" (`Confirm`/`Cancel` — quyết định, trả về event) tách bạch khỏi "Evolve" (`Apply` — mutator duy nhất, dùng để fold). Đây là pattern Decide/Evolve chuẩn của Event Sourcing.*
+
 ### 2. Marten làm event store — sạch license, tự quản schema (khác EF)
 - **Marten 9.x, MIT license** (xác nhận qua nuspec, có target `net10.0`) — không vướng thương mại như MassTransit/MediatR. Marten là **event store + document DB + projection engine** trên Postgres, tất cả trong một.
 - **Marten tự quản schema, KHÔNG dùng EF migrations:** khác Catalog/Reservation (migrate-on-startup qua `dotnet ef`). Marten dev-mode dùng `AutoCreate.CreateOrUpdate` tự dựng bảng `mt_events`/`mt_streams`/projection docs khi app chạy. Điểm học: **2 chiến lược schema management khác nhau trong cùng hệ thống** (polyglot persistence ở tầng công cụ, nối tiếp bài học Ch8 Phase 2).
@@ -47,6 +70,21 @@ tags: [ticketflow, phase-4, plan, marten, event-sourcing, cqrs, ordering]
 - **Write model:** Order aggregate, dựng lại bằng fold stream event (`AggregateStreamAsync`) mỗi lần xử lý command. Đúng đắn (consistency), nhưng "chậm" — chấp nhận được vì write ít, cần chính xác.
 - **Read model:** **projection** — Marten tự duy trì 1 document `MyOrderView` (đơn của tôi) cập nhật theo event. Query đọc thẳng document này (nhanh, không fold). Không bao giờ query bằng cách fold stream ở đường đọc.
 - **Đây là bản chất CQRS:** 2 model cho 2 mục đích, cùng nguồn sự thật (event stream). Không phải "2 database" hay "2 microservice".
+
+```mermaid
+graph TB
+    Cmd["Command<br/>PlaceOrder / Confirm / Cancel"] --> H1["CommandHandler"]
+    H1 --> OS["IOrderStore<br/>(Commit 2)"]
+    OS <--> Events[("mt_events / mt_streams<br/>SOURCE OF TRUTH")]
+
+    Events -.->|"inline projection<br/>MyOrdersProjection<br/>(Commit 5)"| View[("mt_doc_myorderview<br/>read model")]
+
+    Qry["Query<br/>GetMyOrders / GetOrderById"] --> H2["QueryHandler"]
+    H2 --> VS["IOrderViewStore<br/>(Commit 6)"]
+    VS --> View
+```
+
+*2 port đọc/ghi tách biệt (`IOrderStore` fold stream; `IOrderViewStore` đọc document đã chiếu sẵn) — CQRS cụ thể hoá đến tận tầng port, không chỉ "có 2 loại handler".*
 
 ### 5. Projection: inline vs async — chọn inline cho Phase 4
 - **Inline projection:** cập nhật read model **trong cùng transaction** với append event → read-after-write nhất quán ngay. Đơn giản, đủ cho Phase 4.
@@ -173,16 +211,50 @@ tags: [ticketflow, phase-4, plan, marten, event-sourcing, cqrs, ordering]
 ## Nhóm D — Chứng minh replay + chốt
 
 ### Commit 7 — `test(ordering): replay — xoá read model, rebuild từ event`
-- Kịch bản DoD phần 2 (verify thật, không mock):
-  1. Đặt N order (có confirm/cancel) → read model `MyOrderView` có N document, `mt_events` có chuỗi event đầy đủ.
-  2. **Xoá sạch read model** (truncate document projection, giữ nguyên `mt_events`).
-  3. **Rebuild projection** từ toàn bộ event stream (Marten projection rebuild / daemon rebuild API).
-  4. Query lại → read model dựng lại **y hệt** trước khi xoá (so từng document).
-- **Chứng minh:** read model chỉ là cache tái tạo được; event stream là source of truth duy nhất. Đây là siêu năng lực ES.
+- **Không có code sản phẩm mới** — đúng bản chất commit `test(...)` (cùng tinh thần Phase 3 Commit 7 "outbox durability"): verify runtime 1 năng lực đã có sẵn nhờ thiết kế Marten từ Commit 2/5, không viết thêm logic nghiệp vụ. Cân nhắc thêm 1 endpoint admin `POST /orders/_admin/rebuild-projection` để demo lặp lại được, nhưng **không làm** — chưa có nhu cầu vận hành thật nào đòi hỏi expose khả năng này qua HTTP ở Phase 4; để dành nếu Phase sau cần (ops/admin tooling), tránh scope creep.
+- **API rebuild thật của Marten** (tìm ra qua probe reflection, không đoán — cùng kỹ thuật đã dùng ở Commit 2/5 vì tài liệu không đủ chi tiết cho version 9.15.2):
+  - Xoá read model: `documentStore.Advanced.Clean.DeleteDocumentsByTypeAsync(typeof(MyOrderView), ct)` — chỉ xoá bảng document (`mt_doc_myorderview`), **không đụng** `mt_events`/`mt_streams`.
+  - Rebuild toàn bộ: `var daemon = await documentStore.BuildProjectionDaemonAsync(); await daemon.RebuildProjectionAsync<MyOrderView>(ct);` — rebuild **mọi stream** khớp projection đó, không phải rebuild từng order lẻ (có API `RebuildSingleStreamAsync<T>(streamId)` riêng cho 1 stream, nhưng DoD cần rebuild toàn bộ read model).
+
+```mermaid
+sequenceDiagram
+    participant V as "Verify script"
+    participant Doc as mt_doc_myorderview
+    participant Ev as "mt_events (nguồn sự thật)"
+    participant D as ProjectionDaemon
+
+    V->>Doc: query → snapshot JSON (trước khi xoá)
+    V->>Doc: DeleteDocumentsByTypeAsync(MyOrderView)
+    Doc-->>V: 0 rows
+
+    V->>D: RebuildProjectionAsync (MyOrderView)
+    D->>Ev: đọc lại TOÀN BỘ event (15 stream)
+    D->>Doc: fold + ghi lại từng document
+
+    V->>Doc: query lại → snapshot JSON (sau khi rebuild)
+    Note over V: So byte-for-byte với snapshot<br/>trước → khớp tuyệt đối → PASS
+```
+
+*Bằng chứng thật mạnh hơn kịch bản gốc: rebuild tác động lên **toàn bộ** 15 stream tích luỹ từ đầu Phase 4 (không chỉ 3 order vừa test), `mt_events` (27 row) hoàn toàn không đổi trước/sau — đúng siêu năng lực "read model là cache toàn cục, xoá sạch dựng lại được bất cứ lúc nào".*
+- **Verify thật (không mock), qua scratch console app dùng thẳng `IDocumentStore` (đã xoá sau khi xong):**
+  1. Đặt 3 order **mới hoàn toàn**, đủ 3 trạng thái (Pending/Confirmed/Cancelled) — qua thẳng `session.Events.StartStream`/`Append` (không qua command handler, để cô lập đúng thứ đang test: cơ chế projection, không phải command orchestration đã verify ở Commit 3/4).
+  2. **Snapshot read model TRƯỚC khi xoá**: query cả 3 `MyOrderView`, serialize JSON lưu lại để so sánh byte-for-byte sau này (không chỉ "assert field nào đó đúng" — so **toàn bộ document**, chặt hơn).
+  3. Gọi `DeleteDocumentsByTypeAsync` → query lại → **0 row** (xác nhận xoá thật, không phải tưởng tượng).
+  4. Gọi `RebuildProjectionAsync<MyOrderView>()` → query lại → **snapshot sau khớp chính xác byte-for-byte với snapshot trước** (so sánh JSON string từng document) → **PASS**.
+  5. **Phát hiện thật mạnh hơn dự kiến ban đầu:** `DeleteDocumentsByTypeAsync`/`RebuildProjectionAsync` tác động lên **TOÀN BỘ** bảng document, không chỉ 3 order vừa tạo trong lần chạy này. `psql` xác nhận: `mt_streams` có **15** stream (tích luỹ từ mọi order tạo xuyên suốt Phase 4, Commit 1-7), sau rebuild `mt_doc_myorderview` cũng có đúng **15** row — nghĩa là **toàn bộ lịch sử order từ đầu Phase 4** được khôi phục lại, không chỉ phần vừa test. Đây là bằng chứng mạnh hơn cả kịch bản gốc trong plan (chỉ định verify N order mới đặt) — chứng minh đúng thật sự "read model là cache toàn cục, có thể xoá sạch và dựng lại từ đầu bất cứ lúc nào."
+  6. `mt_events` đếm được **27** row xuyên suốt — không đổi trước/sau bước xoá+rebuild, xác nhận event store hoàn toàn không bị đụng tới (đúng vai trò "chỉ đọc, không bao giờ ghi" của thao tác rebuild).
+  7. Regression: build toàn solution 0 Warning/0 Error; full smoke test gateway 4/4 route `200`; `Catalog.Domain.Tests` 35/35, `Ordering.Domain.Tests` 8/8, `Ordering.Application.Tests` 10/10 — không ảnh hưởng.
+- **Kết luận DoD:** đã chứng minh đầy đủ "xoá read model rồi replay từ event dựng lại được" — bằng dữ liệu thật, quy mô toàn bộ lịch sử, không phải suy đoán từ code hay chỉ test 1 nhóm nhỏ vừa tạo.
 
 ### Commit 8 — `chore: finalize Phase 4 — slnx, docker-compose, DoD checklist`
-- Rà `.slnx` đủ project mới; `docker compose ps` đủ container; ordering thêm `depends_on: postgres`; smoke test toàn hệ.
-- Tick DoD Phase 4 trong `scope.md`; nếu chọn tự cuộn dispatcher (không MediatR) thì ghi chú sửa scope mục 3 (bỏ "MediatR" hoặc nói rõ tự cuộn). Cập nhật doc này.
+- **Verify thật:**
+  1. `dotnet sln TicketFlow.slnx list` → đủ **28 project**, gồm 6 project mới của Ordering (`Api`, `Application`, `Application.Tests`, `Domain`, `Domain.Tests`, `Infrastructure`).
+  2. `dotnet build` toàn solution: 0 Warning, 0 Error.
+  3. `docker-compose.yml`: xác nhận `ordering` đã có `depends_on: postgres (healthy)` từ Commit 2 (không cần thêm mới — kiểm tra lại để chắc chắn, không giả định).
+  4. `docker compose ps` → đủ **11 container**.
+  5. Full smoke test: catalog/identity/ordering(`check-seats`)/reservation qua gateway đều `200`; `ordering`/`notification`/`search` `/health` đều `200`.
+  6. Toàn bộ test suite: `Catalog.Domain.Tests` 35/35, `Ordering.Domain.Tests` 8/8, `Ordering.Application.Tests` 10/10.
+- Tick DoD Phase 4 trong `scope.md`, sửa luôn mục 3 (bỏ "MediatR", ghi rõ "tự cuộn dispatcher" + lý do — MediatR v13+ đã thương mại, đồng bộ với ghi chú tương tự đã làm cho MassTransit Phase 3).
 
 ---
 
@@ -190,10 +262,10 @@ tags: [ticketflow, phase-4, plan, marten, event-sourcing, cqrs, ordering]
 
 | DoD | Kiểm chứng |
 |---|---|
-| Đặt 1 order sinh ra stream event | Commit 4: `POST /orders` → `psql mt_events` thấy `OrderPlaced` trong stream mới |
-| Nhiều event fold ra state đúng | Commit 4: place→confirm → 2 event 1 stream → `AggregateStreamAsync` cho `Confirmed` |
-| Read/write tách (CQRS) | Commit 5-6: write fold aggregate; read đọc projection `MyOrderView`, không fold |
-| Xoá read model → replay dựng lại | Commit 7: truncate projection → rebuild từ `mt_events` → read model y hệt |
+| Đặt 1 order sinh ra stream event | Commit 4: `POST /orders` qua gateway thật → `psql mt_events` thấy `order_placed` trong stream mới, version 1 |
+| Nhiều event fold ra state đúng | Commit 4: place→confirm → 2 event 1 stream (`order_placed`→`order_confirmed`) → response đúng `Confirmed` |
+| Read/write tách (CQRS) | Commit 5-6: write fold aggregate qua `IOrderStore`; read đọc thẳng projection `MyOrderView` qua `IOrderViewStore` riêng biệt, không fold |
+| Xoá read model → replay dựng lại | Commit 7: `DeleteDocumentsByTypeAsync` xoá sạch → `RebuildProjectionAsync<MyOrderView>()` → **toàn bộ 15 stream lịch sử** khôi phục byte-for-byte đúng, `mt_events` (27 row) không đổi |
 
 ## Hướng mở rộng (backlog — không thuộc Phase 4)
 - **Async projection (daemon):** chuyển `MyOrders` sang async khi cần chịu tải / nhiều projection (Phase 6 analytics).

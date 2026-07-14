@@ -32,11 +32,50 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
 - **Dùng MassTransit EF Core Outbox** (`AddEntityFrameworkOutbox<CatalogDbContext>`): nó tạo sẵn bảng `outbox_message`, `outbox_state`, `inbox_state` và bus/delivery service — không tự tay viết outbox loop. Đây là lý do chọn MassTransit thay vì `IPublishEndpoint` trần của transport.
 - **Chỉ PUBLISHER cần outbox** (catalog). Phía consumer, độ bền do **RabbitMQ tự lo** (queue có `durable`, message `persistent`) + **inbox dedup** cho idempotency (xem mục 4).
 
+```mermaid
+sequenceDiagram
+    participant API as Catalog API
+    participant DB as Postgres (catalog)
+    participant Delivery as BusOutboxDeliveryService
+    participant MQ as RabbitMQ
+
+    API->>DB: BEGIN TX
+    API->>DB: UPDATE events SET status=Published
+    API->>DB: INSERT outbox_message (CÙNG transaction)
+    API->>DB: COMMIT
+    Note over API,DB: Ghi Postgres KHÔNG phụ thuộc<br/>broker sống hay chết
+
+    loop Poll liên tục
+        Delivery->>DB: SELECT ... FOR UPDATE SKIP LOCKED
+        alt Broker sống
+            Delivery->>MQ: publish message
+            MQ-->>Delivery: ack
+            Delivery->>DB: DELETE outbox_message (đã gửi)
+        else Broker chết
+            Delivery--xMQ: BrokerUnreachableException<br/>(tự bắt, log, poll lại — không crash)
+        end
+    end
+```
+
+*Đây chính là kịch bản Commit 7 verify thật: tắt RabbitMQ → publish vẫn `200` (2 bước đầu không đổi) → row nằm yên trong `outbox_message` → bật RabbitMQ lại → delivery service tự drain, không cần restart app.*
+
 ### 2. Domain event ≠ Integration event — và va chạm tên `EventPublished` (điểm học DDD)
 - **Domain event** (`EventPublished : DomainEvent` đã có trong catalog) = việc-đã-xảy-ra **bên trong** bounded context catalog, hình dạng gắn với aggregate nội bộ, tiêu thụ **in-process**. **KHÔNG được** ném thẳng lên bus — làm vậy là rò rỉ mô hình nội bộ, khoá cứng consumer vào aggregate của catalog (đổi domain là vỡ mọi service khác).
 - **Integration event** = **hợp đồng cross-service ổn định**, publish lên bus, do các service khác tiêu thụ. Là lớp **chống hủ hoá (anti-corruption)**: domain event → (handler trong catalog dịch) → integration event ổn định → publish qua outbox.
 - **Va chạm tên có thật:** scope gọi integration event là `EventPublished`, nhưng catalog **đã có** domain event trùng tên y hệt. → Integration contract đặt namespace/tên phân biệt rõ, ví dụ `TicketFlow.Contracts.Messaging.Catalog.CatalogEventPublished` (hoặc `...IntegrationEvent` hậu tố). MassTransit route theo **full type name (namespace + tên)** nên namespace tách là đủ về mặt kỹ thuật, nhưng vẫn đặt tên khác để người đọc không lẫn. Sẽ chốt tên cụ thể ở Commit 2.
 - **Contract chứa dữ liệu đủ để consumer tự chủ**, không bắt consumer gọi ngược lại catalog: `CatalogEventId`, `Title`, `VenueId`, `StartsAt`... (đủ để notification soạn nội dung, search index sơ bộ). Không nhét cả aggregate.
+
+```mermaid
+graph LR
+    subgraph CTX["Catalog bounded context (in-process)"]
+        Agg["Event aggregate<br/>.Publish()"] -->|"Raise(...)"| DE["EventPublished<br/>domain event<br/>(chỉ mang CatalogEventId)"]
+    end
+    DE -->|"dịch trong<br/>EventService.PublishAsync"| IE["CatalogEventPublished<br/>integration event<br/>(đủ data cho consumer)"]
+    IE -->|"Outbox → RabbitMQ"| N["notification"]
+    IE -->|"Outbox → RabbitMQ"| S["search"]
+```
+
+*`EventPublished` (domain event, đã có từ Phase 1) và `CatalogEventPublished` (integration event, Commit 2) là 2 khái niệm khác nhau dù tên gần giống — nhầm 2 cái này là rò rỉ mô hình nội bộ ra ngoài, khoá cứng consumer vào aggregate của catalog.*
 
 ### 3. Message contract sống ở shared classlib (khác kiểu gRPC)
 - gRPC ở dự án này chia sẻ **file `.proto`** (`contracts/protos/reservation.proto`), mỗi Api tự compile — KHÔNG có assembly chung. Với MassTransit, contract là **kiểu C#**; cách sạch nhất trong monorepo là **1 classlib chung** `TicketFlow.Contracts.Messaging` được publisher + consumer cùng reference (tránh mỗi service tự khai lại 1 bản record dễ lệch).
@@ -154,6 +193,27 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
 - Thêm `docker-compose.yml` (`depends_on: rabbitmq healthy`, không vào gateway), Dockerfile (mẫu Ordering), `.slnx`.
 - **🐛 Bug thật gặp và sửa — va chạm tên queue giữa 2 service (nghiêm trọng, phá fan-out):** log container search khi start lần đầu in ra **y hệt** dòng của notification: `Configured endpoint catalog-event-published, Consumer: TicketFlow.Search.Api.Consumers.CatalogEventPublishedConsumer`. Cả 2 consumer (ở 2 service khác nhau) đều đặt tên class `CatalogEventPublishedConsumer` — `KebabCaseEndpointNameFormatter` mặc định của MassTransit sinh queue name **từ tên class consumer** (bỏ hậu tố `Consumer`), không phải từ tên message/namespace. Verify qua RabbitMQ Management API xác nhận đúng lỗ hổng: `GET /api/queues` chỉ trả **1 queue** `catalog-event-published` với `"consumers": 2` — 2 service đang là **competing consumers trên cùng 1 queue**, nghĩa là mỗi message chỉ 1 trong 2 service nhận được (round-robin), không phải cả 2 cùng nhận. Fan-out coi như hỏng ngầm, sẽ không phát hiện được nếu chỉ đọc code mà không verify qua RabbitMQ thật.
   - **Sửa tận gốc ở `TicketFlow.Messaging`** (BuildingBlocks, không phải patch riêng từng service): `AddTicketFlowMessaging` thêm tham số bắt buộc `string serviceName`, dùng `SetEndpointNameFormatter(new KebabCaseEndpointNameFormatter(serviceName, includeNamespace: false))` thay vì `SetKebabCaseEndpointNameFormatter()` mặc định — mọi queue giờ có tiền tố tên service (`notification-catalog-event-published`, `search-catalog-event-published`, `catalog-...` khi catalog tự consume gì đó sau này). Cập nhật cả 3 call site: `Catalog.Infrastructure` (`"catalog"`), `Notification.Api` (`"notification"`), `Search.Api` (`"search"`).
+
+**Trước (bug — 1 queue, 2 consumer cạnh tranh):**
+
+```mermaid
+graph LR
+    Catalog[catalog publish] --> Ex{{Exchange<br/>CatalogEventPublished}}
+    Ex --> Q["❌ catalog-event-published<br/>(1 queue, 2 consumer)"]
+    Q -.round-robin, chỉ 1 bên nhận.-> N[notification]
+    Q -.round-robin, chỉ 1 bên nhận.-> S[search]
+```
+
+**Sau (đúng — mỗi service 1 queue riêng, cả 2 cùng nhận):**
+
+```mermaid
+graph LR
+    Catalog[catalog publish] --> Ex{{Exchange<br/>CatalogEventPublished}}
+    Ex --> QN["✅ notification-catalog-event-published"]
+    Ex --> QS["✅ search-catalog-event-published"]
+    QN --> N[notification]
+    QS --> S[search]
+```
   - **Dọn dữ liệu:** xoá tay queue cũ sai `catalog-event-published` qua RabbitMQ Management API (`DELETE /api/queues/%2F/catalog-event-published`) sau khi rebuild+redeploy cả 3 service — không tự dọn, phải chủ động xoá vì queue durable không tự biến mất.
   - **Bài học tổng quát:** convention "tên class consumer trùng nhau giữa các service" (`XxxConsumer` là tên tự nhiên, dễ lặp lại) là bẫy thật với endpoint-name-formatter mặc định của MassTransit trong kiến trúc nhiều service cùng consume 1 message type — luôn cần prefix theo service, không chỉ theo tên message/consumer.
 - **Verify thật (không mock), sau khi sửa bug:**
