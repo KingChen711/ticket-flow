@@ -104,9 +104,20 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
 ## Nhóm B — Publisher + Outbox (catalog)
 
 ### Commit 3 — `feat(catalog): EF Core Transactional Outbox`
-- Catalog.Infrastructure: `AddEntityFrameworkOutbox<CatalogDbContext>` + `AddTicketFlowMessaging`. Đăng ký bus outbox (delivery service).
-- Migration `CatalogOutbox` sinh 3 bảng outbox/inbox trong schema catalog. Startup migrate.
-- **Verify:** app start, `psql` thấy `outbox_message`/`outbox_state`/`inbox_state`; bus delivery service chạy (log).
+- Pin `MassTransit.EntityFrameworkCore` **8.5.10** (đồng bộ version với `MassTransit`/`MassTransit.RabbitMQ` — xác nhận qua NuGet flat-container API, cùng dòng 8.x).
+- **Lệch kế hoạch (chốt lại chỗ Commit 1 đã dự đoán):** wiring `AddTicketFlowMessaging` dời hẳn từ `Program.cs` vào `AddCatalogInfrastructure` — bắt buộc, vì `AddEntityFrameworkOutbox<CatalogDbContext>()` phải nằm **cùng 1 lời gọi `AddMassTransit`** và cần biết kiểu `CatalogDbContext` (sống ở Infrastructure). Đúng điểm mở rộng đã thiết kế sẵn ở Commit 1 (`Action<IBusRegistrationConfigurator>? configure`) — không phải sửa lại API, chỉ truyền callback thật vào.
+- `CatalogDbContext.OnModelCreating`: thêm `modelBuilder.AddInboxStateEntity()/.AddOutboxMessageEntity()/.AddOutboxStateEntity()` — outbox **không tự inject** vào DbContext tuỳ ý, phải khai báo tay. Cả 3 bảng đi vào schema `catalog` (kế thừa `HasDefaultSchema`, không phụ thuộc thứ tự gọi).
+- **Bug thật gặp & sửa (va chạm tên y hệt pattern Reservation Commit 8):** `CS0104` — `Event` ambiguous giữa `TicketFlow.Catalog.Domain.Events.Event` và `MassTransit.Event` (MassTransit có sẵn type `Event` cho mục đích khác). Sửa bằng type alias `using Event = TicketFlow.Catalog.Domain.Events.Event;` thay vì `using TicketFlow.Catalog.Domain.Events;` — cùng convention đã lập (`using ApplicationReservationService = ...`).
+- Migration `CatalogOutbox` (`dotnet ef migrations add`, EFCore.NamingConventions tự chuyển snake_case cho cả bảng của MassTransit — không cần cấu hình thêm) sinh đúng 3 bảng: `inbox_state`, `outbox_state`, `outbox_message` (có FK giữa `outbox_message` ↔ `outbox_state`/`inbox_state`) + index (`enqueue_time`, `expiration_time`, `created`...).
+- `Catalog.Api.csproj`: bỏ `ProjectReference` trực tiếp tới `TicketFlow.Messaging` (đã chuyển sang Infrastructure) — tránh reference thừa từ Commit 1.
+- **Sự cố hạ tầng gặp phải:** Docker Desktop rớt hoàn toàn (`docker info` fail, không process nào chạy) giữa lúc rebuild image — phải tự khởi động lại (`Start-Process "Docker Desktop.exe"`, chờ `docker info` thành công). Restart Docker Desktop = **mất sạch container cũ** (không chỉ daemon reconnect) → phải `docker compose up -d` lại **toàn bộ stack** (9 container), không chỉ riêng catalog.
+- **Verify thật (không mock):**
+  1. `dotnet build` toàn solution: 0 Warning, 0 Error.
+  2. `dotnet ef migrations add CatalogOutbox` chạy sạch; migration file review tay xác nhận đúng schema `catalog`, đúng 3 bảng.
+  3. Rebuild image thật (`docker compose build catalog`) → `docker compose up -d` toàn stack → log container catalog xác nhận theo đúng thứ tự: migration `CatalogOutbox` được ghi vào `__EFMigrationsHistory` → `Bus started: rabbitmq://rabbitmq/` → **outbox delivery service đang polling thật** (`SELECT ... FROM "catalog"."outbox_state" ... FOR UPDATE SKIP LOCKED`, dọn `inbox_state` hết hạn) — chứng minh hosted service chạy nền, không phải suy đoán từ code.
+  4. `psql` trực tiếp vào container (`docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_catalog -c "\dt catalog.*"`) → thấy đủ `inbox_state`, `outbox_message`, `outbox_state` cạnh các bảng nghiệp vụ.
+  5. Full smoke test qua gateway: catalog/identity/ordering/reservation đều `200`; `catalog /health` → `200 Healthy`.
+  6. Regression: `TicketFlow.Catalog.Domain.Tests` 35/35 pass; `TicketFlow.Reservation.IntegrationTests` 5/5 pass.
 
 ### Commit 4 — `feat(catalog): dịch domain → publish CatalogEventPublished qua outbox`
 - Khi Event được publish (hành vi `Event.Publish()` sinh domain event `EventPublished`), handler trong Catalog Application/Infrastructure **dịch** sang `CatalogEventPublished` và `IPublishEndpoint.Publish(...)` **trong cùng transaction** với SaveChanges → message rơi vào outbox, delivery service gửi sau.
