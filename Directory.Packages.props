@@ -68,5 +68,10 @@
       dependency, MIT, net10.0 target confirmed via nuspec.
     -->
     <PackageVersion Include="JasperFx.Events" Version="2.27.0" />
+    <!--
+      Resiliency (Phase 5 Ch10) — v8 ResiliencePipeline API, not the old v7 Policy API.
+      BSD-3-Clause, free, no license trap unlike MassTransit/MediatR.
+    -->
+    <PackageVersion Include="Polly.Core" Version="8.7.0" />
   </ItemGroup>
 </Project>

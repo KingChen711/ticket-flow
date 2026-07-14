@@ -87,6 +87,21 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  payment:
+    build:
+      context: .
+      dockerfile: src/Services/Payment/TicketFlow.Payment.Api/Dockerfile
+    container_name: ticketflow-payment
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8007:8007"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
   gateway:
     build:
       context: .
