@@ -25,8 +25,9 @@ public sealed class Order : Entity<Guid>
 
     /// <summary>
     /// Reconstructs an aggregate by folding its full event history — the same operation Marten's
-    /// AggregateStreamAsync performs (via reflection over the Apply overloads) when loading an
-    /// order for a command, and what tests use to build an Order without touching Postgres.
+    /// AggregateStreamAsync performs (via a compile-time source-generated dispatcher over the
+    /// Apply overloads, not reflection — see Commit 2) when loading an order for a command, and
+    /// what tests use to build an Order without touching Postgres.
     /// </summary>
     public static Order Load(IEnumerable<object> events)
     {
