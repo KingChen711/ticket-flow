@@ -16,6 +16,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!-- PurchaseSaga persistence (Commit 4) — MartenRepository() extension lives here, not in
+         Application (transport/persistence wiring stays at the Api composition root). -->
+    <PackageReference Include="MassTransit.Marten" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
     <ProjectReference Include="..\TicketFlow.Ordering.Application\TicketFlow.Ordering.Application.csproj" />
     <ProjectReference Include="..\TicketFlow.Ordering.Infrastructure\TicketFlow.Ordering.Infrastructure.csproj" />
   </ItemGroup>

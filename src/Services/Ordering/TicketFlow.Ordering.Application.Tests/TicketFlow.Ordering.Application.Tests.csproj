@@ -12,6 +12,9 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- PurchaseSaga tests (Commit 4) — AddMassTransitTestHarness ships in the base MassTransit
+         package (MassTransit.Testing namespace), no separate test package needed. -->
+    <PackageReference Include="MassTransit" />
   </ItemGroup>
 
   <ItemGroup>

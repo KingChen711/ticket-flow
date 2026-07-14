@@ -20,10 +20,19 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="JasperFx.Events" />
+    <!--
+      PurchaseSaga (Commit 4) is a MassTransitStateMachine — Application layer needs the core
+      MassTransit abstractions (MassTransitStateMachine, SagaStateMachineInstance, State, Event)
+      to define the state machine, but NOT MassTransit.RabbitMQ or MassTransit.Marten (transport
+      + persistence wiring stays in Api/Program.cs, same split TicketFlow.Messaging already
+      enforces for consumers in the other services).
+    -->
+    <PackageReference Include="MassTransit" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TicketFlow.Ordering.Domain\TicketFlow.Ordering.Domain.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

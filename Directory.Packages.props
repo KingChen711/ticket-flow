@@ -56,6 +56,14 @@
     <PackageVersion Include="MassTransit.RabbitMQ" Version="8.5.10" />
     <PackageVersion Include="MassTransit.EntityFrameworkCore" Version="8.5.10" />
     <!--
+      PurchaseSaga (Phase 5 Commit 4) persists via Marten, same Postgres as the ordering event
+      store. NuGet package id is "MassTransit.Marten" but the DLL it ships is actually named
+      MassTransit.MartenIntegration.dll (confirmed via reflection probe before pinning — the
+      registration extension is MassTransit.MartenSagaRepositoryRegistrationExtensions.MartenRepository).
+      Same 8.5.10 free/OSS line as core MassTransit (9.x+ is commercial, see above).
+    -->
+    <PackageVersion Include="MassTransit.Marten" Version="8.5.10" />
+    <!--
       Event store + document DB for Ordering (Phase 4, Ch7). MIT license, confirmed via nuspec
       to ship a first-class net10.0 target (not just netstandard fallback) — no license
       trap here, unlike MassTransit/MediatR.
