@@ -73,5 +73,19 @@
       BSD-3-Clause, free, no license trap unlike MassTransit/MediatR.
     -->
     <PackageVersion Include="Polly.Core" Version="8.7.0" />
+    <!--
+      Ticketing (Phase 5 Ch9/10 participant). QuestPDF's NuGet license metadata says MIT, but
+      the library ALSO enforces its own Community/Commercial split in code via
+      QuestPDF.Settings.License — must be set to LicenseType.Community at startup (free for
+      non-commercial/learning use, revenue under a threshold for companies). Not a NuGet-level
+      license trap like MassTransit/MediatR, but a real term to know about — set explicitly in
+      TicketFlow.Ticketing.Api Program.cs.
+    -->
+    <PackageVersion Include="QuestPDF" Version="2026.7.1" />
+    <!-- MIT, free. QR generation only — Phase 5 issues tickets, doesn't verify them (gate
+         scanning is Phase 8), so no signing/crypto here yet (see phase-5-plan.md backlog). -->
+    <PackageVersion Include="QRCoder" Version="1.8.0" />
+    <!-- Apache-2.0, free. S3-compatible client for the MinIO container (Commit 1). -->
+    <PackageVersion Include="Minio" Version="7.0.0" />
   </ItemGroup>
 </Project>

@@ -102,6 +102,23 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  ticketing:
+    build:
+      context: .
+      dockerfile: src/Services/Ticketing/TicketFlow.Ticketing.Api/Dockerfile
+    container_name: ticketflow-ticketing
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8008:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   gateway:
     build:
       context: .
