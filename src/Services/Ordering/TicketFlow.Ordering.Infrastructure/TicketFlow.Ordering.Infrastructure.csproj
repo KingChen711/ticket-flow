@@ -14,6 +14,9 @@
 
   <ItemGroup>
     <PackageReference Include="Marten" />
+    <!-- MassTransitIntegrationEventPublisher (Commit 5) needs IPublishEndpoint's type — no
+         RabbitMQ transport package here, that's wired at the Api composition root. -->
+    <PackageReference Include="MassTransit" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@ using MassTransit;
 using Scalar.AspNetCore;
 using TicketFlow.Contracts.Reservation;
 using TicketFlow.Messaging;
+using TicketFlow.Ordering.Api.Consumers;
 using TicketFlow.Ordering.Api.Endpoints;
 using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Sagas;
@@ -30,6 +31,13 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     // DocumentStore instead of sharing the one DI already has.
     cfg.AddSagaStateMachine<PurchaseSaga, PurchaseState>()
         .MartenRepository();
+
+    // Order-stream milestone consumers (Commit 5) — separate from the saga, see
+    // OrderSeatsConfirmedConsumer's doc comment for why these aren't folded into PurchaseSaga.
+    cfg.AddConsumer<OrderSeatsConfirmedConsumer>();
+    cfg.AddConsumer<OrderPaymentAuthorizedConsumer>();
+    cfg.AddConsumer<OrderTicketsIssuedConsumer>();
+    cfg.AddConsumer<OrderCompletedConsumer>();
 });
 
 var app = builder.Build();

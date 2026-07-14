@@ -4,6 +4,7 @@ using Marten;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TicketFlow.Ordering.Application.Abstractions;
+using TicketFlow.Ordering.Infrastructure.Messaging;
 
 namespace TicketFlow.Ordering.Infrastructure;
 
@@ -31,6 +32,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IOrderStore, MartenOrderStore>();
         services.AddScoped<IOrderViewStore, MartenOrderViewStore>();
+        services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
 
         services.AddHealthChecks().AddCheck<MartenHealthCheck>("marten");
 

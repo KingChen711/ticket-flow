@@ -11,7 +11,7 @@ public sealed record OrderPlaced(
     Guid OrderId,
     Guid CustomerId,
     Guid CatalogEventId,
-    IReadOnlyList<string> SeatIds,
+    IReadOnlyList<Guid> SeatIds,
     decimal TotalAmount,
     string Currency,
     DateTimeOffset PlacedAt);

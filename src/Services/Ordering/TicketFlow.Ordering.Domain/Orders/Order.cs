@@ -16,7 +16,7 @@ public sealed class Order : Entity<Guid>
 {
     public Guid CustomerId { get; private set; }
     public Guid CatalogEventId { get; private set; }
-    public IReadOnlyList<string> SeatIds { get; private set; } = [];
+    public IReadOnlyList<Guid> SeatIds { get; private set; } = [];
     public Money Total { get; private set; } = null!;
     public OrderStatus Status { get; private set; }
 
@@ -43,6 +43,9 @@ public sealed class Order : Entity<Guid>
         switch (e)
         {
             case OrderPlaced placed: Apply(placed); break;
+            case OrderSeatsConfirmed seatsConfirmed: Apply(seatsConfirmed); break;
+            case OrderPaymentAuthorized paymentAuthorized: Apply(paymentAuthorized); break;
+            case OrderTicketsIssued ticketsIssued: Apply(ticketsIssued); break;
             case OrderConfirmed confirmed: Apply(confirmed); break;
             case OrderCancelled cancelled: Apply(cancelled); break;
             default: throw new InvalidOperationException($"Order cannot apply event of type {e.GetType()}.");
@@ -57,7 +60,7 @@ public sealed class Order : Entity<Guid>
     public static OrderPlaced Place(
         Guid customerId,
         Guid catalogEventId,
-        IReadOnlyList<string> seatIds,
+        IReadOnlyList<Guid> seatIds,
         Money total,
         DateTimeOffset now)
     {
@@ -67,6 +70,16 @@ public sealed class Order : Entity<Guid>
         return new OrderPlaced(Guid.NewGuid(), customerId, catalogEventId, seatIds, total.Amount, total.Currency, now);
     }
 
+    /// <summary>
+    /// Admin-override path only as of Commit 5 — the customer-facing purchase flow no longer
+    /// reaches this. PurchaseSaga drives a placed order to Confirmed itself once tickets are
+    /// issued, by appending <see cref="OrderConfirmed"/> directly (via OrderCompletedConsumer),
+    /// NOT through this guarded method: by the time the saga confirms, Status is TicketsIssued,
+    /// not Pending, so this method's guard would reject it — and that's intentional. The guard
+    /// here still means what it always meant ("only a still-pending order can be force-confirmed
+    /// without going through payment/ticketing"), which is exactly the admin shortcut this
+    /// endpoint is now scoped to.
+    /// </summary>
     public OrderConfirmed Confirm(DateTimeOffset now)
     {
         if (Status != OrderStatus.Pending)
@@ -92,6 +105,12 @@ public sealed class Order : Entity<Guid>
         Total = Money.Create(e.TotalAmount, e.Currency);
         Status = OrderStatus.Pending;
     }
+
+    public void Apply(OrderSeatsConfirmed e) => Status = OrderStatus.SeatsConfirmed;
+
+    public void Apply(OrderPaymentAuthorized e) => Status = OrderStatus.PaymentAuthorized;
+
+    public void Apply(OrderTicketsIssued e) => Status = OrderStatus.TicketsIssued;
 
     public void Apply(OrderConfirmed e) => Status = OrderStatus.Confirmed;
 

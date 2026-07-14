@@ -14,6 +14,12 @@ public static class OrderEndpoints
             return Results.Created($"/orders/{order.OrderId}", order);
         });
 
+        // Admin-override only as of Commit 5 (Phase 5) — the customer-facing purchase flow now
+        // goes through PurchaseSaga (POST / -> PlaceOrder -> OrderSubmitted starts the saga),
+        // which drives confirm/cancel itself via OrderCompletedConsumer and (from Commit 9)
+        // compensation. These two endpoints still work exactly as in Phase 4, unchanged, for the
+        // narrower case of an operator force-confirming/cancelling a still-Pending order without
+        // going through payment/ticketing. See Order.Confirm()'s doc comment.
         group.MapPost("/{id:guid}/confirm", async (Guid id, ConfirmOrderCommandHandler handler, CancellationToken ct) =>
             Results.Ok(await handler.HandleAsync(new ConfirmOrderCommand(id), ct)));
 

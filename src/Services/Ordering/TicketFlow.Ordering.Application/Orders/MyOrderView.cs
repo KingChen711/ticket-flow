@@ -20,7 +20,7 @@ public sealed record MyOrderView(
     Guid Id,
     Guid CustomerId,
     Guid CatalogEventId,
-    IReadOnlyList<string> SeatIds,
+    IReadOnlyList<Guid> SeatIds,
     decimal TotalAmount,
     string Currency,
     string Status,
