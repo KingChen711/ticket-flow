@@ -136,10 +136,17 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
 ## Nhóm C — Consumer services (mới)
 
 ### Commit 5 — `feat(notification): skeleton + consume CatalogEventPublished (log "sẽ gửi")`
-- Service mới `src/Services/Notification/TicketFlow.Notification.Api` (host tối thiểu, port 8005, ref `Messaging` + `Contracts.Messaging`).
-- `CatalogEventPublishedConsumer` : `IConsumer<CatalogEventPublished>` → log `"[notification] sẽ gửi thông báo cho event {Title} ({CatalogEventId})"`. Idempotent (chỉ log).
-- Thêm vào `docker-compose.yml` (depends_on rabbitmq healthy), Dockerfile, `.slnx`.
-- **Verify end-to-end:** `docker compose up` → publish event ở catalog → `docker logs ticketflow-notification` thấy dòng log. **Đây là nửa đầu DoD.**
+- Service mới `src/Services/Notification/TicketFlow.Notification.Api` — scaffold từ `dotnet new web` (không phải `webapi`/Controllers, không phải Worker trần — đúng "host tối thiểu ASP.NET" đã quyết định ở mục 7 kiến trúc). Port **8005**. Không thêm `Microsoft.AspNetCore.OpenApi`/Scalar — không có endpoint HTTP nào để document (khác Catalog/Ordering), tránh package thừa.
+- Ref `TicketFlow.Web` (health), `TicketFlow.Messaging`, `TicketFlow.Contracts.Messaging`. Program.cs chỉ 3 dòng lõi: `AddTicketFlowWeb()`, `AddTicketFlowMessaging(config, cfg => cfg.AddConsumer<CatalogEventPublishedConsumer>())`, `UseTicketFlowWeb()`.
+- `Consumers/CatalogEventPublishedConsumer.cs` : `IConsumer<CatalogEventPublished>` → log `"[notification] sẽ gửi thông báo cho event {Title} ({CatalogEventId})"`. Idempotent tự nhiên (log không có side effect để lặp lại) — ghi chú rõ trong code, dời inbox/dedup thật sang lúc consumer bắt đầu ghi state (Phase 6, đã note ở mục "Hướng mở rộng").
+- Thêm `docker-compose.yml` (`depends_on: rabbitmq healthy`, **không** thêm vào `depends_on` của gateway — notification không có route public, đúng quyết định kiến trúc mục 7), Dockerfile (theo đúng mẫu Ordering — service 1-project, không cần layer Domain/Application/Infrastructure), `.slnx`.
+- **Sự cố hạ tầng gặp lại (2 lần liên tiếp):** mạng máy chủ rớt hẳn ngay lúc `docker compose build` (`dial tcp: lookup mcr.microsoft.com: no such host`) — khác lần Docker Desktop tự rớt ở Commit 3, lần này daemon vẫn sống nhưng **không có internet**. Lần đầu retry, `nuget.org` đã resolve được nhưng `mcr.microsoft.com` (registry base image .NET) vẫn timeout riêng — phải chờ cụ thể domain đó hồi phục (không phải outage toàn cục, có domain vẫn sống trong khi domain khác vẫn chết). Không phải lỗi code/cấu hình, chỉ là hạ tầng mạng chập chờn trong phiên làm việc này.
+- **Verify thật (không mock), toàn bộ qua gateway + container logs thật:**
+  1. `dotnet build` toàn solution: 0 Warning, 0 Error.
+  2. Rebuild + `docker compose up -d notification` → log xác nhận đúng thứ tự: `Configured endpoint catalog-event-published, Consumer: TicketFlow.Notification.Api.Consumers.CatalogEventPublishedConsumer` (endpoint name tự sinh kebab-case từ tên message, đúng `KebabCaseEndpointNameFormatter` đã cấu hình ở Commit 1) → `Bus started: rabbitmq://rabbitmq/`.
+  3. `notification /health` → `200 Healthy`.
+  4. **End-to-end thật — nửa đầu DoD Phase 3:** tạo + publish 1 event mới hoàn toàn qua gateway (full luồng event → seatmap → section → price tier → publish, cùng cách đã làm ở Commit 4) → `docker logs ticketflow-notification` xuất hiện đúng dòng `[notification] sẽ gửi thông báo cho event Phase 3 Commit 5 Verify Show (65e6947e-...)` — đúng Title và CatalogEventId của event vừa publish, không phải log giả định.
+  5. Regression: `docker compose ps` đủ 10 container; full smoke test gateway 4/4 route `200`; `TicketFlow.Catalog.Domain.Tests` 35/35 pass.
 
 ### Commit 6 — `feat(search): skeleton + consume CatalogEventPublished (log "sẽ index")`
 - Service mới `src/Services/Search/TicketFlow.Search.Api` (host tối thiểu, port 8006, ref như trên).

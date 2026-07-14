@@ -58,6 +58,19 @@ services:
     depends_on:
       - reservation
 
+  notification:
+    build:
+      context: .
+      dockerfile: src/Services/Notification/TicketFlow.Notification.Api/Dockerfile
+    container_name: ticketflow-notification
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8005:8005"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
   gateway:
     build:
       context: .
