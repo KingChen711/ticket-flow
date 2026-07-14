@@ -7,6 +7,30 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Analyzer-only — Marten's newer versions dispatch Apply(...) via a compile-time source
+      generator (JasperFx.Events.SourceGenerator), which must run on the assembly that DEFINES
+      the aggregate (Order), not just the assembly that consumes Marten's runtime API
+      (Infrastructure). There is no runtime fallback: without this, AggregateStreamAsync throws
+      InvalidProjectionException at first use (caught during Commit 2 verification).
+      IncludeAssets="analyzers" + PrivateAssets="all" keeps this build-time only — Domain gets
+      zero runtime dependency on Marten (Order.cs never references a Marten type), same pattern
+      already used for Microsoft.EntityFrameworkCore.Design in the *.Api projects.
+    -->
+    <PackageReference Include="Marten">
+      <IncludeAssets>analyzers</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <!--
+      The generator's output (an Evolver class) references JasperFx.Events types at compile
+      time — analyzer metadata alone isn't enough to compile the generated code, it needs the
+      actual runtime assembly. Still zero Postgres/Marten-proper dependency (see package comment
+      in Directory.Packages.props).
+    -->
+    <PackageReference Include="JasperFx.Events" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Domain\TicketFlow.Domain.csproj" />
   </ItemGroup>
 

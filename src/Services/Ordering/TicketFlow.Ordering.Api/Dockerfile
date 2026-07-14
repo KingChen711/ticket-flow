@@ -5,10 +5,16 @@ COPY Directory.Packages.props ./
 COPY contracts/protos/reservation.proto contracts/protos/
 COPY src/BuildingBlocks/TicketFlow.Domain/TicketFlow.Domain.csproj src/BuildingBlocks/TicketFlow.Domain/
 COPY src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj src/BuildingBlocks/TicketFlow.Web/
+COPY src/Services/Ordering/TicketFlow.Ordering.Domain/TicketFlow.Ordering.Domain.csproj src/Services/Ordering/TicketFlow.Ordering.Domain/
+COPY src/Services/Ordering/TicketFlow.Ordering.Application/TicketFlow.Ordering.Application.csproj src/Services/Ordering/TicketFlow.Ordering.Application/
+COPY src/Services/Ordering/TicketFlow.Ordering.Infrastructure/TicketFlow.Ordering.Infrastructure.csproj src/Services/Ordering/TicketFlow.Ordering.Infrastructure/
 COPY src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj src/Services/Ordering/TicketFlow.Ordering.Api/
 RUN dotnet restore src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj
 
 COPY src/BuildingBlocks/ src/BuildingBlocks/
+COPY src/Services/Ordering/TicketFlow.Ordering.Domain/ src/Services/Ordering/TicketFlow.Ordering.Domain/
+COPY src/Services/Ordering/TicketFlow.Ordering.Application/ src/Services/Ordering/TicketFlow.Ordering.Application/
+COPY src/Services/Ordering/TicketFlow.Ordering.Infrastructure/ src/Services/Ordering/TicketFlow.Ordering.Infrastructure/
 COPY src/Services/Ordering/TicketFlow.Ordering.Api/ src/Services/Ordering/TicketFlow.Ordering.Api/
 RUN dotnet publish src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj -c Release -o /app
 

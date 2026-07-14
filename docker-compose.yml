@@ -56,7 +56,10 @@ services:
     ports:
       - "8004:8004"
     depends_on:
-      - reservation
+      postgres:
+        condition: service_healthy
+      reservation:
+        condition: service_started
 
   notification:
     build:

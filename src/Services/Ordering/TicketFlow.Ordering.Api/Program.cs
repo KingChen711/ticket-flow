@@ -1,12 +1,16 @@
 using Scalar.AspNetCore;
 using TicketFlow.Contracts.Reservation;
 using TicketFlow.Ordering.Api.Endpoints;
+using TicketFlow.Ordering.Application;
+using TicketFlow.Ordering.Infrastructure;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddOpenApi();
+builder.Services.AddOrderingApplication();
+builder.Services.AddOrderingInfrastructure(builder.Configuration);
 
 builder.Services.AddGrpcClient<ReservationService.ReservationServiceClient>(options =>
 {

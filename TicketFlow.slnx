@@ -28,8 +28,10 @@
   </Folder>
   <Folder Name="/src/Services/Ordering/">
     <Project Path="src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj" />
+    <Project Path="src/Services/Ordering/TicketFlow.Ordering.Application/TicketFlow.Ordering.Application.csproj" />
     <Project Path="src/Services/Ordering/TicketFlow.Ordering.Domain.Tests/TicketFlow.Ordering.Domain.Tests.csproj" />
     <Project Path="src/Services/Ordering/TicketFlow.Ordering.Domain/TicketFlow.Ordering.Domain.csproj" />
+    <Project Path="src/Services/Ordering/TicketFlow.Ordering.Infrastructure/TicketFlow.Ordering.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/src/Services/Reservation/">
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.Api/TicketFlow.Reservation.Api.csproj" />

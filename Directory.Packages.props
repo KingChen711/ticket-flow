@@ -55,5 +55,18 @@
     <PackageVersion Include="MassTransit" Version="8.5.10" />
     <PackageVersion Include="MassTransit.RabbitMQ" Version="8.5.10" />
     <PackageVersion Include="MassTransit.EntityFrameworkCore" Version="8.5.10" />
+    <!--
+      Event store + document DB for Ordering (Phase 4, Ch7). MIT license, confirmed via nuspec
+      to ship a first-class net10.0 target (not just netstandard fallback) — no license
+      trap here, unlike MassTransit/MediatR.
+    -->
+    <PackageVersion Include="Marten" Version="9.15.2" />
+    <!--
+      Runtime-only counterpart Ordering.Domain needs (see its csproj comment): Marten's
+      source-generated Evolve/Apply dispatcher code references JasperFx.Events types directly.
+      This is the transport-agnostic event-sourcing core Marten builds on — no Postgres/Npgsql
+      dependency, MIT, net10.0 target confirmed via nuspec.
+    -->
+    <PackageVersion Include="JasperFx.Events" Version="2.27.0" />
   </ItemGroup>
 </Project>

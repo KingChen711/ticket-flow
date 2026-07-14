@@ -24,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\TicketFlow.Ordering.Application\TicketFlow.Ordering.Application.csproj" />
+    <ProjectReference Include="..\TicketFlow.Ordering.Infrastructure\TicketFlow.Ordering.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
