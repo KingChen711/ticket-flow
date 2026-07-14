@@ -26,5 +26,6 @@ app.MapOpenApi();
 app.MapScalarApiReference();
 
 app.MapCheckSeatsEndpoint();
+app.MapOrderEndpoints();
 
 app.Run();
