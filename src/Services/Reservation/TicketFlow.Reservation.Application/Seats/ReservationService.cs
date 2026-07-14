@@ -32,19 +32,22 @@ public sealed class ReservationService(
     /// Redis confirm first (moves the held seats into the sold set and tells us which seats),
     /// then persist Sold to Postgres. These two are NOT atomic across stores — that gap is the
     /// Saga/Outbox concern of Phase 4/5. Safe here because only the exclusive holder reaches this.
+    /// Returns the actual confirmed seat ids (empty means the hold was no longer valid) rather
+    /// than a bool — the PurchaseSaga's ConfirmSeatsConsumer (Commit 6) needs the real list for
+    /// SeatsConfirmed, not just success/failure; that data already existed here, just discarded.
     /// </summary>
-    public async Task<bool> ConfirmAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<Guid>> ConfirmAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
     {
         var confirmedSeatIds = await holdStore.ConfirmAsync(eventId, holdId, cancellationToken);
         if (confirmedSeatIds.Count == 0)
-            return false;
+            return confirmedSeatIds;
 
         var seats = await seatRepository.GetByIdsAsync(eventId, confirmedSeatIds, cancellationToken);
         foreach (var seat in seats)
             seat.MarkSold();
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return true;
+        return confirmedSeatIds;
     }
 
     public async Task<EventAvailabilityResponse> GetAvailabilityAsync(Guid eventId, CancellationToken cancellationToken = default)

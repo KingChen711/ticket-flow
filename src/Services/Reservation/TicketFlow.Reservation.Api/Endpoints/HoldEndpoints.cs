@@ -28,7 +28,7 @@ public static class HoldEndpoints
             CancellationToken ct) =>
         {
             var confirmed = await service.ConfirmAsync(request.EventId, holdId, ct);
-            return confirmed ? Results.Ok() : Results.NotFound();
+            return confirmed.Count > 0 ? Results.Ok() : Results.NotFound();
         });
 
         group.MapPost("/{holdId:guid}/release", async (

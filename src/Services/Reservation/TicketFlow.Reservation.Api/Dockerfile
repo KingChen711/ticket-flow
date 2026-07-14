@@ -5,6 +5,8 @@ COPY Directory.Packages.props ./
 COPY contracts/protos/reservation.proto contracts/protos/
 COPY src/BuildingBlocks/TicketFlow.Domain/TicketFlow.Domain.csproj src/BuildingBlocks/TicketFlow.Domain/
 COPY src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj src/BuildingBlocks/TicketFlow.Web/
+COPY src/BuildingBlocks/TicketFlow.Messaging/TicketFlow.Messaging.csproj src/BuildingBlocks/TicketFlow.Messaging/
+COPY src/BuildingBlocks/TicketFlow.Contracts.Messaging/TicketFlow.Contracts.Messaging.csproj src/BuildingBlocks/TicketFlow.Contracts.Messaging/
 COPY src/Services/Reservation/TicketFlow.Reservation.Domain/TicketFlow.Reservation.Domain.csproj src/Services/Reservation/TicketFlow.Reservation.Domain/
 COPY src/Services/Reservation/TicketFlow.Reservation.Application/TicketFlow.Reservation.Application.csproj src/Services/Reservation/TicketFlow.Reservation.Application/
 COPY src/Services/Reservation/TicketFlow.Reservation.Infrastructure/TicketFlow.Reservation.Infrastructure.csproj src/Services/Reservation/TicketFlow.Reservation.Infrastructure/

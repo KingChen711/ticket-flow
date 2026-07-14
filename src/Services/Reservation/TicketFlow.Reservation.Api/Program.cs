@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
+using TicketFlow.Messaging;
+using TicketFlow.Reservation.Api.Consumers;
 using TicketFlow.Reservation.Api.Endpoints;
 using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
@@ -30,6 +32,12 @@ builder.Services.AddOpenApi();
 // longer trips ASP.NET Core's DI validation at Build() the way it would have in Commit 3/4.
 builder.Services.AddReservationInfrastructure(builder.Configuration);
 builder.Services.AddReservationApplication();
+
+builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cfg =>
+{
+    cfg.AddConsumer<ConfirmSeatsConsumer>();
+    cfg.AddConsumer<ReleaseSeatsConsumer>();
+});
 
 var app = builder.Build();
 
