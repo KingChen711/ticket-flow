@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TicketFlow.Catalog.Domain\TicketFlow.Catalog.Domain.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

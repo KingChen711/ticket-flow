@@ -1,5 +1,6 @@
 using TicketFlow.Catalog.Application.Abstractions;
 using TicketFlow.Catalog.Domain.Events;
+using TicketFlow.Contracts.Messaging.Catalog;
 
 namespace TicketFlow.Catalog.Application.Events;
 
@@ -8,6 +9,7 @@ public sealed class EventService(
     IVenueRepository venueRepository,
     ISeatMapRepository seatMapRepository,
     IUnitOfWork unitOfWork,
+    IIntegrationEventPublisher integrationEventPublisher,
     TimeProvider timeProvider)
 {
     public async Task<EventResponse> CreateAsync(CreateEventRequest request, CancellationToken cancellationToken = default)
@@ -72,8 +74,21 @@ public sealed class EventService(
     public async Task<EventResponse> PublishAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var @event = await GetRequiredAsync(id, cancellationToken);
+        var now = timeProvider.GetUtcNow();
 
-        @event.Publish(timeProvider.GetUtcNow());
+        @event.Publish(now);
+
+        // Translate domain event -> integration event here, not inside Event.Publish(): the
+        // domain event (EventPublished) only carries the aggregate id and is for in-process
+        // consumers; this integration event is the stable cross-service contract and needs
+        // fields (Title, VenueId, StartsAt) the domain event doesn't carry (see Commit 2).
+        // Publish() must run BEFORE SaveChangesAsync() — it buffers the message against this
+        // scope's CatalogDbContext, which SaveChangesAsync then flushes into outbox_message as
+        // part of the same transaction.
+        await integrationEventPublisher.PublishAsync(
+            new CatalogEventPublished(@event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now),
+            cancellationToken);
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Map(@event);
