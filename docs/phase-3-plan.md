@@ -51,7 +51,7 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
   - **RabbitMQ** = pub/sub + routing + per-message ack + retry/DLQ → đúng ngữ nghĩa "một việc nghiệp vụ vừa xảy ra, fan-out cho vài consumer" (catalog → notification + search). DoD hoàn toàn giải quyết bằng RabbitMQ + Outbox.
   - **Kafka** = event **log** bền, ordered, partitioned, **replayable** → đúng cho **stream phân tích / event feed thông lượng cao**. Ở dự án này Kafka mới thực sự cần ở **Phase 6** (`analytics-service` consume stream doanh số → ClickHouse) và hỗ trợ tư duy replay của **Phase 4** (event sourcing).
   - Thêm Kafka Rider ngay Phase 3 khi **chưa có consumer nào cần ngữ nghĩa stream** là scope creep (đúng kỷ luật YAGNI đã giữ ở Phase 1/2: không thêm gRPC catalog→reservation, không nâng Redis lên BuildingBlocks khi chưa có consumer thứ 2).
-- **Quyết định:** Phase 3 dựng `BuildingBlocks.Messaging` với **RabbitMQ transport**, thiết kế API `AddTicketFlowMessaging` **để thêm Kafka Rider về sau không phá vỡ** (bus abstraction sẵn sàng). Kafka infra vẫn để nguyên (đã chạy). → **Đề xuất sửa scope mục Phase 3:** dời "Kafka Rider" xuống Phase 6, ghi lý do. (Chờ bạn duyệt trước khi sửa `scope.md`.)
+- **Quyết định:** Phase 3 dựng `BuildingBlocks.Messaging` với **RabbitMQ transport**, thiết kế API `AddTicketFlowMessaging` **để thêm Kafka Rider về sau không phá vỡ** (bus abstraction sẵn sàng). Kafka infra vẫn để nguyên (đã chạy). → **✅ Đã duyệt (Commit 8):** `scope.md` Phase 3 sửa lại bỏ "Kafka Rider", Phase 6 ghi chú sẽ bật ở đó.
 
 ### 6. MassTransit v8 (miễn phí) — KHÔNG nhảy v9 (thương mại)
 - **MassTransit v9 chuyển sang giấy phép thương mại** (trả phí). **v8 là bản OSS cuối** và vẫn được vá. Với dự án học, **pin v8** (dòng `8.x` mới nhất tương thích `net10.0`) — ghi chú rõ lý do trong `Directory.Packages.props` (giống cách đã ghi chú EF Core / OpenAPI). Version cụ thể xác minh khi code Commit 1 (kiểm tra hỗ trợ net10.0). Đây là **quyết định phụ thuộc có ý thức**, không dính bẫy nâng đại lên bản mới nhất.
@@ -167,17 +167,30 @@ tags: [ticketflow, phase-3, plan, masstransit, rabbitmq, outbox, event-driven]
 ## Nhóm D — Chứng minh resiliency + chốt
 
 ### Commit 7 — `test(messaging): Outbox durability — tắt broker giữa chừng, event không mất`
-- Kịch bản DoD phần 2 (verify thật, không mock):
-  1. `docker stop ticketflow-rabbitmq`.
-  2. Gọi API catalog publish 1 event → thành công (DB commit OK dù broker chết) → `psql` xác nhận row nằm trong `outbox_message`, **chưa** gửi.
-  3. `docker start ticketflow-rabbitmq`.
-  4. Chờ delivery service drain → `docker logs ticketflow-notification` **eventually** thấy log → `outbox_message` được đánh dấu sent.
-- Ghi lại thời gian drain, hành vi retry quan sát được. **Chứng minh "event không mất khi broker chập chờn".**
+- **Không có code mới** — đúng bản chất commit này: thuần verify runtime một property đã có sẵn nhờ thiết kế Outbox từ Commit 3, không phải viết thêm logic. Cân nhắc dựng 1 project test tự động (kiểu Testcontainers như Phase 2 Commit 10) nhưng quyết định **không làm** — khác Phase 2 (nơi Testcontainers chứng minh **logic Lua script tự viết**, một correctness claim thật của code mình), ở đây đang chứng minh hành vi **MassTransit's EF Core Outbox đã tự có tài liệu/test riêng** — verify runtime thủ công qua Docker thật là đủ, dựng test project riêng cho việc này là vàng hoá.
+- **Kịch bản thật đã chạy (áp dụng đúng bài học từ Commit 4 — phải tắt broker TRƯỚC khi publish, không phải publish rồi mới tắt):**
+  1. `docker stop ticketflow-rabbitmq` → xác nhận `Exited (137)`.
+  2. Gọi full luồng API thật qua gateway (event → seatmap → section → price tier → publish) **trong lúc RabbitMQ đang tắt hẳn** → `publish` vẫn trả **`200`, `status: "Published"`** — chứng minh trực tiếp claim cốt lõi của Outbox: ghi Postgres **không phụ thuộc** broker sống hay chết, không có dual-write risk.
+  3. `psql` xác nhận row nằm yên: `outbox_message` có đúng 1 row (`message_type: CatalogEventPublished`), `outbox_state.delivered` là **NULL** (chưa gửi). `body` JSON đầy đủ, đúng field (`catalogEventId`, `title`, `venueId`, `startsAt`, `publishedAt`) — message không mất, không hỏng.
+  4. `docker start ticketflow-rabbitmq`, chờ Docker healthcheck báo `healthy` (**~13s**).
+  5. Poll `outbox_message` mỗi 1s → **row biến mất (drain xong) chỉ sau ~1s kể từ lúc RabbitMQ healthy** — nhanh hơn dự kiến, vì `BusOutboxDeliveryService` poll liên tục ở tần suất cao khi có row pending, không đợi hết 1 chu kỳ retry dài.
+  6. `docker logs ticketflow-notification` **và** `docker logs ticketflow-search` **đồng thời** xuất hiện log cho đúng event vừa publish lúc broker tắt (`Phase 3 Commit 7 Durability Verify`) — không chỉ outbox trống, mà **cả 2 consumer thật sự nhận được** message đã bị trễ.
+- **Bằng chứng thật hành vi retry** (đọc log catalog quanh mốc broker tắt): `Connection Failed: rabbitmq://rabbitmq/` → `RabbitMQ.Client.Exceptions.BrokerUnreachableException: None of the specified endpoints were reachable`, exception này được **bắt bên trong `MassTransit.EntityFrameworkCoreIntegration.BusOutboxDeliveryService<TDbContext>.DeliverOutboxMessages`** — nghĩa là delivery service tự catch lỗi kết nối, log lại, và tiếp tục vòng poll tiếp theo (`SELECT ... FOR UPDATE SKIP LOCKED` lặp lại đều đặn) **mà không crash, không cần retry code tự viết**. Đây chính là lý do Commit 1 pin `MassTransit.RabbitMQ`/`MassTransit.EntityFrameworkCore` — cơ chế resiliency này đến từ thư viện, không phải phải tự dựng.
+- **Verify thật (không mock):**
+  1. Toàn bộ kịch bản trên chạy qua Docker + gateway thật, không mock broker, không mock DB.
+  2. Regression sau khi RabbitMQ sống lại: `docker compose ps` đủ 11 container; full smoke test gateway 4/4 route `200`; `notification`/`search` `/health` đều `200`; `TicketFlow.Catalog.Domain.Tests` 35/35 pass.
+- **Kết luận DoD:** đã chứng minh đầy đủ "tạo sự kiện ở catalog → event chảy qua bus → notification nhận được; tắt broker giữa chừng, bật lại → event không mất (Outbox)" — cả 2 vế của DoD Phase 3, bằng dữ liệu thật, không suy đoán.
 
 ### Commit 8 — `chore: finalize Phase 3 — slnx, docker-compose, DoD checklist`
-- Rà `.slnx` đủ project mới; `docker compose ps` đủ container (thêm notification + search); smoke health toàn bộ service.
-- Tick DoD Phase 3 trong `scope.md`; nếu bạn duyệt phản biện mục 5 thì sửa luôn dòng "Kafka Rider" (dời Phase 6).
-- Cập nhật doc này với lệch kế hoạch/bug thực tế.
+- **Verify thật:**
+  1. `dotnet sln TicketFlow.slnx list` → đủ **23 project**, gồm 4 project mới của Phase 3: `TicketFlow.Contracts.Messaging`, `TicketFlow.Messaging`, `TicketFlow.Notification.Api`, `TicketFlow.Search.Api`.
+  2. `dotnet build` toàn solution: 0 Warning, 0 Error.
+  3. `docker-compose.yml`: xác nhận `notification`/`search` có `depends_on: rabbitmq (healthy)`, **không** nằm trong `depends_on` của `gateway` (đúng quyết định kiến trúc — chưa có route public).
+  4. `docker compose ps` → đủ **11 container** (catalog, gateway, identity, kafka, notification, ordering, postgres, rabbitmq, redis, reservation, search).
+  5. Full smoke test: catalog/identity/ordering/reservation qua gateway đều `200`; `notification`/`search`/`catalog` `/health` đều `200`.
+  6. `TicketFlow.Catalog.Domain.Tests` 35/35 pass.
+- **Quyết định chốt (đã hỏi & được duyệt):** sửa `scope.md` Phase 3 — bỏ "Kafka Rider" khỏi mục 1, ghi rõ lý do dời sang Phase 6 (đúng phản biện mục 5 phần "Quyết định kiến trúc" ở trên); sửa luôn Phase 6 thêm ghi chú "bật Kafka Rider ở đây". Cũng nhân tiện sửa mục 3 scope.md Phase 3: đổi `EventPublished` → `CatalogEventPublished` cho khớp tên contract thật đã dùng (tránh gây hiểu lầm về sau khi đọc lại scope.md, vì domain event `EventPublished` đã tồn tại từ Phase 1 với ý nghĩa khác hẳn).
+- Tick DoD Phase 3 trong `scope.md`, mirror đúng pattern đã dùng cho Phase 1/2 (`✅ ... **Hoàn thành [ngày]** — ... xem docs/phase-3-plan.md`).
 
 ---
 

@@ -309,11 +309,11 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 
 ### Phase 3 — Async messaging & event-driven *(Ch4)* — ~1.5 tuần
 **Mục tiêu:** chuyển từ gọi trực tiếp sang event.
-1. Cài MassTransit (RabbitMQ) + Kafka Rider trong `BuildingBlocks.Messaging`.
-2. Triển khai **Transactional Outbox**.
-3. `catalog` publish `EventPublished`; `search` (skeleton) consume để chuẩn bị index.
+1. Cài MassTransit (RabbitMQ) trong `BuildingBlocks.Messaging`. ~~Kafka Rider~~ **dời sang Phase 6** — Phase 3 chưa có consumer nào cần ngữ nghĩa stream/replay (chỉ pub/sub thông thường), thêm Kafka lúc này là scope creep; Kafka Rider sẽ bật khi `analytics-service` thật sự cần (Ch4 vẫn đọc để hiểu async messaging nói chung, không riêng RabbitMQ).
+2. Triển khai **Transactional Outbox** (EF Core Outbox của MassTransit, gắn cùng `CatalogDbContext`).
+3. `catalog` publish integration event `CatalogEventPublished` (đặt tên khác domain event `EventPublished` đã có sẵn trong Catalog Domain — tránh nhầm domain event nội bộ với contract cross-service); `search` (skeleton) consume để chuẩn bị index.
 4. `notification-service` consume event → ghi log "sẽ gửi".
-- **DoD:** tạo sự kiện ở catalog → event chảy qua bus → notification nhận được; tắt broker giữa chừng, bật lại → event không mất (Outbox).
+- **DoD:** ✅ tạo sự kiện ở catalog → event chảy qua bus → notification nhận được; ✅ tắt broker giữa chừng, bật lại → event không mất (Outbox). **Hoàn thành 2026-07-14** — verify qua `docker compose up` (11 container) + kịch bản tắt/bật RabbitMQ thật, xem [docs/phase-3-plan.md](docs/phase-3-plan.md) để biết chi tiết từng commit, bug thật gặp phải (va chạm tên queue giữa 2 service phá fan-out) và các lệch kế hoạch có lý do.
 
 ### Phase 4 — CQRS + Event Sourcing (Ordering) *(Ch6, Ch7)* — ~2 tuần
 **Mục tiêu:** tách read/write, lưu lịch sử dạng event.
@@ -336,7 +336,7 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 1. `search-service`: index sự kiện vào **Elasticsearch**, cập nhật theo event.
 2. **Aggregator**: endpoint trang chi tiết gộp catalog + ghế trống + review + gợi ý.
 3. `recommendation-service`: gợi ý đơn giản (theo thể loại/lịch sử) — Mongo/Redis.
-4. `analytics-service`: consume event doanh số/lượt xem → **ClickHouse**; query tổng hợp.
+4. `analytics-service`: consume event doanh số/lượt xem → **ClickHouse**; query tổng hợp. **Bật Kafka Rider ở đây** (dời từ Phase 3 — xem ghi chú Phase 3) trong `BuildingBlocks.Messaging`: đây là consumer đầu tiên thật sự cần ngữ nghĩa stream/replay (event log doanh số thông lượng cao), khác RabbitMQ pub/sub thông thường đã dùng từ Phase 3.
 - **DoD:** tìm sự kiện qua ES; trang chi tiết 1 request trả dữ liệu gộp; dashboard doanh số query ClickHouse.
 
 ### Phase 7 — Gateway, BFF & Security *(Ch11, Ch13)* — ~2 tuần
