@@ -16,10 +16,19 @@ public static class ServiceCollectionExtensions
     ///
     /// The optional `configure` callback is where each service registers its own consumers —
     /// kept generic here so this extension doesn't need to know about any service's contracts.
+    ///
+    /// `serviceName` prefixes the endpoint (queue) name formatter. Without it, MassTransit's
+    /// default KebabCaseEndpointNameFormatter derives the queue name purely from the consumer
+    /// class name — two services with a same-named consumer class (e.g. two
+    /// CatalogEventPublishedConsumer, one per service, Phase 3 Commit 5/6) would collide onto
+    /// the SAME RabbitMQ queue and become competing consumers instead of each getting its own
+    /// copy of the message, silently breaking fan-out. Caught via docker-first verification:
+    /// RabbitMQ Management API showed "consumers": 2 on a single queue instead of 2 queues.
     /// </summary>
     public static IServiceCollection AddTicketFlowMessaging(
         this IServiceCollection services,
         IConfiguration configuration,
+        string serviceName,
         Action<IBusRegistrationConfigurator>? configure = null)
     {
         var host = configuration["RabbitMq:Host"]
@@ -31,7 +40,7 @@ public static class ServiceCollectionExtensions
 
         services.AddMassTransit(busConfigurator =>
         {
-            busConfigurator.SetKebabCaseEndpointNameFormatter();
+            busConfigurator.SetEndpointNameFormatter(new KebabCaseEndpointNameFormatter(serviceName, includeNamespace: false));
 
             configure?.Invoke(busConfigurator);
 

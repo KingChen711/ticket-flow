@@ -71,6 +71,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  search:
+    build:
+      context: .
+      dockerfile: src/Services/Search/TicketFlow.Search.Api/Dockerfile
+    container_name: ticketflow-search
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8006:8006"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
   gateway:
     build:
       context: .

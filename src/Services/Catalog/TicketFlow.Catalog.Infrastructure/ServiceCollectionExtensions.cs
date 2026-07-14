@@ -31,7 +31,7 @@ public static class ServiceCollectionExtensions
         // commit. This is why messaging wiring moved here from Program.cs (Commit 1): it must
         // share the same CatalogDbContext as the business writes for the transaction to cover
         // both.
-        services.AddTicketFlowMessaging(configuration, busConfigurator =>
+        services.AddTicketFlowMessaging(configuration, "catalog", busConfigurator =>
         {
             busConfigurator.AddEntityFrameworkOutbox<CatalogDbContext>(outboxConfigurator =>
             {

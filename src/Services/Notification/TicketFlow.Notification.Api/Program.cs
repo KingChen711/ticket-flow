@@ -5,7 +5,7 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
-builder.Services.AddTicketFlowMessaging(builder.Configuration, busConfigurator =>
+builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", busConfigurator =>
 {
     busConfigurator.AddConsumer<CatalogEventPublishedConsumer>();
 });
