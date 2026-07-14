@@ -1,4 +1,5 @@
 using JasperFx;
+using JasperFx.Events.Projections;
 using Marten;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,13 @@ public static class ServiceCollectionExtensions
             // Dev-only, same spirit as EF's migrate-on-startup elsewhere in this repo — a real
             // deployment would run schema setup as a separate CI/CD step instead.
             options.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
+
+            // Inline = read model updates in the SAME transaction as the event append, so a
+            // query right after a command sees the new state immediately (read-after-write
+            // consistency) — simplest option for Phase 4's DoD. Async/daemon projections
+            // (eventual consistency, higher throughput) are a documented backlog item, not
+            // needed here.
+            options.Projections.Add<MyOrdersProjection>(ProjectionLifecycle.Inline);
         });
 
         services.AddScoped<IOrderStore, MartenOrderStore>();

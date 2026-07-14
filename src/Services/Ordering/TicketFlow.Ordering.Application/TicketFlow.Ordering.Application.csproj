@@ -8,6 +8,18 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!--
+      Same requirement as TicketFlow.Ordering.Domain (see its csproj comment) — the source
+      generator that dispatches MyOrdersProjection's Create/Apply methods (Commit 5) must run on
+      the assembly that DEFINES the projected document type (MyOrderView), which lives here, not
+      on the assembly that defines the projection class itself (Infrastructure). Analyzer-only +
+      JasperFx.Events runtime, zero Marten-proper/Postgres dependency in Application.
+    -->
+    <PackageReference Include="Marten">
+      <IncludeAssets>analyzers</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="JasperFx.Events" />
   </ItemGroup>
 
   <ItemGroup>
