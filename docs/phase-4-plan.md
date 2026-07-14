@@ -155,8 +155,18 @@ tags: [ticketflow, phase-4, plan, marten, event-sourcing, cqrs, ordering]
   4. Regression: `docker compose ps` đủ 11 container; full smoke test gateway 4/4 route `200`; `Catalog.Domain.Tests` 35/35, `Ordering.Domain.Tests` 8/8, `Ordering.Application.Tests` 10/10 — không ảnh hưởng.
 
 ### Commit 6 — `feat(ordering): query side — GetMyOrders/GetOrderById`
-- Application: `GetMyOrdersQuery(customerId)` + `GetOrderByIdQuery` + handlers **đọc thẳng projection document** (KHÔNG fold stream ở đường đọc). Query endpoints `GET /orders?customerId=...`, `GET /orders/{id}`.
-- **Verify thật qua gateway:** đặt vài order cho 1 customer → `GET /orders?customerId=` trả đúng danh sách từ read model; đối chiếu với `mt_events` (write side) → khớp.
+- `IQueryHandler<TQuery,TResult>` — song song `ICommandHandler` (Commit 3), cùng triết lý: convention đặt tên thuần, không dispatch runtime.
+- **Port đọc riêng biệt: `IOrderViewStore`** (KHÔNG dùng lại `IOrderStore`) — đây là điểm cụ thể hoá CQRS ở tầng port, không chỉ ở tầng "có 2 loại handler". `IOrderStore` (Commit 2) đọc bằng cách fold event stream (ghi); `IOrderViewStore` đọc thẳng document đã được `MyOrdersProjection` (Commit 5) chiếu sẵn — 2 cơ chế đọc hoàn toàn khác nhau cho 2 mục đích khác nhau.
+- `MartenOrderViewStore : IOrderViewStore` (Infrastructure) dùng `IQuerySession` (không phải `IDocumentSession` — đường đọc không cần khả năng ghi): `GetByIdAsync` → `session.LoadAsync<MyOrderView>(id)`; `GetByCustomerAsync` → `session.Query<MyOrderView>().Where(...)`. **Lưu ý:** `session.Query<MyOrderView>()` ở đây là dùng **đúng** — khác hẳn bug Commit 2 (`session.Query<Order>()` sai vì Order không phải document, chỉ nên fold qua event store). `MyOrderView` **là** document thật (đã đăng ký qua `SingleStreamProjection`), nên `Query<>` là API chính xác cho nó.
+- `GetOrderByIdQuery`/`GetMyOrdersQuery` + handler tương ứng — trả thẳng `MyOrderView` (không map sang `OrderResponse`, vì `MyOrderView` đã có đủ field kể cả timestamp mà `OrderResponse` không có — đúng tinh thần "read model tối ưu cho việc đọc", không gò về khuôn response của command).
+- Endpoint: `GET /orders/{id}` (404 nếu không có — khác 400 "not found" của command side, vì đây thuần là truy vấn không tồn tại chứ không phải business-rule violation, hợp lý dùng đúng semantic HTTP 404); `GET /orders?customerId=...` (query string, minimal API tự bind).
+- **Không phát sinh bug source-generator mới** — khác Commit 2/5, `MartenOrderViewStore` chỉ gọi API đọc document sẵn có (`LoadAsync`/`Query`), không khai báo convention method `Apply`/`Create` nào mới cần dispatch, nên không cần đụng gì thêm tới cấu hình analyzer.
+- **Verify thật qua gateway (không mock):**
+  1. Đặt 3 order cho **cùng 1 customerId** — để Pending, Confirm 1, Cancel 1 (3 trạng thái khác nhau). `GET /orders?customerId=` → trả đúng **cả 3**, đúng `status` từng order (`Pending`/`Confirmed`/`Cancelled`), đúng timestamp tương ứng (`confirmedAt`/`cancelledAt` chỉ có giá trị đúng nơi cần).
+  2. `GET /orders/{id}` cho order Confirmed → `200`, đủ field đúng. Cho id không tồn tại → `404`.
+  3. **Đối chiếu write-side:** `psql` `mt_events` cho cả 3 `stream_id` → khớp chính xác: order 1 có 1 event (`order_placed`), order 2 có 2 event (`order_placed`→`order_confirmed`), order 3 có 2 event (`order_placed`→`order_cancelled`) — đúng số event ứng với trạng thái read model trả về.
+  4. Test phòng ngừa `Guid.Empty` trên `GET /orders/{id}` (rút kinh nghiệm từ bug Commit 4) → đúng `404`, **không lặp lại bug rò rỉ dữ liệu chéo** — vì `IQuerySession.LoadAsync<T>` là lookup theo primary key thông thường trên bảng document, khác hẳn cơ chế `AggregateStreamAsync` của event store (nơi bug thật sự nằm).
+  5. Regression: `docker compose ps` đủ 11 container; full smoke test gateway 4/4 route `200`; `Catalog.Domain.Tests` 35/35, `Ordering.Domain.Tests` 8/8, `Ordering.Application.Tests` 10/10 — không ảnh hưởng.
 
 ---
 

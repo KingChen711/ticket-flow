@@ -19,5 +19,17 @@ public static class OrderEndpoints
 
         group.MapPost("/{id:guid}/cancel", async (Guid id, CancelOrderRequest request, CancelOrderCommandHandler handler, CancellationToken ct) =>
             Results.Ok(await handler.HandleAsync(new CancelOrderCommand(id, request.Reason), ct)));
+
+        // Read side — handlers here go through IOrderViewStore (MyOrderView projection),
+        // never IOrderStore/the event stream. That split is the actual point of Commit 6, not
+        // just having separate endpoints.
+        group.MapGet("/{id:guid}", async (Guid id, GetOrderByIdQueryHandler handler, CancellationToken ct) =>
+        {
+            var order = await handler.HandleAsync(new GetOrderByIdQuery(id), ct);
+            return order is null ? Results.NotFound() : Results.Ok(order);
+        });
+
+        group.MapGet("/", async (Guid customerId, GetMyOrdersQueryHandler handler, CancellationToken ct) =>
+            Results.Ok(await handler.HandleAsync(new GetMyOrdersQuery(customerId), ct)));
     }
 }

@@ -9,12 +9,14 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton(TimeProvider.System);
 
-        // Registered as concrete types, not via ICommandHandler<,> — endpoints inject the
-        // specific handler directly (no generic resolve-by-command-type dispatch, see
+        // Registered as concrete types, not via ICommandHandler<,>/IQueryHandler<,> — endpoints
+        // inject the specific handler directly (no generic resolve-by-type dispatch, see
         // ICommandHandler's doc comment).
         services.AddScoped<PlaceOrderCommandHandler>();
         services.AddScoped<ConfirmOrderCommandHandler>();
         services.AddScoped<CancelOrderCommandHandler>();
+        services.AddScoped<GetOrderByIdQueryHandler>();
+        services.AddScoped<GetMyOrdersQueryHandler>();
 
         return services;
     }

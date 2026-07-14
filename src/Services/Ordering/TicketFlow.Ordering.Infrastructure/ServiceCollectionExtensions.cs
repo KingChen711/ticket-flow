@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddScoped<IOrderStore, MartenOrderStore>();
+        services.AddScoped<IOrderViewStore, MartenOrderViewStore>();
 
         services.AddHealthChecks().AddCheck<MartenHealthCheck>("marten");
 
