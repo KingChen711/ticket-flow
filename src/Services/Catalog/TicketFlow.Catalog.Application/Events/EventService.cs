@@ -44,6 +44,15 @@ public sealed class EventService(
         var schedule = EventSchedule.Create(request.StartsAt, request.EndsAt);
 
         @event.Reschedule(schedule, timeProvider.GetUtcNow());
+
+        // Same reasoning as PublishAsync below: the domain event Event.Reschedule() raises is
+        // in-process only (Ignore(DomainEvents)) — this is the real cross-service contract, and
+        // it must publish BEFORE SaveChangesAsync so the Outbox interceptor captures it in the
+        // same transaction as the reschedule write.
+        await integrationEventPublisher.PublishAsync(
+            new CatalogEventRescheduled(@event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt),
+            cancellationToken);
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Map(@event);
@@ -81,12 +90,20 @@ public sealed class EventService(
         // Translate domain event -> integration event here, not inside Event.Publish(): the
         // domain event (EventPublished) only carries the aggregate id and is for in-process
         // consumers; this integration event is the stable cross-service contract and needs
-        // fields (Title, VenueId, StartsAt) the domain event doesn't carry (see Commit 2).
-        // Publish() must run BEFORE SaveChangesAsync() — it buffers the message against this
-        // scope's CatalogDbContext, which SaveChangesAsync then flushes into outbox_message as
-        // part of the same transaction.
+        // fields (Title, VenueId, StartsAt, and — Phase 6 — Artist/VenueName/City) the domain
+        // event doesn't carry (see Commit 2). Venue is loaded here (Publish didn't need it
+        // before Phase 6) purely to denormalize into the event — search must be able to index
+        // artist/venue/city without calling back into catalog per event (see contract's doc
+        // comment). Publish() must run BEFORE SaveChangesAsync() — it buffers the message
+        // against this scope's CatalogDbContext, which SaveChangesAsync then flushes into
+        // outbox_message as part of the same transaction.
+        var venue = await venueRepository.GetByIdAsync(@event.VenueId, cancellationToken)
+            ?? throw new InvalidOperationException($"Venue '{@event.VenueId}' was not found.");
+
         await integrationEventPublisher.PublishAsync(
-            new CatalogEventPublished(@event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now),
+            new CatalogEventPublished(
+                @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
+                @event.Artist, venue.Name, venue.Address.City),
             cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -99,6 +116,10 @@ public sealed class EventService(
         var @event = await GetRequiredAsync(id, cancellationToken);
 
         @event.Cancel();
+
+        // Same reasoning as RescheduleAsync/PublishAsync above.
+        await integrationEventPublisher.PublishAsync(new CatalogEventCancelled(@event.Id), cancellationToken);
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Map(@event);
