@@ -227,16 +227,27 @@ tags: [ticketflow, phase-6, plan, elasticsearch, mongodb, clickhouse, kafka, agg
   - `GET /analytics/revenue` (không filter) trả đúng tổng + group theo event; filter `eventId=` trả đúng riêng 1 event.
   - **Dedup thật:** mua vé thật lấy 1 `OrderId` thật → chèn tay 1 row trùng `order_id` (mô phỏng Kafka redelivery) → raw `count()` = 2 (xác nhận CHƯA merge) → gọi `GET /analytics/revenue?eventId=` qua API thật → tổng đúng **750000** (không phải 1000000) — `FINAL` dedup đúng ngay tại tầng ứng dụng, không cần chờ background merge.
   - Regression suite đầy đủ: **79/79** (Analytics không có Domain/unit test — đúng pattern Search/Recommendation, verify hoàn toàn qua Docker thật).
+  - **⚠️ Sửa lại ở Commit 8:** endpoint lúc code Commit 7 là `GET /analytics/revenue` (prefix "/analytics" bake thẳng vào route nội bộ). Phát hiện không nhất quán khi làm gateway route Commit 8 — mọi service khác (Search's `/events`, Ordering's `/orders`, Catalog's `/events`...) đều để route nội bộ **trần** (không tiền tố tên service), gateway mới là nơi thêm prefix. Đã đổi route nội bộ Analytics thành `GET /revenue` (trần) — gọi trực tiếp port 8010 giờ là `/revenue`, qua gateway là `/analytics/revenue`. Xem chi tiết ở Commit 8.
 
 ---
 
 ## Nhóm E — Finalize
 
-### Commit 8 — `chore: finalize Phase 6 — routes, DoD checklist, scope reconcile`
-- Gateway route `search`/`recommendation`/`analytics` (các query endpoint client-facing) qua YARP.
-- `.slnx` đủ project mới; `docker compose ps` đủ container (thêm ES, Mongo, ClickHouse, recommendation, analytics + aggregator nếu chọn service riêng) — ~**19-20 container**.
-- **Reconcile scope**: nếu chọn aggregator-service riêng (mục 6b) → thêm vào bảng service scope; ghi rõ genre-recommendation → artist/venue/popular (mục 5); review drop khỏi aggregator (mục 6). Tick DoD Phase 6.
-- Verify end-to-end 1 lần cuối cả 3 DoD qua gateway; cập nhật doc này + `scope.md`.
+### Commit 8 — `chore: finalize Phase 6 — routes, DoD checklist, scope reconcile` ✅ DONE
+- **Gateway route `search`/`recommendation`/`analytics` qua YARP** — cùng convention `catalog`/`identity`/`ordering`/`reservation` đã có: `/{service}/{**catch-all}` → `PathRemovePrefix` → forward tới `http://{service}:{port}`.
+- **🐛 Phát hiện + sửa lúc thêm route:** Analytics' route nội bộ (Commit 7) là `GET /analytics/revenue` — bake sẵn tiền tố tên service, **khác** convention mọi service khác trong hệ (route nội bộ luôn **trần**, gateway mới thêm prefix — đã ghi rõ trong doc comment `SearchEndpoints.cs` từ Commit 2). Nếu giữ nguyên, qua gateway sẽ thành `/analytics/analytics/revenue` (lặp đôi, sai). **Đã sửa** route nội bộ Analytics thành `GET /revenue` (trần) — cổng trực tiếp 8010 giờ gọi `/revenue`, qua gateway `GET /analytics/revenue` mới đúng.
+- **Reconcile scope** (đúng phương án (a) đã chọn ở Commit 5 — endpoint aggregator nằm trong `catalog`, không tách service riêng, nên KHÔNG cần thêm dòng bảng service scope cho aggregator):
+  - `scope.md` mục Ch5: bỏ "review" khỏi mô tả trang chi tiết (3 nguồn thật: catalog + ghế trống + gợi ý), ghi rõ lý do drop.
+  - `scope.md` roadmap Phase 6: sửa "gợi ý theo thể loại/lịch sử — Mongo/Redis" → "gợi ý theo nghệ sĩ/venue/phổ biến — chỉ Mongo" (không có field genre trong `catalog.Event`; Redis chưa từng cần — `GetPopularEventIdsAsync` là aggregation query trực tiếp trên Mongo, không cache).
+  - `scope.md` bảng service scope: cập nhật dòng `recommendation-service` — cột "Store phụ" từ `Redis` → `—`.
+- **`.slnx` đủ 3 project mới** (Analytics.Api/Application/Infrastructure) — đã thêm ở Commit 7.
+- **Verify thật (Docker) — end-to-end qua gateway, không dùng port trực tiếp:**
+  - `docker compose ps`: **19 container** (khớp dự kiến ~19-20) — đủ Postgres/Redis/RabbitMQ/Kafka/MinIO/Elasticsearch/MongoDB/ClickHouse + 12 service (catalog/identity/reservation/ordering/payment/ticketing/notification/search/recommendation/analytics/gateway + không tính infra).
+  - Cả 4 route mới/liên quan test qua gateway (`localhost:8080`) đều 200, dữ liệu khớp với gọi port trực tiếp: `GET /search/events`, `GET /recommendation/recommendations?userId=`, `GET /analytics/revenue`, `GET /catalog/events/{id}/detail`.
+  - **Luồng mua vé thật đầu-cuối 100% qua gateway** (không chạm port trực tiếp bất kỳ bước nào): tạo venue → tạo event → seatmap/section/price-tier → publish (qua `/catalog`) → provision inventory (qua `/reservation`) → hold + đặt hàng (qua `/reservation`, `/ordering`) → saga hoàn tất thật → `Order.Status = Confirmed`. Ngay sau đó xác nhận cả 3 DoD chính qua gateway: event mới xuất hiện đúng trong `GET /search/events` (ES đã index), `GET /analytics/revenue?eventId=` trả đúng doanh số vừa phát sinh (Kafka → ClickHouse), `GET /recommendation/recommendations?userId=` phản ánh lịch sử mua vừa ghi (Mongo).
+  - Log 3 service liên quan (`recommendation`, `analytics`, `search`) sạch, không exception nào suốt luồng.
+  - **🔍 Phát hiện thêm (không sửa, ghi backlog):** khi user vừa mua 1 sự kiện có nghệ sĩ/venue **hoàn toàn riêng biệt** (không trùng bất kỳ sự kiện nào khác trong hệ), nhánh same-artist/same-venue của `GetRecommendationsQueryHandler` (Commit 4) không tìm được ứng viên nào → rơi về `GetPopularAsync` — nhưng `GetPopularAsync` **không loại trừ** sự kiện user vừa mua (logic loại trừ `seen` chỉ có trong nhánh same-artist/venue, không truyền vào fallback popular). Kết quả: user có thể được gợi ý lại đúng sự kiện họ vừa mua. Đây là hệ quả tự nhiên của thiết kế "đơn giản, không ML" đã chốt ở Commit 4 (scope mục 5), không phải bug — nhưng đáng cân nhắc thêm `excludeEventIds` vào `GetPopularAsync` nếu làm tiếp Recommendation ở phase sau.
+  - Regression suite đầy đủ cuối Phase 6: **79/79**.
 
 ---
 
@@ -306,11 +317,11 @@ sequenceDiagram
 
 | DoD | Kiểm chứng |
 |---|---|
-| Tìm sự kiện qua Elasticsearch | Commit 2: `GET /search/events?q=&artist=&city=&from=&to=` trả đúng theo full-text + filter; reschedule/cancel phản ánh đúng |
-| Trang chi tiết 1 request gộp nhiều nguồn | Commit 5: `GET /events/{id}/detail` = catalog + ghế trống + gợi ý trong 1 response (fan-out song song); tắt 1 nguồn phụ vẫn trả (graceful degradation) |
-| Dashboard doanh số query ClickHouse | Commit 7: mua vé thật → `SaleRecorded` qua Kafka → ClickHouse; `GET /analytics/revenue` trả tổng đúng, dedup at-least-once |
-| Kafka bật + tương phản RabbitMQ (Ch4) | Commit 6/7: Kafka Rider chở stream analytics, RabbitMQ vẫn chở command/saga — 2 transport sống cạnh nhau đúng mục đích |
-| Polyglot persistence (Ch8) | ES + Mongo + ClickHouse cùng chạy, mỗi store cho đúng loại query; DB-per-service, đồng bộ qua event |
+| ✅ Tìm sự kiện qua Elasticsearch | Commit 2: `GET /search/events?q=&artist=&city=&from=&to=` trả đúng theo full-text + filter; reschedule/cancel phản ánh đúng. Xác nhận lại qua gateway ở Commit 8 (luồng mua vé thật end-to-end). |
+| ✅ Trang chi tiết 1 request gộp nhiều nguồn | Commit 5: `GET /events/{id}/detail` = catalog + ghế trống + gợi ý trong 1 response (fan-out song song); tắt 1 nguồn phụ vẫn trả (graceful degradation). Xác nhận lại qua gateway ở Commit 8. |
+| ✅ Dashboard doanh số query ClickHouse | Commit 7: mua vé thật → `SaleRecorded` qua Kafka → ClickHouse; `GET /analytics/revenue` trả tổng đúng, dedup at-least-once (xác nhận thật bằng redelivery mô phỏng, không chỉ lý thuyết). Xác nhận lại qua gateway ở Commit 8. |
+| ✅ Kafka bật + tương phản RabbitMQ (Ch4) | Commit 6/7: Kafka Rider chở stream analytics, RabbitMQ vẫn chở command/saga — 2 transport sống cạnh nhau đúng mục đích, cùng 1 thời điểm nghiệp vụ (saga hoàn tất) chứng minh bằng luồng mua vé thật. |
+| ✅ Polyglot persistence (Ch8) | ES + Mongo + ClickHouse cùng chạy (19 container `docker compose ps`), mỗi store cho đúng loại query; DB-per-service, đồng bộ qua event — không service nào đọc thẳng DB service khác. |
 
 ## Hướng mở rộng (backlog — không thuộc Phase 6)
 - **Review-service** (nguồn thứ 4 cho aggregator) — cần cả service + domain review/rating riêng, không phải điểm Ch5.

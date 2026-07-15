@@ -7,7 +7,10 @@ public static class AnalyticsEndpoints
 {
     public static void MapAnalyticsEndpoints(this WebApplication app)
     {
-        app.MapGet("/analytics/revenue", async (
+        // Bare resource path, no "/analytics" prefix baked in — same convention as every other
+        // service's own endpoints (Search's /events, Ordering's /orders, ...): the gateway owns
+        // the service-name prefix (Commit 8), backend endpoints stay prefix-free.
+        app.MapGet("/revenue", async (
             Guid? eventId,
             DateTimeOffset? from,
             DateTimeOffset? to,

@@ -103,7 +103,7 @@ flowchart TB
 | **ticketing-service** | Phát vé, sinh QR/PDF, validate tại cổng | PostgreSQL | MinIO (PDF) | 8008 (không gRPC — xem Phase 5 quyết định kiến trúc mục 2) |
 | **search-service** | Tìm sự kiện theo nghệ sĩ/venue/ngày/thành phố | Elasticsearch | — | 8006 |
 | **notification-service** | Email/SMS/push (vé, nhắc lịch) | MongoDB | RabbitMQ | 8005 |
-| **recommendation-service** | "Sự kiện gợi ý cho bạn" | MongoDB | Redis | 8009 |
+| **recommendation-service** | "Sự kiện gợi ý cho bạn" (theo nghệ sĩ/venue/phổ biến) | MongoDB | — | 8009 |
 | **analytics-service** | Doanh số, lượt xem, dashboard organizer | ClickHouse | — | 8010 |
 | **media-service** | Poster, ảnh nghệ sĩ, thumbnail (serverless) | MinIO | — | 8011 |
 
@@ -152,7 +152,7 @@ Frontends (micro-frontends — Ch12):
 | **Ch2** DDD | Bounded context, Aggregate, Value Object, Domain Event | Mô hình hóa Event/Order/Ticket/Seat; định ranh giới service |
 | **Ch3** Synchronous comm | REST + gRPC | Gateway→service (REST); ordering→reservation xác nhận ghế (gRPC) |
 | **Ch4** Asynchronous comm | Message bus, Outbox | Domain event qua Kafka; job qua RabbitMQ; Outbox chống mất event |
-| **Ch5** Aggregator | Gộp nhiều nguồn thành 1 response | Trang chi tiết sự kiện = catalog + ghế còn trống + review + gợi ý |
+| **Ch5** Aggregator | Gộp nhiều nguồn thành 1 response | Trang chi tiết sự kiện = catalog + ghế còn trống + gợi ý (review drop khỏi Phase 6 — không có review-service/dữ liệu, xem Phase 6 quyết định kiến trúc mục 6) |
 | **Ch6** CQRS | Tách read/write | ordering-service: write (đặt vé) vs read ("vé của tôi") |
 | **Ch7** Event Sourcing | Event store, projection, replay | Order & Ticket lưu dạng event (Marten); build read model từ event |
 | **Ch8** Database strategies | DB-per-service, polyglot persistence | Mỗi service DB riêng: Postgres/Mongo/Redis/ES/ClickHouse |
@@ -334,10 +334,10 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 
 ### Phase 6 — Search, Aggregator, Recommendation, Analytics *(Ch5 + ES/ClickHouse)* — ~2 tuần
 1. `search-service`: index sự kiện vào **Elasticsearch**, cập nhật theo event.
-2. **Aggregator**: endpoint trang chi tiết gộp catalog + ghế trống + review + gợi ý.
-3. `recommendation-service`: gợi ý đơn giản (theo thể loại/lịch sử) — Mongo/Redis.
+2. **Aggregator**: endpoint trang chi tiết gộp catalog + ghế trống + gợi ý (3 nguồn thật — review drop, không có review-service/dữ liệu). Đặt trong `catalog` (`GET /events/{id}/detail`), không tách aggregator-service riêng — YAGNI, catalog là chủ tự nhiên của trang chi tiết.
+3. `recommendation-service`: gợi ý đơn giản theo **nghệ sĩ/venue/phổ biến** (không phải "thể loại" — `catalog.Event` không có field genre, gợi ý theo thể loại là vaporware) — chỉ Mongo, không cần Redis.
 4. `analytics-service`: consume event doanh số/lượt xem → **ClickHouse**; query tổng hợp. **Bật Kafka Rider ở đây** (dời từ Phase 3 — xem ghi chú Phase 3) trong `BuildingBlocks.Messaging`: đây là consumer đầu tiên thật sự cần ngữ nghĩa stream/replay (event log doanh số thông lượng cao), khác RabbitMQ pub/sub thông thường đã dùng từ Phase 3.
-- **DoD:** tìm sự kiện qua ES; trang chi tiết 1 request trả dữ liệu gộp; dashboard doanh số query ClickHouse.
+- **DoD:** ✅ tìm sự kiện qua ES; ✅ trang chi tiết 1 request trả dữ liệu gộp; ✅ dashboard doanh số query ClickHouse. **Hoàn thành 2026-07-15** — verify qua `docker compose ps` (19 container) + luồng mua vé thật 100% qua gateway (venue→event→seatmap→publish→inventory→hold→order, không chạm port trực tiếp bước nào), xác nhận cả 3 DoD phản ánh đúng ngay sau: sự kiện mới lên `GET /search/events`, doanh số lên `GET /analytics/revenue`, lịch sử mua lên `GET /recommendation/recommendations`. Xem [docs/phase-6-plan.md](docs/phase-6-plan.md) để biết chi tiết từng commit — 2 bug thật đáng chú ý: **Ordering treo vô thời hạn lúc start** (Commit 6) do saga's constructor phụ thuộc trực tiếp `ITopicProducer` của Kafka Rider gắn cùng bus → deadlock DI vòng tròn khi MassTransit khởi tạo (fix: resolve publisher lúc consume message, không phải lúc construct saga) — debug qua 5 vòng bisect bằng probe container thật; và ClickHouse `sum()` trên cột `UInt32` trả về `UInt64` chứ không phải `Int64`, driver cast cứng throw ngay (Commit 7). Cũng phát hiện gap thiết kế nhỏ ở Recommendation (popular-fallback không loại trừ sự kiện vừa mua) — ghi backlog, không sửa vì đúng tinh thần "đơn giản, không ML" đã chốt ở Commit 4.
 
 ### Phase 7 — Gateway, BFF & Security *(Ch11, Ch13)* — ~2 tuần
 1. Hoàn thiện **YARP gateway** + BFF riêng cho từng frontend.
