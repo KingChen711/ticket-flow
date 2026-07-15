@@ -16,6 +16,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!-- AddEntityFrameworkOutbox/UseEntityFrameworkOutbox wiring (Commit 7) lives in Program.cs. -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" />
   </ItemGroup>
 
   <ItemGroup>

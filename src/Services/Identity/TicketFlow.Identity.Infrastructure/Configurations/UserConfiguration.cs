@@ -30,12 +30,12 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
             .HasColumnName("roles")
             .HasConversion(
                 roles => string.Join(',', roles),
-                value => (IReadOnlyList<Role>)(value.Length == 0
+                value => value.Length == 0
                     ? new List<Role>()
-                    : value.Split(',').Select(Enum.Parse<Role>).ToList()),
+                    : value.Split(',').Select(Enum.Parse<Role>).ToList(),
                 new ValueComparer<IReadOnlyList<Role>>(
                     (a, b) => a!.SequenceEqual(b!),
-                    a => a.Aggregate(0, (hash, role) => HashCode.Combine(hash, role)),
+                    a => a.Aggregate(0, HashCode.Combine),
                     a => a.ToList()));
 
         builder.Ignore(u => u.DomainEvents);

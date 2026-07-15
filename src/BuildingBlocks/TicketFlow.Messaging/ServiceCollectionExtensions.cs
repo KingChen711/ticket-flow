@@ -1,4 +1,5 @@
 using MassTransit;
+using MassTransit.RabbitMqTransport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,7 +30,8 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration,
         string serviceName,
-        Action<IBusRegistrationConfigurator>? configure = null)
+        Action<IBusRegistrationConfigurator>? configure = null,
+        Action<IBusRegistrationContext, IRabbitMqBusFactoryConfigurator>? configureRabbitMq = null)
     {
         var host = configuration["RabbitMq:Host"]
             ?? throw new InvalidOperationException("Configuration 'RabbitMq:Host' was not found.");
@@ -54,6 +56,15 @@ public static class ServiceCollectionExtensions
 
                 rabbitConfigurator.UseMessageRetry(retryConfigurator =>
                     retryConfigurator.Interval(3, TimeSpan.FromSeconds(2)));
+
+                // Runs BEFORE ConfigureEndpoints so a caller can hand-configure specific
+                // consumers' endpoints (e.g. Payment's Commit 7 needs UseEntityFrameworkOutbox on
+                // ProcessPaymentConsumer/RefundPaymentConsumer's endpoints for MassTransit Inbox
+                // deduplication — not expressible through the generic `configure` callback above,
+                // which only sees IBusRegistrationConfigurator, not the RabbitMq-specific
+                // configurator). ConfigureEndpoints below skips any consumer that already has an
+                // endpoint from here, and still auto-configures everything else by convention.
+                configureRabbitMq?.Invoke(context, rabbitConfigurator);
 
                 rabbitConfigurator.ConfigureEndpoints(context);
             });

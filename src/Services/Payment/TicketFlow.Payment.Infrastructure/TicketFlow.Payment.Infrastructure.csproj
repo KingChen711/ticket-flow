@@ -16,6 +16,8 @@
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Polly.Core" />
+    <!-- PaymentDbContext's Inbox/Outbox entity mappings (Commit 7) — same package Catalog uses. -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" />
   </ItemGroup>
 
   <ItemGroup>
