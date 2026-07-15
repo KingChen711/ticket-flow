@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TicketFlow.Catalog.Application.Abstractions;
+using TicketFlow.Catalog.Application.EventDetails;
+using TicketFlow.Catalog.Infrastructure.EventDetails;
 using TicketFlow.Catalog.Infrastructure.Messaging;
 using TicketFlow.Catalog.Infrastructure.Repositories;
 using TicketFlow.Messaging;
@@ -24,6 +26,25 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISeatMapRepository, SeatMapRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
+
+        // 3s timeout — secondary sources for the Commit 5 aggregator. Short on purpose: a slow
+        // reservation/recommendation call shouldn't stall the primary catalog read for long
+        // before graceful degradation (empty list) kicks in.
+        var reservationBaseUrl = configuration["Reservation:BaseUrl"]
+            ?? throw new InvalidOperationException("Configuration 'Reservation:BaseUrl' was not found.");
+        services.AddHttpClient<ISeatAvailabilityClient, HttpSeatAvailabilityClient>(client =>
+        {
+            client.BaseAddress = new Uri(reservationBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+        });
+
+        var recommendationBaseUrl = configuration["Recommendation:BaseUrl"]
+            ?? throw new InvalidOperationException("Configuration 'Recommendation:BaseUrl' was not found.");
+        services.AddHttpClient<IRecommendationClient, HttpRecommendationClient>(client =>
+        {
+            client.BaseAddress = new Uri(recommendationBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+        });
 
         // AddEntityFrameworkOutbox writes messages published inside a SaveChangesAsync
         // transaction into the outbox_message table instead of hitting RabbitMQ directly — the

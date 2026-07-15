@@ -171,12 +171,20 @@ tags: [ticketflow, phase-6, plan, elasticsearch, mongodb, clickhouse, kafka, agg
 
 ## Nhóm C — Aggregator (Ch5)
 
-### Commit 5 — `feat(catalog): event-detail aggregator endpoint`
-- **Chốt quyết định mục 6 (hỏi lại):** mặc định endpoint trong `catalog` `GET /events/{id}/detail`.
-- Fan-out **song song** (`Task.WhenAll`): catalog (event + venue + price tiers, local) + reservation (ghế trống — tái dùng gRPC `CheckSeatAvailability`/REST availability, **không viết lại**) + recommendation (`GET /recommendations`). Gộp thành 1 `EventDetailResponse`.
-- **Graceful degradation:** mỗi nguồn phụ (seats, recommendation) bọc try/timeout — chết thì trả phần rỗng + vẫn trả catalog. Không để 1 nguồn kéo sập cả response.
-- Catalog.Api thêm gRPC client reservation + HTTP client recommendation (đăng ký typed client + timeout).
-- **Verify thật:** `GET /events/{id}/detail` qua gateway → 1 response gộp đủ 3 nguồn; **tắt recommendation container** → vẫn trả catalog+seats (gợi ý rỗng), không lỗi 500; tắt reservation → vẫn trả catalog (seats rỗng/last-known).
+### Commit 5 — `feat(catalog): event-detail aggregator endpoint` ✅ DONE
+- **Chốt quyết định mục 6 (đã hỏi lại):** endpoint trong `catalog`, `GET /events/{id}/detail?userId=` — đúng phương án (a) đã đề xuất, giữ nguyên lý do YAGNI (không thêm aggregator-service ngoài bảng scope).
+- **Đảo quyết định "gRPC CheckSeatAvailability" thành REST availability — sửa lại cả plan lẫn sơ đồ mermaid bên dưới.** Lý do phát hiện lúc code: `CheckSeatAvailability` (proto Phase 1/2) nhận `repeated seat_ids` **cụ thể** — đúng cho use-case gốc của nó (Ordering hỏi "mấy ghế này còn trống không" *trước khi* đặt), nhưng trang chi tiết sự kiện cần **toàn bộ danh sách ghế kèm status**, thứ mà `GET /events/{eventId}/availability` (đã có, REST, dùng xuyên suốt Commit 3/4 để verify) trả sẵn nguyên hình — không cần biết trước seat_ids. Dùng REST tránh phải thêm hẳn 1 bộ máy gRPC client mới vào Catalog.Api (vốn **chưa hề có** gRPC client nào) trong khi REST đã đúng nhu cầu 100%.
+- **Fan-out thật:** `seatsTask`/`recommendationsTask` (2 nguồn phụ, HTTP) khởi động **trước** khi `await` Event (local, Postgres) — Event xong mới `await` Venue (phụ thuộc `VenueId` từ Event, cũng local) — 2 task phụ đã chạy song song suốt quãng đó, `Task.WhenAll` ở cuối chỉ còn chờ phần chưa xong. Đây là fan-out thật, không phải fan-out-rồi-await-tuần-tự.
+- **Graceful degradation đặt ở Infrastructure, không phải Application** — `ISeatAvailabilityClient`/`IRecommendationClient` có contract tường minh "không bao giờ throw vì timeout/connection/non-2xx, trả rỗng thay vào đó"; try/catch + `ILogger` warning nằm trong `HttpSeatAvailabilityClient`/`HttpRecommendationClient` (Infrastructure — đúng chỗ đã có tiền lệ `FakePaymentGatewayClient`, Phase 5), **không phải** trong `EventDetailAggregator` (Application) — aggregator gọi port và luôn nhận về list (rỗng hoặc không), không cần biết HTTP thất bại kiểu gì. Timeout 3s trên từng `HttpClient` (`AddHttpClient` + `client.Timeout`), không dùng Polly — đơn giản hơn mức cần cho bài học Ch5 này (Polly đã có chỗ dùng riêng ở Payment, Ch10).
+- Catalog.Application thêm `EventDetailAggregator` (đăng ký cùng chỗ `EventService`/`VenueService`). Catalog.Infrastructure thêm `FrameworkReference Microsoft.AspNetCore.App` (cho `AddHttpClient`/`ILogger`) — tiện thể dọn luôn `PackageReference Microsoft.Extensions.Configuration.Abstractions` bị NuGet báo dư thừa (`NU1510`) sau khi FrameworkReference đã kéo theo.
+- **Verify thật (Docker, không mock):**
+  - `GET /events/{id}/detail?userId=` qua **gateway** (`localhost:8080/catalog/...`) lẫn cổng trực tiếp (8002) → 1 response gộp đủ 3 nguồn không rỗng: event+venue+priceTiers (local), seats (2 ghế đã Sold từ dữ liệu Commit 4), recommendations (gợi ý đúng sự kiện cùng nghệ sĩ, tự loại chính event đang xem).
+  - **Tắt `ticketflow-recommendation`** → response vẫn 200 sau ~3.1s (đúng timeout), catalog+seats đầy đủ, `recommendations: []`, log `HttpRecommendationClient` ghi đúng warning "degrading to empty recommendations" — không có exception nào leak ra HTTP response.
+  - **Tắt `ticketflow-reservation`** (bật lại recommendation) → response vẫn 200 sau ~3.1s, catalog+recommendations đầy đủ, `seats: []`, cùng cơ chế degrade.
+  - Bật lại cả 2 container → response phục hồi đầy đủ cả 3 nguồn ngay lập tức, không cần restart catalog.
+  - Event không tồn tại → 404 sạch (không lỗi ở tầng aggregator).
+  - Không truyền `userId` (khách vãng lai, chưa đăng nhập — dự án chưa có JWT/claims ở bất kỳ đâu, cùng gap đã ghi ở `PlaceOrderCommand`) → forward `Guid.Empty` sang Recommendation → tự động rơi vào nhánh popular sẵn có của Recommendation (không cần đặc cách "anonymous" ở Catalog).
+  - Regression suite đầy đủ: **79/79** (Catalog Domain/unit test không đổi — aggregator chỉ có Application/Infrastructure, verify hoàn toàn qua Docker thật, đúng pattern các nguồn phụ ở Commit 2-4).
 
 ---
 
@@ -220,24 +228,24 @@ sequenceDiagram
     participant R as reservation
     participant Rec as recommendation
 
-    U->>C: GET /events/{id}/detail
+    U->>C: GET /events/{id}/detail?userId=
     par Song song
-        C->>C: Đọc Event + Venue + PriceTiers (local)
+        C->>C: Đọc Event + Venue + PriceTiers (local, tuần tự vì Venue cần VenueId từ Event —<br/>nhưng vẫn chạy song song với 2 nhánh HTTP bên dưới)
     and
-        C->>R: CheckSeatAvailability (gRPC, Phase 1/2)
+        C->>R: GET /events/{id}/availability (REST — không phải gRPC<br/>CheckSeatAvailability: RPC đó cần seat_ids cụ thể,<br/>không hợp cho "toàn bộ ghế + status" trang chi tiết cần)
         alt reservation OK
             R-->>C: Ghế trống
-        else reservation timeout/lỗi
+        else reservation timeout (3s)/lỗi
             R--xC: (timeout)
-            note over C: Graceful degradation —<br/>seats rỗng, KHÔNG sập response
+            note over C: HttpSeatAvailabilityClient bắt lỗi,<br/>trả [] — aggregator không try/catch
         end
     and
         C->>Rec: GET /recommendations?userId=
         alt recommendation OK
             Rec-->>C: Gợi ý
-        else recommendation chết
+        else recommendation chết (timeout 3s)
             Rec--xC: (lỗi/timeout)
-            note over C: Graceful degradation —<br/>gợi ý rỗng, KHÔNG sập response
+            note over C: HttpRecommendationClient bắt lỗi,<br/>trả [] — aggregator không try/catch
         end
     end
     C-->>U: 200 EventDetailResponse<br/>(gộp 3 nguồn, degrade an toàn nếu nguồn phụ lỗi)

@@ -1,3 +1,4 @@
+using TicketFlow.Catalog.Application.EventDetails;
 using TicketFlow.Catalog.Application.Events;
 
 namespace TicketFlow.Catalog.Api.Endpoints;
@@ -21,6 +22,16 @@ public static class EventEndpoints
         {
             var @event = await service.GetByIdAsync(id, ct);
             return @event is null ? Results.NotFound() : Results.Ok(@event);
+        });
+
+        // Ch5 aggregator (Commit 5) — fan-out to reservation (seats) + recommendation (gợi ý),
+        // graceful degradation on either. userId is optional/trusted (no auth-derived identity
+        // anywhere in this project yet, same gap noted on PlaceOrderCommand); omitted means
+        // Recommendation falls back to its own popular-events cold-start path.
+        group.MapGet("/{id:guid}/detail", async (Guid id, Guid? userId, EventDetailAggregator aggregator, CancellationToken ct) =>
+        {
+            var detail = await aggregator.GetDetailAsync(id, userId, ct);
+            return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
         // "Update" in Phase 1 only covers rescheduling — Event exposes no other mutator for

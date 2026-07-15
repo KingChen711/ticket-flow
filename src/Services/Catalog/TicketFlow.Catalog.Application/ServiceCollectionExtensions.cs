@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TicketFlow.Catalog.Application.EventDetails;
 using TicketFlow.Catalog.Application.Events;
 using TicketFlow.Catalog.Application.SeatMaps;
 using TicketFlow.Catalog.Application.Venues;
@@ -13,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<VenueService>();
         services.AddScoped<EventService>();
         services.AddScoped<SeatMapService>();
+        services.AddScoped<EventDetailAggregator>();
 
         return services;
     }
