@@ -95,5 +95,12 @@
     <PackageVersion Include="QRCoder" Version="1.8.0" />
     <!-- Apache-2.0, free. S3-compatible client for the MinIO container (Commit 1). -->
     <PackageVersion Include="Minio" Version="7.0.0" />
+    <!--
+      Phase 6 Commit 2 — official Elasticsearch .NET client, Apache-2.0, no license trap.
+      Confirmed via nuspec to ship a first-class net10.0 target. Pinned to latest 8.x (matches
+      the ES 8.15.3 server pinned in docker-compose.infra.yml — client/server major-version
+      compatibility, not a hard requirement to match patch versions).
+    -->
+    <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="8.19.23" />
   </ItemGroup>
 </Project>
