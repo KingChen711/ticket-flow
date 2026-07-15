@@ -31,4 +31,11 @@ public interface ISeatHoldStore
 
     /// <summary>Effective live status per seat (Available / Held / Sold) computed from Redis.</summary>
     Task<IReadOnlyDictionary<Guid, SeatStatus>> GetLiveStatusesAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes seat ids from the durable Sold set (Redis side) — compensates a CONFIRMED sale
+    /// (Commit 9), unlike ReleaseAsync which only releases an active, not-yet-confirmed hold (see
+    /// Seat.MarkAvailable's doc comment for why these are genuinely different operations).
+    /// </summary>
+    Task RemoveFromSoldAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default);
 }

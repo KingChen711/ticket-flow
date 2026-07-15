@@ -47,6 +47,8 @@ public sealed class Order : Entity<Guid>
             case OrderPaymentAuthorized paymentAuthorized: Apply(paymentAuthorized); break;
             case OrderTicketsIssued ticketsIssued: Apply(ticketsIssued); break;
             case OrderConfirmed confirmed: Apply(confirmed); break;
+            case OrderPaymentRefunded paymentRefunded: Apply(paymentRefunded); break;
+            case OrderSeatsReleased seatsReleased: Apply(seatsReleased); break;
             case OrderCancelled cancelled: Apply(cancelled); break;
             default: throw new InvalidOperationException($"Order cannot apply event of type {e.GetType()}.");
         }
@@ -88,6 +90,12 @@ public sealed class Order : Entity<Guid>
         return new OrderConfirmed(Id, now);
     }
 
+    /// <summary>
+    /// Admin-override path only, same as Confirm() — the saga's own compensation branches
+    /// (Commit 9: SeatsConfirmationFailed / PaymentFailed / TicketingFailed) append
+    /// <see cref="OrderCancelled"/> directly via OrderCancelledConsumer, bypassing this guard,
+    /// since by the time compensation finishes Status is SeatsReleased/Refunded/etc., not Pending.
+    /// </summary>
     public OrderCancelled Cancel(string reason, DateTimeOffset now)
     {
         if (Status != OrderStatus.Pending)
@@ -113,6 +121,10 @@ public sealed class Order : Entity<Guid>
     public void Apply(OrderTicketsIssued e) => Status = OrderStatus.TicketsIssued;
 
     public void Apply(OrderConfirmed e) => Status = OrderStatus.Confirmed;
+
+    public void Apply(OrderPaymentRefunded e) => Status = OrderStatus.Refunded;
+
+    public void Apply(OrderSeatsReleased e) => Status = OrderStatus.SeatsReleased;
 
     public void Apply(OrderCancelled e) => Status = OrderStatus.Cancelled;
 }

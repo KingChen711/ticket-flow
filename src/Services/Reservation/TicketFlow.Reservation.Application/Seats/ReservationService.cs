@@ -50,6 +50,25 @@ public sealed class ReservationService(
         return confirmedSeatIds;
     }
 
+    /// <summary>
+    /// Compensation (Commit 9) — reverses a CONFIRMED sale, unlike ReleaseAsync (which only ever
+    /// releases an active hold, see Seat.MarkAvailable's doc comment for why they're different).
+    /// Idempotent: seats already Available are silently skipped, not an error.
+    /// </summary>
+    public async Task UnsellAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
+    {
+        if (seatIds.Count == 0)
+            return;
+
+        await holdStore.RemoveFromSoldAsync(eventId, seatIds, cancellationToken);
+
+        var seats = await seatRepository.GetByIdsAsync(eventId, seatIds, cancellationToken);
+        foreach (var seat in seats)
+            seat.MarkAvailable();
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<EventAvailabilityResponse> GetAvailabilityAsync(Guid eventId, CancellationToken cancellationToken = default)
     {
         var seats = await seatRepository.GetByEventAsync(eventId, cancellationToken);

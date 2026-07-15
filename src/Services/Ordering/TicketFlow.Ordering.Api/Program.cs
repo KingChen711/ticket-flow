@@ -38,6 +38,11 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     cfg.AddConsumer<OrderPaymentAuthorizedConsumer>();
     cfg.AddConsumer<OrderTicketsIssuedConsumer>();
     cfg.AddConsumer<OrderCompletedConsumer>();
+
+    // Compensation milestone consumers (Commit 9).
+    cfg.AddConsumer<OrderPaymentRefundedConsumer>();
+    cfg.AddConsumer<OrderSeatsReleasedConsumer>();
+    cfg.AddConsumer<OrderCancelledConsumer>();
 });
 
 var app = builder.Build();

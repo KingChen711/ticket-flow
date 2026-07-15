@@ -9,34 +9,41 @@ namespace TicketFlow.Ordering.Application.Sagas;
 
 /// <summary>
 /// Orchestration saga (Ch9): a single coordinator drives reservation -> payment -> ticketing and
-/// reacts to each participant's result event. Happy path only as of Commit 4 — compensation
-/// branches (PaymentFailed/TicketingFailed/SeatsConfirmationFailed) land in Commit 9.
+/// reacts to each participant's result event. Happy path (Commit 4) plus compensation branches
+/// (Commit 9) — see the mermaid state diagram in phase-5-plan.md for the full picture.
 /// </summary>
 /// <remarks>
-/// Every step below uses <c>Publish</c>, including for the three commands (ConfirmSeats,
-/// ProcessPayment, IssueTickets) that are conceptually targeted at exactly one participant.
-/// MassTransit's RabbitMQ topology binds each consumer's queue to an exchange named after its
-/// message type (via <c>ConfigureEndpoints</c>) regardless of whether that type is "logically" a
-/// command or an event — <c>Send</c> only matters when you need to target a specific queue
-/// address by URI, which would mean hardcoding each participant's <c>serviceName</c>-prefixed
-/// kebab-case queue name here (fragile: defined in a different assembly, see
-/// TicketFlow.Messaging's endpoint-formatter comment). Since each command type here has exactly
-/// one bound consumer, <c>Publish</c> reaches it identically and keeps the saga decoupled from
-/// participant queue-naming.
+/// Every step below uses <c>Publish</c>, including for the commands (ConfirmSeats,
+/// ProcessPayment, IssueTickets, ReleaseSeats, RefundPayment) that are conceptually targeted at
+/// exactly one participant. MassTransit's RabbitMQ topology binds each consumer's queue to an
+/// exchange named after its message type (via <c>ConfigureEndpoints</c>) regardless of whether
+/// that type is "logically" a command or an event — <c>Send</c> only matters when you need to
+/// target a specific queue address by URI, which would mean hardcoding each participant's
+/// <c>serviceName</c>-prefixed kebab-case queue name here (fragile: defined in a different
+/// assembly, see TicketFlow.Messaging's endpoint-formatter comment). Since each command type here
+/// has exactly one bound consumer, <c>Publish</c> reaches it identically and keeps the saga
+/// decoupled from participant queue-naming.
 /// </remarks>
 public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 {
     public State AwaitingSeats { get; private set; } = null!;
     public State AwaitingPayment { get; private set; } = null!;
     public State AwaitingTickets { get; private set; } = null!;
+    public State CompensatingRefund { get; private set; } = null!;
+    public State CompensatingSeats { get; private set; } = null!;
 
     // Suffixed "Event" to avoid the exact class-of-bug Commit 2 hit (aggregate named `Payment`
     // colliding with the `TicketFlow.Payment` namespace root) — here it'd be a property named
     // identically to its message-type property, e.g. `Event<OrderSubmitted> OrderSubmitted`.
     public Event<OrderSubmitted> OrderSubmittedEvent { get; private set; } = null!;
     public Event<SeatsConfirmed> SeatsConfirmedEvent { get; private set; } = null!;
+    public Event<SeatsConfirmationFailed> SeatsConfirmationFailedEvent { get; private set; } = null!;
     public Event<PaymentProcessed> PaymentProcessedEvent { get; private set; } = null!;
+    public Event<PaymentFailed> PaymentFailedEvent { get; private set; } = null!;
     public Event<TicketsIssued> TicketsIssuedEvent { get; private set; } = null!;
+    public Event<TicketingFailed> TicketingFailedEvent { get; private set; } = null!;
+    public Event<PaymentRefunded> PaymentRefundedEvent { get; private set; } = null!;
+    public Event<SeatsReleased> SeatsReleasedEvent { get; private set; } = null!;
 
     public PurchaseSaga()
     {
@@ -44,8 +51,13 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 
         Event(() => OrderSubmittedEvent, x => x.CorrelateById(context => context.Message.OrderId));
         Event(() => SeatsConfirmedEvent, x => x.CorrelateById(context => context.Message.OrderId));
+        Event(() => SeatsConfirmationFailedEvent, x => x.CorrelateById(context => context.Message.OrderId));
         Event(() => PaymentProcessedEvent, x => x.CorrelateById(context => context.Message.OrderId));
+        Event(() => PaymentFailedEvent, x => x.CorrelateById(context => context.Message.OrderId));
         Event(() => TicketsIssuedEvent, x => x.CorrelateById(context => context.Message.OrderId));
+        Event(() => TicketingFailedEvent, x => x.CorrelateById(context => context.Message.OrderId));
+        Event(() => PaymentRefundedEvent, x => x.CorrelateById(context => context.Message.OrderId));
+        Event(() => SeatsReleasedEvent, x => x.CorrelateById(context => context.Message.OrderId));
 
         Initially(
             When(OrderSubmittedEvent)
@@ -76,7 +88,14 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.UserId,
                     context.Saga.Amount,
                     context.Saga.PaymentMethod))
-                .TransitionTo(AwaitingPayment));
+                .TransitionTo(AwaitingPayment),
+            // Hold expired/missing before checkout completed — nothing charged, nothing to
+            // release. Straight to Cancelled, no compensation commands needed (DoD scenario 3).
+            When(SeatsConfirmationFailedEvent)
+                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
+                .Publish(context => new OrderCancelledIntegrationEvent(
+                    context.Saga.CorrelationId, context.Saga.UserId, context.Saga.CancellationReason!, DateTimeOffset.UtcNow))
+                .Finalize());
 
         During(AwaitingPayment,
             When(PaymentProcessedEvent)
@@ -88,7 +107,16 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.SeatIds,
                     context.Saga.CustomerName,
                     context.Saga.CustomerEmail))
-                .TransitionTo(AwaitingTickets));
+                .TransitionTo(AwaitingTickets),
+            // Nothing charged — release the hold directly (DoD scenario 1).
+            When(PaymentFailedEvent)
+                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
+                .Publish(context => new ReleaseSeats(
+                    context.Saga.CorrelationId,
+                    context.Saga.CatalogEventId,
+                    context.Saga.HoldId,
+                    context.Saga.SeatIds))
+                .TransitionTo(CompensatingSeats));
 
         During(AwaitingTickets,
             When(TicketsIssuedEvent)
@@ -106,6 +134,34 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CustomerName,
                     context.Saga.CustomerEmail,
                     context.Saga.TicketPdfUrls))
+                .Finalize(),
+            // Already charged — refund first, THEN release the hold (DoD scenario 2).
+            When(TicketingFailedEvent)
+                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
+                .Publish(context => new RefundPayment(
+                    context.Saga.CorrelationId,
+                    context.Saga.PaymentId!.Value,
+                    context.Saga.Amount))
+                .TransitionTo(CompensatingRefund));
+
+        During(CompensatingRefund,
+            When(PaymentRefundedEvent)
+                .Publish(context => new ReleaseSeats(
+                    context.Saga.CorrelationId,
+                    context.Saga.CatalogEventId,
+                    context.Saga.HoldId,
+                    context.Saga.SeatIds))
+                .TransitionTo(CompensatingSeats));
+
+        // Both compensation paths (PaymentFailed direct, TicketingFailed via CompensatingRefund)
+        // converge here — the seats are released either way, then the order is finally cancelled.
+        During(CompensatingSeats,
+            When(SeatsReleasedEvent)
+                .Publish(context => new OrderCancelledIntegrationEvent(
+                    context.Saga.CorrelationId,
+                    context.Saga.UserId,
+                    context.Saga.CancellationReason ?? "Compensation completed.",
+                    DateTimeOffset.UtcNow))
                 .Finalize());
 
         SetCompletedWhenFinalized();

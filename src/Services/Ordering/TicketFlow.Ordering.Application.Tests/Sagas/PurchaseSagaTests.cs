@@ -72,4 +72,86 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         // SetCompletedWhenFinalized() removes the instance — no longer found in any known state.
         Assert.Null(await sagaHarness.Exists(orderId, x => x.AwaitingTickets));
     }
+
+    [Fact]
+    public async Task SeatsConfirmationFailed_cancels_directly_no_compensation_needed()
+    {
+        var orderId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()], 100m, "CreditCard",
+            "A", "a@example.com", DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+
+        await _harness.Bus.Publish(new SeatsConfirmationFailed(orderId, Guid.NewGuid(), "Hold expired."));
+
+        Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "Hold expired."));
+
+        // No compensation commands — nothing was ever charged or issued.
+        Assert.False(await _harness.Published.Any<ReleaseSeats>(x => x.Context.Message.OrderId == orderId));
+        Assert.False(await _harness.Published.Any<RefundPayment>(x => x.Context.Message.OrderId == orderId));
+        Assert.Null(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+    }
+
+    [Fact]
+    public async Task PaymentFailed_releases_seats_then_cancels()
+    {
+        var orderId = Guid.NewGuid();
+        var holdId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), holdId, [Guid.NewGuid()], 100m, "CreditCard",
+            "B", "b@example.com", DateTimeOffset.UtcNow));
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [Guid.NewGuid()], DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+
+        await _harness.Bus.Publish(new PaymentFailed(orderId, "Gateway declined the charge."));
+
+        Assert.True(await _harness.Published.Any<ReleaseSeats>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.HoldId == holdId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+
+        await _harness.Bus.Publish(new SeatsReleased(orderId, holdId, DateTimeOffset.UtcNow));
+
+        Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "Gateway declined the charge."));
+        Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+    }
+
+    [Fact]
+    public async Task TicketingFailed_refunds_then_releases_seats_then_cancels()
+    {
+        var orderId = Guid.NewGuid();
+        var holdId = Guid.NewGuid();
+        var paymentId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), holdId, [Guid.NewGuid()], 100m, "CreditCard",
+            "C", "c@example.com", DateTimeOffset.UtcNow));
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [Guid.NewGuid()], DateTimeOffset.UtcNow));
+        await _harness.Bus.Publish(new PaymentProcessed(orderId, paymentId, 100m, DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingTickets));
+
+        await _harness.Bus.Publish(new TicketingFailed(orderId, "MinIO unreachable."));
+
+        Assert.True(await _harness.Published.Any<RefundPayment>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.PaymentId == paymentId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.CompensatingRefund));
+
+        await _harness.Bus.Publish(new PaymentRefunded(orderId, paymentId, 100m, DateTimeOffset.UtcNow));
+
+        Assert.True(await _harness.Published.Any<ReleaseSeats>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.HoldId == holdId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+
+        await _harness.Bus.Publish(new SeatsReleased(orderId, holdId, DateTimeOffset.UtcNow));
+
+        Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
+            x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "MinIO unreachable."));
+        Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+    }
 }

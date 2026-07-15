@@ -44,6 +44,12 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
     public MyOrderView Apply(OrderConfirmed e, MyOrderView current) =>
         current with { Status = nameof(OrderStatus.Confirmed), ConfirmedAt = e.ConfirmedAt };
 
+    public MyOrderView Apply(OrderPaymentRefunded e, MyOrderView current) =>
+        current with { Status = nameof(OrderStatus.Refunded) };
+
+    public MyOrderView Apply(OrderSeatsReleased e, MyOrderView current) =>
+        current with { Status = nameof(OrderStatus.SeatsReleased) };
+
     public MyOrderView Apply(OrderCancelled e, MyOrderView current) =>
         current with { Status = nameof(OrderStatus.Cancelled), CancelledAt = e.CancelledAt };
 }

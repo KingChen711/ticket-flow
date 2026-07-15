@@ -28,4 +28,7 @@ public sealed class PurchaseState : SagaStateMachineInstance
     public Guid? PaymentId { get; set; }
     public List<string> TicketPdfUrls { get; set; } = [];
     public DateTimeOffset SubmittedAt { get; set; }
+
+    /// <summary>Set on any failure event (Commit 9) — carried through compensation to the final OrderCancelledIntegrationEvent.</summary>
+    public string? CancellationReason { get; set; }
 }

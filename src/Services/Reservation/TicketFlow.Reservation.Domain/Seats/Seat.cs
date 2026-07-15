@@ -46,4 +46,22 @@ public sealed class Seat : Entity<Guid>
 
         Status = SeatStatus.Sold;
     }
+
+    /// <summary>
+    /// Reverses a confirmed sale — the saga's compensation case (Commit 9). By the time
+    /// PurchaseSaga sends ReleaseSeats as compensation (PaymentFailed, or TicketingFailed after
+    /// refund), ConfirmSeats has ALWAYS already run (it's the step before ProcessPayment in the
+    /// happy path), so the seat is Sold, not merely Held — a real gap found while implementing
+    /// Commit 9: the pre-existing ReleaseAsync/ReleaseHoldScript path only ever releases an
+    /// active Redis hold, which no longer exists by the time compensation fires (ConfirmHoldScript
+    /// deletes it). No-op (not a throw) if already Available — this method is called from an
+    /// idempotent compensation path that may run more than once for the same order.
+    /// </summary>
+    public void MarkAvailable()
+    {
+        if (Status != SeatStatus.Sold)
+            return;
+
+        Status = SeatStatus.Available;
+    }
 }
