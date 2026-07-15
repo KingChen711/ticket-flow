@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Scalar.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
+    <ProjectReference Include="..\TicketFlow.Analytics.Application\TicketFlow.Analytics.Application.csproj" />
+    <ProjectReference Include="..\TicketFlow.Analytics.Infrastructure\TicketFlow.Analytics.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

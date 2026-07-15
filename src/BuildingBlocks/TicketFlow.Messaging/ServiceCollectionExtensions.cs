@@ -34,8 +34,14 @@ public static class ServiceCollectionExtensions
     /// (AddProducer, no AddConsumer/TopicEndpoint) auto-creates its topic on first Produce() —
     /// no admin pre-step needed for producer-only callers like Ordering. A consumer that
     /// subscribes via TopicEndpoint to a topic that doesn't exist yet crashes bus startup
-    /// entirely, so any future consumer-side caller (Commit 7's analytics-service) will need its
-    /// own explicit topic-creation-on-startup step before calling this.
+    /// entirely, so any consumer-side caller (Commit 7's Analytics) needs its own explicit
+    /// topic-creation-on-startup step (via Confluent.Kafka.Admin.IAdminClient) before calling
+    /// this.
+    ///
+    /// `configureKafkaFactory` is the Kafka-specific analog of `configureRabbitMq` — same reason
+    /// it exists: `configureKafka` only sees IRiderRegistrationConfigurator (AddProducer/
+    /// AddConsumer registration), not IKafkaFactoryConfigurator, which is where TopicEndpoint
+    /// (consumer subscription) actually lives. Runs after `.Host(...)` is set.
     /// </summary>
     public static IServiceCollection AddTicketFlowMessaging(
         this IServiceCollection services,
@@ -43,7 +49,8 @@ public static class ServiceCollectionExtensions
         string serviceName,
         Action<IBusRegistrationConfigurator>? configure = null,
         Action<IBusRegistrationContext, IRabbitMqBusFactoryConfigurator>? configureRabbitMq = null,
-        Action<IRiderRegistrationConfigurator>? configureKafka = null)
+        Action<IRiderRegistrationConfigurator>? configureKafka = null,
+        Action<IRiderRegistrationContext, IKafkaFactoryConfigurator>? configureKafkaFactory = null)
     {
         var host = configuration["RabbitMq:Host"]
             ?? throw new InvalidOperationException("Configuration 'RabbitMq:Host' was not found.");
@@ -89,7 +96,11 @@ public static class ServiceCollectionExtensions
                 busConfigurator.AddRider(riderConfigurator =>
                 {
                     configureKafka(riderConfigurator);
-                    riderConfigurator.UsingKafka((_, kafkaConfigurator) => kafkaConfigurator.Host(kafkaHost));
+                    riderConfigurator.UsingKafka((context, kafkaConfigurator) =>
+                    {
+                        kafkaConfigurator.Host(kafkaHost);
+                        configureKafkaFactory?.Invoke(context, kafkaConfigurator);
+                    });
                 });
             }
         });

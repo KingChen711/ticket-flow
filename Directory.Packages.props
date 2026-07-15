@@ -71,6 +71,16 @@
     -->
     <PackageVersion Include="MassTransit.Kafka" Version="8.5.10" />
     <!--
+      Phase 6 Commit 7 — ClickHouse client for Analytics. MIT license, ADO.NET-style
+      (DbConnection/DbCommand). No net10.0-specific target (only net8.0/.NETStandard2.1/.NET
+      Framework) but forward-compatible, same as MongoDB.Driver's pin above. Confirmed via a real
+      probe against a live ClickHouse container: named parameters use {name:Type} placeholder
+      syntax in the SQL text (not a magic AddParameter helper — standard DbCommand.CreateParameter
+      + Parameters.Add), and ReplacingMergeTree only dedups on background merge — SELECT ... FINAL
+      is what gives correct deduped results at query time without forcing an OPTIMIZE.
+    -->
+    <PackageVersion Include="ClickHouse.Client" Version="7.14.0" />
+    <!--
       Event store + document DB for Ordering (Phase 4, Ch7). MIT license, confirmed via nuspec
       to ship a first-class net10.0 target (not just netstandard fallback) — no license
       trap here, unlike MassTransit/MediatR.

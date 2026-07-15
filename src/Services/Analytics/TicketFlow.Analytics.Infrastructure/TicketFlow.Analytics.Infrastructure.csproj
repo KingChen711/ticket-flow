@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Needed for Microsoft.Extensions.Diagnostics.HealthChecks (IHealthCheck), same reason
+         Search/Recommendation/Catalog Infrastructure reference it for their own health checks. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClickHouse.Client" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TicketFlow.Analytics.Application\TicketFlow.Analytics.Application.csproj" />
+  </ItemGroup>
+
+</Project>

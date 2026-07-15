@@ -10,6 +10,11 @@
     <Project Path="src/Gateway/TicketFlow.Gateway/TicketFlow.Gateway.csproj" />
   </Folder>
   <Folder Name="/src/Services/" />
+  <Folder Name="/src/Services/Analytics/">
+    <Project Path="src/Services/Analytics/TicketFlow.Analytics.Api/TicketFlow.Analytics.Api.csproj" />
+    <Project Path="src/Services/Analytics/TicketFlow.Analytics.Application/TicketFlow.Analytics.Application.csproj" />
+    <Project Path="src/Services/Analytics/TicketFlow.Analytics.Infrastructure/TicketFlow.Analytics.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Services/Catalog/">
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Api/TicketFlow.Catalog.Api.csproj" />
     <Project Path="src/Services/Catalog/TicketFlow.Catalog.Application/TicketFlow.Catalog.Application.csproj" />

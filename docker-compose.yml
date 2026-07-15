@@ -140,6 +140,26 @@ services:
       mongodb:
         condition: service_healthy
 
+  analytics:
+    build:
+      context: .
+      dockerfile: src/Services/Analytics/TicketFlow.Analytics.Api/Dockerfile
+    container_name: ticketflow-analytics
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8010:8010"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      # kafka has no healthcheck (docker-compose.infra.yml) — service_started is the strongest
+      # signal available; KafkaTopicSetup.EnsureCreatedAsync still races the broker being fully
+      # ready to serve admin requests, same as every other Kafka dependency in this stack.
+      kafka:
+        condition: service_started
+
   gateway:
     build:
       context: .
