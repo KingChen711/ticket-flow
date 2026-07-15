@@ -25,13 +25,25 @@ public static class ServiceCollectionExtensions
     /// the SAME RabbitMQ queue and become competing consumers instead of each getting its own
     /// copy of the message, silently breaking fan-out. Caught via docker-first verification:
     /// RabbitMQ Management API showed "consumers": 2 on a single queue instead of 2 queues.
+    ///
+    /// `configureKafka` is opt-in Kafka Rider wiring (Phase 6 Commit 6) — attaches alongside the
+    /// RabbitMQ transport on the same bus, not a replacement. RabbitMQ stays the default for
+    /// every service's commands/sagas (Phase 6 mục 3); Kafka Rider is only for the one analytics
+    /// stream (SaleRecorded) that actually needs stream/replay semantics. Confirmed via a real
+    /// probe against a live Kafka broker before wiring this in: a producer-only Rider
+    /// (AddProducer, no AddConsumer/TopicEndpoint) auto-creates its topic on first Produce() —
+    /// no admin pre-step needed for producer-only callers like Ordering. A consumer that
+    /// subscribes via TopicEndpoint to a topic that doesn't exist yet crashes bus startup
+    /// entirely, so any future consumer-side caller (Commit 7's analytics-service) will need its
+    /// own explicit topic-creation-on-startup step before calling this.
     /// </summary>
     public static IServiceCollection AddTicketFlowMessaging(
         this IServiceCollection services,
         IConfiguration configuration,
         string serviceName,
         Action<IBusRegistrationConfigurator>? configure = null,
-        Action<IBusRegistrationContext, IRabbitMqBusFactoryConfigurator>? configureRabbitMq = null)
+        Action<IBusRegistrationContext, IRabbitMqBusFactoryConfigurator>? configureRabbitMq = null,
+        Action<IRiderRegistrationConfigurator>? configureKafka = null)
     {
         var host = configuration["RabbitMq:Host"]
             ?? throw new InvalidOperationException("Configuration 'RabbitMq:Host' was not found.");
@@ -68,6 +80,18 @@ public static class ServiceCollectionExtensions
 
                 rabbitConfigurator.ConfigureEndpoints(context);
             });
+
+            if (configureKafka is not null)
+            {
+                var kafkaHost = configuration["Kafka:Host"]
+                    ?? throw new InvalidOperationException("Configuration 'Kafka:Host' was not found.");
+
+                busConfigurator.AddRider(riderConfigurator =>
+                {
+                    configureKafka(riderConfigurator);
+                    riderConfigurator.UsingKafka((_, kafkaConfigurator) => kafkaConfigurator.Host(kafkaHost));
+                });
+            }
         });
 
         return services;

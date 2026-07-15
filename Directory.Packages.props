@@ -64,6 +64,13 @@
     -->
     <PackageVersion Include="MassTransit.Marten" Version="8.5.10" />
     <!--
+      Phase 6 Commit 6 — Kafka Rider. Same 8.5.10 free/OSS line as core MassTransit, Apache-2.0,
+      confirmed to ship a first-class net10.0 target. Confirmed via a real probe against a live
+      Kafka broker (produce -> real topic -> consume, full round-trip match) before wiring this
+      into AddTicketFlowMessaging — see that file's doc comment for the topic-creation findings.
+    -->
+    <PackageVersion Include="MassTransit.Kafka" Version="8.5.10" />
+    <!--
       Event store + document DB for Ordering (Phase 4, Ch7). MIT license, confirmed via nuspec
       to ship a first-class net10.0 target (not just netstandard fallback) — no license
       trap here, unlike MassTransit/MediatR.

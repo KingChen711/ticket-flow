@@ -111,11 +111,30 @@ services:
       timeout: 5s
       retries: 10
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: ticketflow-clickhouse
+    environment:
+      CLICKHOUSE_USER: ticketflow
+      CLICKHOUSE_PASSWORD: ticketflow
+      CLICKHOUSE_DB: analytics
+    ports:
+      - "8123:8123"
+      - "9010:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
   minio-data:
   es-data:
   mongo-data:
+  clickhouse-data:
 
 networks:
   default:

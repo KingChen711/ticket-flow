@@ -1,9 +1,12 @@
 using MassTransit;
+using Microsoft.Extensions.DependencyInjection;
+using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Contracts.Messaging.Notification;
 using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Contracts.Messaging.Reservation;
 using TicketFlow.Contracts.Messaging.Ticketing;
+using TicketFlow.Ordering.Application.Abstractions;
 
 namespace TicketFlow.Ordering.Application.Sagas;
 
@@ -121,6 +124,36 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
         During(AwaitingTickets,
             When(TicketsIssuedEvent)
                 .Then(context => context.Saga.TicketPdfUrls = [.. context.Message.TicketPdfUrls])
+                // Same business moment as OrderCompleted/NotifyOrderCompleted below, different
+                // transport (Kafka, not RabbitMQ) and different purpose (analytics stream, not a
+                // command/notification) — Phase 6 mục 3's "2 transport, 2 mục đích" made concrete.
+                // Ordered before the two Publish calls, not after: Finalize() must directly follow
+                // a synchronous DSL activity — placing ThenAsync immediately before Finalize()
+                // causes Finalize() to silently never run (saga instance stays un-removed),
+                // confirmed by re-running this suite repeatedly with a temporary diagnostic that
+                // showed ThenAsync completing cleanly yet the instance still existing afterward.
+                //
+                // ISaleRecordedPublisher is deliberately resolved HERE (consume-time, via the
+                // scope's IServiceProvider), not constructor-injected into PurchaseSaga. It
+                // ultimately depends on ITopicProducer<SaleRecorded>, which the Kafka Rider
+                // attached to this SAME bus provides — constructor-injecting it deadlocks the
+                // whole bus at startup (MassTransit has to construct the saga to register its
+                // endpoint, which needs the Rider's producer, which needs the Rider's own
+                // startup on the bus still being configured). Confirmed by reproducing the exact
+                // hang in an isolated probe with a saga constructor depending on ITopicProducer,
+                // then confirming it disappears once resolved lazily instead.
+                .ThenAsync(async context =>
+                {
+                    var saleRecordedPublisher = context.GetPayload<IServiceProvider>().GetRequiredService<ISaleRecordedPublisher>();
+                    await saleRecordedPublisher.PublishAsync(
+                        new SaleRecorded(
+                            context.Saga.CorrelationId,
+                            context.Saga.CatalogEventId,
+                            context.Saga.SeatIds.Count,
+                            context.Saga.Amount,
+                            DateTimeOffset.UtcNow),
+                        context.CancellationToken);
+                })
                 .Publish(context => new OrderCompleted(
                     context.Saga.CorrelationId,
                     context.Saga.UserId,

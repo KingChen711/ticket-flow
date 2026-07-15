@@ -1,10 +1,13 @@
 using MassTransit;
 using Scalar.AspNetCore;
+using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Contracts.Reservation;
 using TicketFlow.Messaging;
 using TicketFlow.Ordering.Api.Consumers;
 using TicketFlow.Ordering.Api.Endpoints;
+using TicketFlow.Ordering.Api.Messaging;
 using TicketFlow.Ordering.Application;
+using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Infrastructure;
 using TicketFlow.Web;
@@ -15,6 +18,7 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
 builder.Services.AddOrderingInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ISaleRecordedPublisher, KafkaSaleRecordedPublisher>();
 
 builder.Services.AddGrpcClient<ReservationService.ReservationServiceClient>(options =>
 {
@@ -43,6 +47,12 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     cfg.AddConsumer<OrderPaymentRefundedConsumer>();
     cfg.AddConsumer<OrderSeatsReleasedConsumer>();
     cfg.AddConsumer<OrderCancelledConsumer>();
+}, configureKafka: rider =>
+{
+    // Producer-only — Ordering never consumes from Kafka. Confirmed via a real probe: this
+    // auto-creates the "sale-recorded" topic on first Produce(), no admin pre-step needed here
+    // (unlike a consumer subscribing via TopicEndpoint, which would need one).
+    rider.AddProducer<SaleRecorded>("sale-recorded");
 });
 
 var app = builder.Build();

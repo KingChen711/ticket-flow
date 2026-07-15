@@ -190,12 +190,26 @@ tags: [ticketflow, phase-6, plan, elasticsearch, mongodb, clickhouse, kafka, agg
 
 ## Nhóm D — Analytics + Kafka Rider + ClickHouse
 
-### Commit 6 — `feat(infra): ClickHouse + Kafka Rider + ordering produces SaleRecorded`
-- **🐛 Probe TRƯỚC:** `MassTransit.Kafka` Rider 8.5.x + net10 — reflection probe `AddRider`/`AddProducer`/topic consumer API (như Marten Phase 5). Fallback `Confluent.Kafka` nếu Rider hạn chế. Ghi lựa chọn cuối.
-- `docker-compose.infra.yml`: thêm `clickhouse` (healthcheck `wget :8123/ping`).
-- **Mở rộng `AddTicketFlowMessaging`** thêm Kafka Rider (giữ RabbitMQ nguyên) — API optional, không phá service cũ (giống cách thêm `configureRabbitMq` ở Phase 5 Commit 7).
-- Contract `SaleRecorded(OrderId, EventId, SeatCount, Amount, CompletedAt)`. `ordering` produce lên **Kafka topic** ngay điểm publish `OrderCompleted` (RabbitMQ) — 2 transport, 2 mục đích.
-- **Verify thật:** ClickHouse healthy; Kafka Rider `Bus/Rider started`; chạy luồng mua vé thật → dùng Kafka console consumer (hoặc scratch app) xác nhận `SaleRecorded` **thật** trên topic.
+### Commit 6 — `feat(infra): ClickHouse + Kafka Rider + ordering produces SaleRecorded` ✅ DONE
+- **Probe TRƯỚC xác nhận `MassTransit.Kafka` 8.5.10 dùng được:** Apache-2.0, cùng dòng free/OSS với core MassTransit, net10.0 target đầy đủ. Round-trip thật (produce → Kafka thật → consume) qua `AddRider`/`AddProducer`/`AddConsumer`+`TopicEndpoint` khớp dữ liệu 100%. Không cần fallback `Confluent.Kafka` thô.
+- **2 phát hiện thật về topic qua probe:** (1) producer-only (`AddProducer`, không `AddConsumer`/`TopicEndpoint`) tự tạo topic khi `Produce()` lần đầu — Ordering (chỉ produce) không cần bước admin nào; (2) consumer subscribe (`TopicEndpoint`) vào topic **chưa tồn tại** làm **crash toàn bộ bus lúc start** (không tự tạo được) — lưu ý này dành cho Commit 7 (Analytics, có consumer), cần `IAdminClient.CreateTopicsAsync` (idempotent, bỏ qua lỗi `TopicAlreadyExists`) trước khi gọi `AddTicketFlowMessaging`.
+- `docker-compose.infra.yml`: thêm `clickhouse:24.8` (user/pass `ticketflow`, DB `analytics`, port native **9010→9000** — 9000 đã bị MinIO chiếm ở host, healthcheck `wget :8123/ping`).
+- Mở rộng `AddTicketFlowMessaging` thêm tham số optional `configureKafka` (Kafka Rider) — giữ RabbitMQ nguyên, chỉ bật khi caller truyền vào (Ordering là caller đầu tiên). `Kafka:Host` đọc từ config riêng, chỉ throw nếu `configureKafka` thật sự được dùng.
+- Contract `SaleRecorded(OrderId, EventId, SeatCount, Amount, CompletedAt)` trong `TicketFlow.Contracts.Messaging.Analytics` — sản phẩm của `PurchaseSaga`, publish đúng lúc `TicketsIssuedEvent` xảy ra, cùng thời điểm với `OrderCompleted`/`NotifyOrderCompleted` (RabbitMQ) — 2 transport, 2 mục đích, đúng minh hoạ.
+
+- **🐛 Bug thật nghiêm trọng nhất phase — Ordering treo vô thời hạn lúc start khi bật Kafka Rider, không log lỗi, không crash.** Debug kéo dài qua nhiều vòng bisect bằng probe container thật (không đoán):
+  1. Loại trừ network/Kafka broker: TCP + Kafka admin API từ trong container đều OK.
+  2. Loại trừ tổ hợp RabbitMQ+Kafka Rider: probe tối giản (không saga) chạy y hệt network thật của Ordering — **OK, 270ms**.
+  3. Loại trừ Marten: thêm saga Marten thật (Postgres thật) vào probe đó — **vẫn OK, 1327ms**.
+  4. Loại trừ 7 consumer: xoá hết khỏi Ordering thật, chỉ còn saga + Kafka — **vẫn treo y hệt**.
+  5. **Tìm ra:** `PurchaseSaga`'s constructor phụ thuộc trực tiếp `ITopicProducer<SaleRecorded>` (qua wrapper `ISaleRecordedPublisher`) — khi Rider gắn **cùng bus** với saga, MassTransit phải khởi tạo saga (để đăng ký endpoint) *trong lúc* đang khởi tạo chính cái bus mà Rider's producer sống trên đó → **deadlock DI vòng tròn**. Tái hiện thành công trong probe tối giản (saga có constructor phụ thuộc `ITopicProducer<T>`) — treo y hệt; xoá dependency đó thì hết treo. Đây không phải lỗi Kafka hay Marten hay RabbitMQ riêng lẻ — là tương tác cụ thể "saga's constructor cần producer từ Rider gắn cùng bus".
+  - **Fix:** không constructor-inject `ISaleRecordedPublisher` vào `PurchaseSaga` nữa. Resolve **lúc consume message** (bus đã start xong, an toàn) qua `context.GetPayload<IServiceProvider>().GetRequiredService<ISaleRecordedPublisher>()` bên trong `.ThenAsync(...)`. `ISaleRecordedPublisher` (port Application, không lộ `MassTransit.Kafka` ra khỏi Application layer — giữ đúng ranh giới "Application chỉ biết core MassTransit" đã có sẵn cho `IIntegrationEventPublisher`) implement bởi `KafkaSaleRecordedPublisher` ở Ordering.Api (composition root, giống `MassTransitIntegrationEventPublisher`/`MartenRepository()`).
+  - **Bug phụ tìm thấy cùng lúc:** `.ThenAsync(...)` đặt **ngay trước** `.Finalize()` trong state machine DSL làm `Finalize()` **âm thầm không chạy** (saga instance không bị xoá dù `ThenAsync` chạy xong sạch sẽ, không exception) — xác nhận qua unit test full-suite fail lặp lại nhiều lần với diagnostic riêng. Fix: đặt `.ThenAsync(...)` **trước** 2 `.Publish(...)` thay vì sau — `.Finalize()` phải theo ngay sau 1 activity đồng bộ.
+- **Verify thật (Docker, sau khi fix cả 2 bug):**
+  - Ordering start sạch, `/health` = Healthy ngay, log đủ `Bus started: rabbitmq://rabbitmq/` cho từng endpoint (Rider của Kafka Rider không có log Info riêng như RabbitMQ — bằng chứng hoạt động là chức năng thật, không phải 1 dòng log cụ thể).
+  - 2 luồng mua vé thật độc lập (event/user khác nhau) → cả 2 order đều `Confirmed`; topic `sale-recorded` **tự tạo** khi produce lần đầu; `kafka-console-consumer --from-beginning` đọc lại đúng cả 2 message, field khớp 100% với `OrderId`/`EventId`/`SeatCount`/`Amount` thật.
+  - `OrderCompleted`/`NotifyOrderCompleted` (RabbitMQ) vẫn hoạt động song song đúng — order status "Confirmed" chứng minh `OrderCompletedConsumer` (RabbitMQ) chạy bình thường cùng lúc Kafka produce thành công.
+  - Regression suite đầy đủ: **79/79** — bao gồm sửa lại `PurchaseSagaTests` (fake `ISaleRecordedPublisher` thay vì fake toàn bộ `ITopicProducer<T>` — đơn giản hơn nhiều nhờ port riêng ở Application).
 
 ### Commit 7 — `feat(analytics): consume Kafka sales stream → ClickHouse + revenue dashboard`
 - `analytics-service` (mới): Kafka Rider consumer `SaleRecorded` → insert vào ClickHouse `sales` (`ReplacingMergeTree` khoá `OrderId` — dedup at-least-once ở tầng storage engine, mục 4).

@@ -1,11 +1,13 @@
 using MassTransit;
 using MassTransit.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Contracts.Messaging.Notification;
 using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Contracts.Messaging.Reservation;
 using TicketFlow.Contracts.Messaging.Ticketing;
+using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
 
 namespace TicketFlow.Ordering.Application.Tests.Sagas;
@@ -24,6 +26,13 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _provider = new ServiceCollection()
+            // Kafka Rider needs a real broker (Commit 6) — no in-memory analog exists, so
+            // PurchaseSaga's ISaleRecordedPublisher dependency (the Application-layer port, not
+            // MassTransit.Kafka's ITopicProducer directly — see that interface's doc comment) is
+            // faked here instead of wired through AddRider/UsingKafka, same "no RabbitMQ, no
+            // Marten" spirit as the rest of this harness. Produce() to Kafka itself is verified
+            // for real via Docker.
+            .AddSingleton<ISaleRecordedPublisher, FakeSaleRecordedPublisher>()
             .AddMassTransitTestHarness(cfg => cfg.AddSagaStateMachine<PurchaseSaga, PurchaseState>())
             .BuildServiceProvider(true);
 
@@ -154,4 +163,9 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "MinIO unreachable."));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
     }
+}
+
+public sealed class FakeSaleRecordedPublisher : ISaleRecordedPublisher
+{
+    public Task PublishAsync(SaleRecorded message, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
