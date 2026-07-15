@@ -22,17 +22,20 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
 {
     private ServiceProvider _provider = null!;
     private ITestHarness _harness = null!;
+    private FakeSaleRecordedPublisher _saleRecorded = null!;
 
     public async Task InitializeAsync()
     {
+        _saleRecorded = new FakeSaleRecordedPublisher();
+
         _provider = new ServiceCollection()
             // Kafka Rider needs a real broker (Commit 6) — no in-memory analog exists, so
             // PurchaseSaga's ISaleRecordedPublisher dependency (the Application-layer port, not
             // MassTransit.Kafka's ITopicProducer directly — see that interface's doc comment) is
             // faked here instead of wired through AddRider/UsingKafka, same "no RabbitMQ, no
-            // Marten" spirit as the rest of this harness. Produce() to Kafka itself is verified
-            // for real via Docker.
-            .AddSingleton<ISaleRecordedPublisher, FakeSaleRecordedPublisher>()
+            // Marten" spirit as the rest of this harness. The fake CAPTURES what the saga records
+            // so tests can assert on it; Produce() to Kafka itself is verified for real via Docker.
+            .AddSingleton<ISaleRecordedPublisher>(_saleRecorded)
             .AddMassTransitTestHarness(cfg => cfg.AddSagaStateMachine<PurchaseSaga, PurchaseState>())
             .BuildServiceProvider(true);
 
@@ -80,6 +83,16 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
 
         // SetCompletedWhenFinalized() removes the instance — no longer found in any known state.
         Assert.Null(await sagaHarness.Exists(orderId, x => x.AwaitingTickets));
+
+        // The analytics fact (Kafka, Commit 6): exactly one SaleRecorded for this completed order,
+        // fields mapped correctly from saga state. Also locks in that the .ThenAsync(...) publish
+        // actually runs on the happy path — the bug where placing it right before .Finalize() made
+        // it silently skip would surface here as zero captured records.
+        var sale = Assert.Single(_saleRecorded.Published);
+        Assert.Equal(orderId, sale.OrderId);
+        Assert.Equal(catalogEventId, sale.EventId);
+        Assert.Equal(seatIds.Count, sale.SeatCount);
+        Assert.Equal(250.00m, sale.Amount);
     }
 
     [Fact]
@@ -162,10 +175,28 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "MinIO unreachable."));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+
+        // The real invariant: an order that was charged then refunded must NOT count as a sale.
+        // SaleRecorded lives only on the TicketsIssued -> completion path, never on any compensation
+        // branch — so analytics revenue never double-counts a reversed transaction. This is the
+        // failure mode most likely to slip through (payment WAS processed here before ticketing
+        // failed), which is why the negative assertion lands on this branch specifically.
+        Assert.Empty(_saleRecorded.Published);
     }
 }
 
+/// <summary>
+/// Captures what the saga publishes to the analytics (Kafka) stream so tests can assert on it —
+/// the real KafkaSaleRecordedPublisher (Ordering.Api) is exercised via Docker instead (Commit 6).
+/// ConcurrentBag because MassTransit consumes on background threads; a plain List could tear.
+/// </summary>
 public sealed class FakeSaleRecordedPublisher : ISaleRecordedPublisher
 {
-    public Task PublishAsync(SaleRecorded message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public System.Collections.Concurrent.ConcurrentBag<SaleRecorded> Published { get; } = [];
+
+    public Task PublishAsync(SaleRecorded message, CancellationToken cancellationToken = default)
+    {
+        Published.Add(message);
+        return Task.CompletedTask;
+    }
 }
