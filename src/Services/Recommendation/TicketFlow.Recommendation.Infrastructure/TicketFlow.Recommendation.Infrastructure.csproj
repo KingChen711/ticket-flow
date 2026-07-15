@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Needed for Microsoft.Extensions.Diagnostics.HealthChecks (IHealthCheck), same reason
+         Search/Reservation/Ordering Infrastructure reference it for their hand-rolled health checks. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Driver" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TicketFlow.Recommendation.Application\TicketFlow.Recommendation.Application.csproj" />
+  </ItemGroup>
+
+</Project>

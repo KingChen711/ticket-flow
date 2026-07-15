@@ -95,10 +95,27 @@ services:
       timeout: 5s
       retries: 30
 
+  mongodb:
+    image: mongo:7
+    container_name: ticketflow-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ticketflow
+      MONGO_INITDB_ROOT_PASSWORD: ticketflow
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
   minio-data:
   es-data:
+  mongo-data:
 
 networks:
   default:

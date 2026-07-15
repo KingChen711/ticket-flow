@@ -50,6 +50,11 @@
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.IntegrationTests/TicketFlow.Reservation.IntegrationTests.csproj" />
     <Project Path="src/Services/Reservation/TicketFlow.Reservation.LoadTests/TicketFlow.Reservation.LoadTests.csproj" />
   </Folder>
+  <Folder Name="/src/Services/Recommendation/">
+    <Project Path="src/Services/Recommendation/TicketFlow.Recommendation.Api/TicketFlow.Recommendation.Api.csproj" />
+    <Project Path="src/Services/Recommendation/TicketFlow.Recommendation.Application/TicketFlow.Recommendation.Application.csproj" />
+    <Project Path="src/Services/Recommendation/TicketFlow.Recommendation.Infrastructure/TicketFlow.Recommendation.Infrastructure.csproj" />
+  </Folder>
   <Folder Name="/src/Services/Search/">
     <Project Path="src/Services/Search/TicketFlow.Search.Api/TicketFlow.Search.Api.csproj" />
     <Project Path="src/Services/Search/TicketFlow.Search.Application/TicketFlow.Search.Application.csproj" />

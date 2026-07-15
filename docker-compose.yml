@@ -125,6 +125,21 @@ services:
       minio:
         condition: service_healthy
 
+  recommendation:
+    build:
+      context: .
+      dockerfile: src/Services/Recommendation/TicketFlow.Recommendation.Api/Dockerfile
+    container_name: ticketflow-recommendation
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+    ports:
+      - "8009:8009"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
   gateway:
     build:
       context: .

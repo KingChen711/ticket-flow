@@ -102,5 +102,14 @@
       compatibility, not a hard requirement to match patch versions).
     -->
     <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="8.19.23" />
+    <!--
+      Phase 6 Commit 3 — official MongoDB driver, Apache-2.0. Latest 3.10.0 has no net10.0-specific
+      target group (only net6.0/.NETStandard2.1) but is forward-compatible. Confirmed via a real
+      probe against a live mongo:7 container that v3.x removed the old implicit "CSharpLegacy" Guid
+      representation — BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.
+      Standard)) must be called explicitly at startup or any Guid-typed field throws
+      BsonSerializationException.
+    -->
+    <PackageVersion Include="MongoDB.Driver" Version="3.10.0" />
   </ItemGroup>
 </Project>
