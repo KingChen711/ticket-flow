@@ -30,5 +30,13 @@ public static class SearchEndpoints
 
             return Results.Ok(await searchIndex.SearchAsync(query, ct));
         }).WithTags("Search");
+
+        // Direct doc lookup by EventId — Commit 4 (Recommendation resolves Artist/VenueName/City
+        // for a purchased EventId this way instead of duplicating Search's index).
+        app.MapGet("/events/{id:guid}", async (Guid id, IEventSearchIndex searchIndex, CancellationToken ct) =>
+        {
+            var document = await searchIndex.GetByIdAsync(id, ct);
+            return document is null ? Results.NotFound() : Results.Ok(document);
+        }).WithTags("Search");
     }
 }

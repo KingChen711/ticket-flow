@@ -148,10 +148,24 @@ tags: [ticketflow, phase-6, plan, elasticsearch, mongodb, clickhouse, kafka, agg
   - Dọn dữ liệu scratch (`purchaseHistory.deleteMany({})`) sau khi verify xong; giữ lại order/seat/inventory thật đã tạo qua REST (không phải bơm thẳng DB) làm dữ liệu thật của hệ thống, cùng tinh thần với các event verify ở Commit 2.
   - Regression suite đầy đủ: **79/79** (Recommendation không có Domain/unit test, giống Search — verify hoàn toàn qua Docker thật).
 
-### Commit 4 — `feat(recommendation): simple recommendations query endpoint`
-- Logic gợi ý (đơn giản, không ML): same-artist / same-venue từ purchase history + popular (top mua nhiều) cho cold-start. Cần "catalog events theo artist/venue" — qua ES (Commit 2 đã index) hoặc read model riêng; **chốt lúc code** (nghiêng về hỏi ES — tránh recommendation giữ bản sao catalog).
-- **REST endpoint** `GET /recommendations?userId=` → list event gợi ý (rỗng-an-toàn nếu user chưa có lịch sử → trả popular).
-- **Verify thật:** user có lịch sử mua artist A → gợi ý event khác của A; user mới → trả popular; verify qua gateway/REST thật.
+### Commit 4 — `feat(recommendation): simple recommendations query endpoint` ✅ DONE
+- **Chốt "hỏi ES":** Recommendation không giữ bản sao Artist/VenueName/City — gọi thật qua HTTP REST sang Search service (`http://search:8006`), đúng tinh thần "nghiêng về hỏi ES" đã ghi ở draft, và là bản preview nhỏ của chính idiom Aggregator (Ch5, Commit 5) sẽ dùng — 1 service gọi REST service khác thay vì share code/DB.
+- **2 việc nhỏ, có chủ đích, thêm vào Search (Commit 2) để phục vụ Commit 4 — không đụng lại quyết định đã chốt của Commit 2:**
+  - Thêm `IEventSearchIndex.GetByIdAsync` + `GET /events/{id:guid}` — lookup thẳng theo `_id=EventId` (ES `GetAsync<T>`, không qua Bool-query), tách biệt hoàn toàn khỏi `SearchAsync` (method đã bị đánh dấu `[Obsolete]` ở Commit 2 bởi linter/user — code mới không đụng vào đường đó).
+  - **Không thêm filter `venueName` vào `GET /events`** — Commit 2 đã ghi rõ quyết định "no VenueName filter param" trong doc-comment của `SearchEventsQuery`. Tôn trọng quyết định đó: "same venue" được làm bằng cách gọi `GET /events?city=` (filter đã có, đã test ở Commit 2) rồi so khớp `VenueName` chính xác ở phía client (`GetRecommendationsQueryHandler`), không mở lại contract của Search.
+- **`GetPopularEventIdsAsync` — MongoDB aggregation pipeline (`Unwind` → `Group` → `SortByDescending` → `Limit`), API chưa từng đụng ở Commit 3, probe thật trước khi viết production code (seed 3 user mua chồng lấn eventA/B/C, xác nhận thứ tự phổ biến đúng):**
+  - `Group()` bản fluent-typed không có overload khớp "đếm số lần xuất hiện sau Unwind" — phải dùng `BsonDocument` thô cho stage này (`{ _id: "$PurchasedEventIds", count: { $sum: 1 } }`).
+  - Kết quả trả về `_id` dạng `BsonBinaryData` (subtype 04) — `doc["_id"].AsGuid` round-trip đúng về Guid gốc **chỉ khi** `GuidRepresentation.Standard` đã được đăng ký toàn cục (kế thừa fix của Commit 3), xác nhận qua probe thật trước khi đưa vào `MongoPurchaseHistoryStore`.
+- **Thuật toán (đơn giản, đúng "tránh vàng hoá"):** user có lịch sử → với mỗi `EventId` đã mua, gọi Search lấy Artist/VenueName/City → gom ứng viên cùng nghệ sĩ (`GET /events?artist=`) + cùng venue (như trên) → loại trùng + loại chính event đã mua, cap 10 kết quả. User không có lịch sử, hoặc lịch sử không cho ứng viên nào (mọi match đều đã mua) → fallback `GetPopularEventIdsAsync` (đếm theo số user mua phân biệt — tự động đúng nhờ `$addToSet` ở Commit 3 đảm bảo mỗi `(user, event)` chỉ tính 1 lần).
+- **REST endpoint** `GET /recommendations?userId=` → 200 luôn (rỗng-an-toàn khi chưa từng có ai mua vé nào trong toàn hệ thống — trường hợp thực tế duy nhất trả mảng rỗng).
+- **Verify thật (Docker, luồng mua vé thật qua REST, không bơm DB):**
+  - Publish thật 1 event mới ("Son Tung M-TP Solo Show", venue mới "Quan Ngua Stadium") qua Catalog để có 1 sự kiện **cùng nghệ sĩ, khác venue** với sự kiện có sẵn trong ES ("Son Tung M-TP" @ "My Dinh National Stadium" — còn lại từ dữ liệu verify Commit 2/3); ES đã sẵn 1 sự kiện thứ 3 **khác nghệ sĩ, cùng venue My Dinh** ("Ngot Band Acoustic Night").
+  - User thật mua vé sự kiện "Son Tung M-TP @ My Dinh" (hold → order → saga → `OrderCompleted` → Mongo) → gọi `GET /recommendations?userId=` → nhận đúng **cả 2** gợi ý cùng lúc: "Son Tung M-TP Solo Show" (same-artist) và "Ngot Band Acoustic Night" (same-venue) — event vừa mua bị loại đúng khỏi kết quả.
+  - User mới hoàn toàn, chưa từng mua vé → `GET /recommendations?userId=` trả **popular** (event duy nhất đã có người mua tại thời điểm test), không lỗi, không rỗng khi hệ thống đã có ít nhất 1 giao dịch.
+  - Log 2 container (`recommendation`, `search`) sạch — mọi HTTP call nội bộ `recommendation → search` đều 200, không exception.
+  - Gateway **chưa route** `/recommendations` (đúng như Search cũng chưa được route — route hoá dời sang Commit 8 "finalize routes"), nên verify qua cổng REST trực tiếp (8009), đúng cách Commit 2 đã verify Search qua cổng 8006 trực tiếp.
+  - Dọn dữ liệu scratch (`purchaseHistory.deleteMany({})`); giữ lại venue/event/order/seat thật đã tạo qua REST làm dữ liệu thật của hệ thống.
+  - Regression suite đầy đủ: **79/79** (không có Domain/unit test mới — Recommendation vẫn theo đúng pattern no-Domain-layer của Search).
 
 ---
 

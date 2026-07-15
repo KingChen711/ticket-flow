@@ -20,5 +20,11 @@ public interface IEventSearchIndex
     /// <summary>Used on CatalogEventCancelled — cancelled events are removed from search results entirely (not just flagged).</summary>
     Task DeleteAsync(Guid eventId, CancellationToken cancellationToken = default);
 
+    /// <summary>Single-document lookup by the same _id=EventId scheme Upsert/Delete already use — a
+    /// direct ES get, not a Bool-query search. Added for Commit 4 (Recommendation needs Artist/
+    /// VenueName/City for a purchased EventId) without touching SearchAsync/SearchEventsQuery's
+    /// already-decided filter contract (Commit 2: no VenueName filter param).</summary>
+    Task<SearchDocument?> GetByIdAsync(Guid eventId, CancellationToken cancellationToken = default);
+
     Task<SearchEventsResult> SearchAsync(SearchEventsQuery query, CancellationToken cancellationToken = default);
 }

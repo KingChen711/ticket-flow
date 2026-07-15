@@ -30,6 +30,12 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
     public async Task DeleteAsync(Guid eventId, CancellationToken cancellationToken = default) =>
         await client.DeleteAsync<SearchDocument>(eventId.ToString(), d => d.Index(indexName), cancellationToken);
 
+    public async Task<SearchDocument?> GetByIdAsync(Guid eventId, CancellationToken cancellationToken = default)
+    {
+        var response = await client.GetAsync<SearchDocument>(eventId.ToString(), g => g.Index(indexName), cancellationToken);
+        return response.Found ? response.Source : null;
+    }
+
     [Obsolete]
     public async Task<SearchEventsResult> SearchAsync(SearchEventsQuery query,
         CancellationToken cancellationToken = default)

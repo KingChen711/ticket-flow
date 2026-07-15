@@ -1,3 +1,5 @@
+using TicketFlow.Recommendation.Application.Purchases;
+
 namespace TicketFlow.Recommendation.Application.Abstractions;
 
 /// <summary>
@@ -11,4 +13,10 @@ public interface IPurchaseHistoryStore
 {
     /// <summary>Idempotent by construction — recording the same (UserId, EventId) twice does not duplicate the EventId.</summary>
     Task RecordPurchaseAsync(Guid userId, Guid eventId, DateTimeOffset purchasedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>Null when the user has never completed a purchase — the cold-start case Commit 4 falls back to popular for.</summary>
+    Task<PurchaseHistoryDocument?> GetAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>EventIds ordered by how many distinct users purchased them, most-purchased first — cold-start fallback.</summary>
+    Task<IReadOnlyList<Guid>> GetPopularEventIdsAsync(int take, CancellationToken cancellationToken = default);
 }
