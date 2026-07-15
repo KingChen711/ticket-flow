@@ -18,6 +18,8 @@
     <PackageReference Include="QuestPDF" />
     <PackageReference Include="QRCoder" />
     <PackageReference Include="Minio" />
+    <!-- TicketingDbContext's Inbox/Outbox entity mappings (Commit 8) — same package Payment uses. -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" />
   </ItemGroup>
 
   <ItemGroup>
