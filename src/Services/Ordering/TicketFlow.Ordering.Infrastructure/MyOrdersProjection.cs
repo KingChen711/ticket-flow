@@ -33,23 +33,43 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         null);
 
     public MyOrderView Apply(OrderSeatsConfirmed e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.SeatsConfirmed) };
+        WithIntermediateStatus(current, OrderStatus.SeatsConfirmed);
 
     public MyOrderView Apply(OrderPaymentAuthorized e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.PaymentAuthorized) };
+        WithIntermediateStatus(current, OrderStatus.PaymentAuthorized);
 
     public MyOrderView Apply(OrderTicketsIssued e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.TicketsIssued) };
+        WithIntermediateStatus(current, OrderStatus.TicketsIssued);
 
     public MyOrderView Apply(OrderConfirmed e, MyOrderView current) =>
         current with { Status = nameof(OrderStatus.Confirmed), ConfirmedAt = e.ConfirmedAt };
 
     public MyOrderView Apply(OrderPaymentRefunded e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.Refunded) };
+        WithIntermediateStatus(current, OrderStatus.Refunded);
 
     public MyOrderView Apply(OrderSeatsReleased e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.SeatsReleased) };
+        WithIntermediateStatus(current, OrderStatus.SeatsReleased);
 
     public MyOrderView Apply(OrderCancelled e, MyOrderView current) =>
         current with { Status = nameof(OrderStatus.Cancelled), CancelledAt = e.CancelledAt };
+
+    /// <summary>
+    /// Monotonic guard (Commit 10) — real race found while re-verifying the compensation DoD:
+    /// OrderSeatsReleasedConsumer and OrderCancelledConsumer both react independently to the same
+    /// underlying SeatsReleased delivery (one via the saga's own SeatsReleased handler that then
+    /// publishes OrderCancelledIntegrationEvent, one via this projection's own direct consumer) —
+    /// RabbitMQ gives no ordering guarantee between two separately-queued consumers of the same
+    /// message, so OrderCancelled can occasionally get folded BEFORE OrderSeatsReleased, and
+    /// without this guard the later Apply would silently regress Status from the terminal
+    /// Cancelled back to the intermediate SeatsReleased. Once a stream reaches a terminal status
+    /// (Confirmed/Cancelled), no intermediate milestone may downgrade it — the terminal event
+    /// itself is still the one that recorded the real outcome; only the read model's display
+    /// value was at risk. The underlying event STREAM can still show the two events in either
+    /// relative order (a real, smaller audit-trail imperfection, not fixed here — see
+    /// phase-5-plan.md Commit 10).
+    /// </summary>
+    private static MyOrderView WithIntermediateStatus(MyOrderView current, OrderStatus status) =>
+        current.Status is nameof(OrderStatus.Confirmed) or nameof(OrderStatus.Cancelled)
+            ? current
+            : current with { Status = status.ToString() };
 }

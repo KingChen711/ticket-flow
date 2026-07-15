@@ -99,10 +99,10 @@ flowchart TB
 | **catalog-service** | Sự kiện, venue, sơ đồ ghế, hạng giá | PostgreSQL | — | 8002 / 9002 |
 | **reservation-service** | Giữ chỗ (hold có TTL), tình trạng ghế, chống overselling | Redis (lock/hold) | PostgreSQL (chốt) | 8003 / 9003 |
 | **ordering-service** | Vòng đời đơn hàng, **host Saga** (event-sourced + CQRS) | PostgreSQL (Marten) | — | 8004 / 9004 |
-| **payment-service** | Thanh toán, ví, hoàn tiền (resiliency) | PostgreSQL | — | 8005 / 9005 |
-| **ticketing-service** | Phát vé, sinh QR/PDF, validate tại cổng | PostgreSQL | MinIO (PDF) | 8006 / 9006 |
-| **search-service** | Tìm sự kiện theo nghệ sĩ/venue/ngày/thành phố | Elasticsearch | — | 8007 |
-| **notification-service** | Email/SMS/push (vé, nhắc lịch) | MongoDB | RabbitMQ | 8008 |
+| **payment-service** | Thanh toán, ví, hoàn tiền (resiliency) | PostgreSQL | — | 8007 (không gRPC — xem Phase 5 quyết định kiến trúc mục 2) |
+| **ticketing-service** | Phát vé, sinh QR/PDF, validate tại cổng | PostgreSQL | MinIO (PDF) | 8008 (không gRPC — xem Phase 5 quyết định kiến trúc mục 2) |
+| **search-service** | Tìm sự kiện theo nghệ sĩ/venue/ngày/thành phố | Elasticsearch | — | 8006 |
+| **notification-service** | Email/SMS/push (vé, nhắc lịch) | MongoDB | RabbitMQ | 8005 |
 | **recommendation-service** | "Sự kiện gợi ý cho bạn" | MongoDB | Redis | 8009 |
 | **analytics-service** | Doanh số, lượt xem, dashboard organizer | ClickHouse | — | 8010 |
 | **media-service** | Poster, ảnh nghệ sĩ, thumbnail (serverless) | MinIO | — | 8011 |
@@ -330,7 +330,7 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 3. Cài **Polly** cho payment: retry + circuit breaker + timeout.
 4. Cài đặt **compensation** đầy đủ; đảm bảo mọi handler idempotent.
 5. Test kịch bản lỗi: payment fail, ticketing fail, timeout hold.
-- **DoD:** mua vé end-to-end thành công; ép lỗi từng bước → hệ tự bù trừ (nhả ghế/hoàn tiền) đúng.
+- **DoD:** ✅ mua vé end-to-end thành công; ✅ ép lỗi từng bước → hệ tự bù trừ (nhả ghế/hoàn tiền) đúng. **Hoàn thành 2026-07-15** — verify qua `docker compose up` (14 container) + PurchaseSaga (MassTransit state machine, host trong `ordering`) điều phối 4 participant thật (reservation/payment/ticketing/notification) qua RabbitMQ, không mock. Happy path cuối cùng xác nhận toàn chuỗi thật: hold ghế → đặt hàng → `Order.Status = Confirmed`, ghế `Sold`, thanh toán `Succeeded`, 2 PDF vé thật trong MinIO (QR nhúng sẵn), notification log đúng tên/email khách. Cả 3 kịch bản lỗi DoD (payment fail, ticketing fail, hold không hợp lệ) verify **2 lần độc lập** (Commit 9 phát hiện + Commit 10 xác nhận sạch lại sau fix) — mỗi lần đều ghế nhả/tiền hoàn đúng qua cả Redis lẫn Postgres. Xem [docs/phase-5-plan.md](docs/phase-5-plan.md) để biết chi tiết từng commit — phase lớn nhất dự án, gặp nhiều bug thật đáng chú ý: `MassTransit.Marten` không có Outbox (khác EF Core), `ReleaseSeats` chỉ nhả được hold "Held" chứ không "huỷ bán" được ghế đã "Sold" (gap kiến trúc thật giữa Phase 2 và saga compensation), và 1 race condition Marten silent (không exception) khiến `MyOrderView.Status` bị milestone trung gian ghi đè lên status terminal.
 
 ### Phase 6 — Search, Aggregator, Recommendation, Analytics *(Ch5 + ES/ClickHouse)* — ~2 tuần
 1. `search-service`: index sự kiện vào **Elasticsearch**, cập nhật theo event.
