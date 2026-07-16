@@ -35,11 +35,6 @@ namespace TicketFlow.Identity.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("display_name");
 
-                    b.Property<string>("PasswordHash")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("password_hash");
-
                     b.Property<string>("Roles")
                         .IsRequired()
                         .HasColumnType("text")

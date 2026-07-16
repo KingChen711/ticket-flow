@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using TicketFlow.Identity.Api.Endpoints;
-using TicketFlow.Identity.Api.Security;
 using TicketFlow.Identity.Application;
 using TicketFlow.Identity.Infrastructure;
 using TicketFlow.Web;
@@ -9,10 +8,10 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddIdentityApplication();
 builder.Services.AddIdentityInfrastructure(builder.Configuration);
 builder.Services.AddOpenApi();
-builder.Services.AddSingleton<DevTokenGenerator>();
 
 var app = builder.Build();
 
@@ -31,6 +30,5 @@ app.MapOpenApi();
 app.MapScalarApiReference();
 
 app.MapUserEndpoints();
-app.MapAuthEndpoints();
 
 app.Run();

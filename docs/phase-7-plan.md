@@ -114,12 +114,26 @@ Fix: tự định nghĩa cả 3 scope trong `clientScopes` với protocol mapper
 - Qua gateway (`:8080`, gateway **chưa** có auth riêng — Commit 4 mới thêm): cùng ma trận organizer `201` / customer `403` / GET không token `200` — chứng minh service tự đứng được, header `Authorization` được YARP forward nguyên vẹn mặc định, không cần cấu hình gì thêm ở gateway cho việc này.
 - Regression: **79/79** (`dotnet test` toàn solution, trừ `TicketFlow.Reservation.LoadTests` — NBomber throughput test, không phải correctness suite) — không có test nào hỏng dù build lại 2 image, xác nhận thay đổi auth không đụng logic nghiệp vụ nào.
 
-### Commit 3 — `feat(identity): Keycloak nhận authN, identity thành user directory`
-- Xoá `DevTokenGenerator` + `POST /dev-token` + `AuthenticateAsync`/password hash khỏi identity (giữ migration cũ, thêm migration drop cột hash — hoặc giữ cột chết có ghi chú, chốt lúc code).
-- `POST /register` → tạo user Keycloak qua **Admin REST API** (`HttpClient` + admin service account client-credentials; probe nhỏ API này lúc code) với Guid định trước + gán role, rồi lưu profile local cùng Guid. Rollback ngược (xoá Keycloak user) nếu lưu local fail — dual-write có bù trừ tối thiểu, ghi rõ trade-off.
-- `GET /users*` → `RequireAdmin` (directory nội bộ không phải public API).
-- **🔑 Hỏi lại trước khi code commit này** nếu dual-write lúc thiết kế chi tiết thấy quá phiền: phương án thay thế là bỏ `POST /register` hẳn, user tạo bằng Keycloak admin console/API trực tiếp, identity chỉ còn read-directory sync thủ công.
-- **Verify thật:** register user mới qua REST → login được ngay bằng Keycloak token endpoint → token mang đúng role; user xuất hiện cả Keycloak admin lẫn `GET /users` (admin token); rollback path test bằng cách ép fail local save.
+### Commit 3 — `feat(identity): Keycloak nhận authN, identity thành user directory` ✅ DONE
+
+- Xoá hẳn `DevTokenGenerator.cs`, `AuthEndpoints.cs` (`POST /dev-token`), `AuthenticateAsync`, `IPasswordHasher`/`Pbkdf2PasswordHasher` — đúng lời hứa doc comment từ Phase 1. `User.PasswordHash` xoá khỏi domain, migration `DropPasswordHash` drop cột thật (không giữ cột chết).
+- `POST /register`: [`KeycloakAdminClient`](../src/Services/Identity/TicketFlow.Identity.Infrastructure/Keycloak/KeycloakAdminClient.cs) (`HttpClient` + client-credentials qua client mới `ticketflow-identity-admin`) tạo user Keycloak **trước**, `UserService.RegisterAsync` lưu profile local **sau** bằng đúng id Keycloak trả về; rollback (`DeleteUserAsync`) nếu bước lưu local throw. `GET /users*` → `RequireAdmin`.
+- **🔑 Checkpoint đã tự giải quyết, không cần hỏi lại:** sau khi probe thật Admin API (xem 3 bug bên dưới), dual-write hoá ra chỉ là 2-3 lệnh HTTP tuần tự + 1 try/catch — không đủ phiền để đổi hướng bỏ `POST /register`. Giữ nguyên thiết kế ban đầu của plan, chỉ đảo ngược thứ tự tạo (Keycloak trước, không phải Guid tự sinh trước) vì lý do ở bug #1.
+
+**🐛 Bug thật #1 — Keycloak KHÔNG tôn trọng `id` do client truyền vào lúc tạo user.** Giả định ban đầu của plan (tự sinh Guid rồi truyền cho Keycloak để 2 bên cùng id) sai — `POST /admin/realms/{realm}/users` với body có `"id": "<guid-tự-chọn>"` vẫn trả `201` nhưng Keycloak **tự gán UUID riêng**, chỉ lấy được qua header `Location` của response. Đảo ngược thứ tự: tạo ở Keycloak trước → parse id thật từ `Location` → dùng đúng id đó cho row local. Đây là lý do `User.Register` đổi chữ ký nhận `Guid id` từ ngoài thay vì tự `Guid.NewGuid()`.
+
+**🐛 Bug thật #2 — mảng `credentials` trong body `POST /users` bị Keycloak Admin API âm thầm bỏ qua.** Khác với `realm-export.json` (import lúc bootstrap — kênh khác, có tôn trọng `credentials`), gọi `POST /users` runtime với `credentials` kèm trong body tạo user **thành công (201) nhưng mật khẩu không được set** (`disableableCredentialTypes` rỗng sau khi tạo) — user tồn tại nhưng không login được, lỗi chỉ hiện ra lúc login (`invalid_grant: Account is not fully set up`), không có cảnh báo gì lúc tạo. Fix: set mật khẩu qua endpoint riêng `PUT /users/{id}/reset-password` sau khi tạo.
+
+**🐛 Bug thật #3 — Declarative User Profile của Keycloak coi `firstName`+`lastName` là bắt buộc theo mặc định.** Domain model của identity-service chỉ có 1 field `DisplayName` (không tách first/last) — tạo user thiếu `lastName` cũng `201` bình thường nhưng login fail với cùng lỗi mập mờ ở bug #2 (`Account is not fully set up`), vì hồ sơ chưa "đủ" theo User Profile schema của realm. Fix triệt để: nhúng cấu hình User Profile (chỉ bắt buộc `username`/`email`/`firstName`, bỏ `lastName`) vào `realm-export.json` qua khối `components` (`org.keycloak.userprofile.UserProfileProvider`) — khớp domain model thật, tái tạo được từ JSON như mọi phần khác của realm. `DisplayName` map thẳng vào `firstName`.
+
+**🐛 Bug thật #4 (nhỏ) — role `manage-users` không đủ quyền đọc role realm.** Service account `ticketflow-identity-admin` chỉ gán `manage-users` (theo đúng dự tính ban đầu của plan) bị `403` khi gọi `GET /roles/{name}` (bước cần thiết để lấy `RoleRepresentation` trước khi gán role cho user mới) — phải thêm `view-realm` vào `clientRoles` của service account trong `realm-export.json`.
+
+**Verify thật:**
+- `POST /register` → `201`, id trả về khớp chính xác id Keycloak thật (`GET /admin/realms/ticketflow/users?email=...`).
+- Login ngay bằng Keycloak token endpoint với email/password vừa đăng ký → token mang đúng role `customer` + `name`/`email` claim đúng.
+- `GET /users` (admin token) → thấy user mới trong danh sách; customer token → `403`; không token → `401`.
+- **Race condition thật** (2 request `POST /register` cùng email, đồng thời): 1 thành công (`201`), 1 fail (`500`) — nhưng phát hiện ra request thua bị **chính Keycloak chặn** (`409` ngay ở bước tạo, do Keycloak tự enforce unique username) chứ không rơi vào nhánh compensation cục bộ (local save fail) như dự tính test ban đầu — nghĩa là Keycloak tự làm luôn vai trò "lưới an toàn thứ 2" cho race vượt qua pre-check phía app. Kết quả cuối: đúng 1 user Keycloak duy nhất với email đó, không có bản ghi mồ côi. **Nhánh compensation cụ thể (Keycloak tạo thành công NHƯNG SaveChanges local fail) đúng về logic qua code review (try/catch đơn giản, đã build/chạy không lỗi) nhưng chưa tự kích hoạt được bằng 1 test hạ tầng thật riêng biệt trong lần verify này** — ghi nhận trung thực thay vì nhận vơ đã test đủ.
+- Regression: **79/79**, không hỏng gì. `docker ps` đủ 20 container, tất cả healthy (kể cả `identity` sau khi migrate + `keycloak` sau khi re-import realm).
 
 ## Nhóm C — Gateway enforce
 
@@ -143,29 +157,30 @@ Fix: tự định nghĩa cả 3 scope trong `clientScopes` với protocol mapper
 
 ```mermaid
 sequenceDiagram
-    actor U as Client (curl / frontend Phase 8)
-    participant KC as Keycloak :8180
-    participant GW as Gateway :8080 (YARP)
+    actor U as Client
+    participant KC as Keycloak
+    participant GW as Gateway YARP
     participant CAT as catalog
     participant ORD as ordering
 
-    U->>KC: POST /realms/ticketflow/protocol/openid-connect/token<br/>(dev: direct grant; Phase 8: auth code + PKCE)
-    KC-->>U: access_token (JWT, realm_access.roles)
+    note right of U: dev dùng direct grant qua curl<br/>Phase 8 dùng auth code + PKCE
+    U->>KC: POST /realms/ticketflow/protocol/openid-connect/token
+    KC-->>U: access_token - JWT, realm_access.roles
 
-    U->>GW: POST /catalog/events (Bearer token)
-    note over GW: Tầng 1 — validate chữ ký/expiry/issuer<br/>(AuthorizationPolicy per-route)
-    GW->>CAT: forward + Authorization header nguyên vẹn
-    note over CAT: Tầng 2 — RequireOrganizer<br/>(service sở hữu business rule)
+    U->>GW: POST /catalog/events, Bearer token
+    note over GW: Tầng 1, validate chữ ký/expiry/issuer<br/>AuthorizationPolicy per-route
+    GW->>CAT: forward, giữ nguyên Authorization header
+    note over CAT: Tầng 2, RequireOrganizer<br/>service sở hữu business rule
     alt token organizer
         CAT-->>U: 201 Created
     else token customer
-        CAT-->>U: 403 Forbidden (DoD!)
+        CAT-->>U: 403 Forbidden - DoD
     end
 
-    U->>GW: POST /ordering/orders (Bearer token)
+    U->>GW: POST /ordering/orders, Bearer token
     GW->>ORD: forward
-    note over ORD: Danh tính từ claims (sub/name/email),<br/>KHÔNG tin body — đóng gap Phase 5
-    ORD-->>U: 201 (order gắn đúng user thật)
+    note over ORD: Danh tính từ claims sub/name/email<br/>KHÔNG tin body, đóng gap Phase 5
+    ORD-->>U: 201 - order gắn đúng user thật
 ```
 
 ### Bản đồ enforce toàn hệ (ai chặn gì)

@@ -8,28 +8,28 @@ public sealed class User : AggregateRoot<Guid>
 
     public Email Email { get; private set; } = null!;
     public string DisplayName { get; private set; } = null!;
-    public string PasswordHash { get; private set; } = null!;
     public IReadOnlyList<Role> Roles => _roles.AsReadOnly();
 
     // Required by EF Core: Email is an owned navigation, can't be bound through a
     // constructor parameter — see Catalog's Event/Venue for the same reason.
     private User() { }
 
-    private User(Guid id, Email email, string displayName, string passwordHash, Role role) : base(id)
+    private User(Guid id, Email email, string displayName, Role role) : base(id)
     {
         Email = email;
         DisplayName = displayName;
-        PasswordHash = passwordHash;
         _roles.Add(role);
     }
 
-    public static User Register(Email email, string displayName, string passwordHash, Role role = Role.Customer)
+    // Phase 7: Keycloak is authN authority and assigns the real user id — it does not honor a
+    // client-supplied one, so id must be the value Keycloak returned, not a locally-minted Guid
+    // (see IKeycloakAdminClient.CreateUserAsync and docs/phase-7-plan.md Commit 3).
+    public static User Register(Guid id, Email email, string displayName, Role role = Role.Customer)
     {
         var user = new User(
-            Guid.NewGuid(),
+            id,
             email ?? throw new ArgumentNullException(nameof(email)),
             Guard.NotNullOrEmpty(displayName, nameof(displayName)),
-            Guard.NotNullOrEmpty(passwordHash, nameof(passwordHash)),
             role);
 
         user.Raise(new UserRegistered(user.Id, user.Email.Value, role));

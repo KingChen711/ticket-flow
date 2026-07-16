@@ -5,9 +5,13 @@ namespace TicketFlow.Identity.Application.Users;
 
 public sealed class UserService(
     IUserRepository userRepository,
-    IPasswordHasher passwordHasher,
+    IKeycloakAdminClient keycloakAdminClient,
     IUnitOfWork unitOfWork)
 {
+    // Dual-write, Keycloak first: Keycloak owns authN (Phase 7) and assigns the real user id
+    // (it ignores a client-supplied one), so the local profile row has to be created SECOND,
+    // using that id. If the local save fails, the Keycloak user is deleted to compensate —
+    // minimal rollback, not a distributed transaction (see docs/phase-7-plan.md Commit 3).
     public async Task<UserResponse> RegisterAsync(RegisterUserRequest request, CancellationToken cancellationToken = default)
     {
         var email = Email.Create(request.Email);
@@ -15,25 +19,23 @@ public sealed class UserService(
         if (await userRepository.GetByEmailAsync(email.Value, cancellationToken) is not null)
             throw new InvalidOperationException($"Email '{email.Value}' is already registered.");
 
-        var passwordHash = passwordHasher.Hash(request.Password);
-        var user = User.Register(email, request.DisplayName, passwordHash);
+        var keycloakUserId = await keycloakAdminClient.CreateUserAsync(
+            email.Value, request.DisplayName, request.Password, Role.Customer, cancellationToken);
 
-        userRepository.Add(user);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            var user = User.Register(keycloakUserId, email, request.DisplayName);
 
-        return Map(user);
-    }
+            userRepository.Add(user);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
 
-    /// <summary>Returns null for both "no such user" and "wrong password" — never reveal which.</summary>
-    public async Task<UserResponse?> AuthenticateAsync(AuthenticateRequest request, CancellationToken cancellationToken = default)
-    {
-        var email = Email.Create(request.Email);
-        var user = await userRepository.GetByEmailAsync(email.Value, cancellationToken);
-
-        if (user is null || !passwordHasher.Verify(request.Password, user.PasswordHash))
-            return null;
-
-        return Map(user);
+            return Map(user);
+        }
+        catch
+        {
+            await keycloakAdminClient.DeleteUserAsync(keycloakUserId, cancellationToken);
+            throw;
+        }
     }
 
     public async Task<UserResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)

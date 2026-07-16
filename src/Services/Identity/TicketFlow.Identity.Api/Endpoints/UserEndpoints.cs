@@ -15,12 +15,12 @@ public static class UserEndpoints
         }).WithTags("Users");
 
         group.MapGet("/", async (UserService service, CancellationToken ct) =>
-            Results.Ok(await service.ListAsync(ct)));
+            Results.Ok(await service.ListAsync(ct))).RequireAuthorization("RequireAdmin");
 
         group.MapGet("/{id:guid}", async (Guid id, UserService service, CancellationToken ct) =>
         {
             var user = await service.GetByIdAsync(id, ct);
             return user is null ? Results.NotFound() : Results.Ok(user);
-        });
+        }).RequireAuthorization("RequireAdmin");
     }
 }

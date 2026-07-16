@@ -37,6 +37,18 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "bearerOnly": true
+    },
+    {
+      "clientId": "ticketflow-identity-admin",
+      "name": "Identity service Admin API client (server-to-server user provisioning)",
+      "description": "Confidential, client-credentials only. identity-service uses this to create/delete Keycloak users via the Admin REST API when POST /register is called (Phase 7 Commit 3 dual-write) — no human or browser flow ever uses this client.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "identity-admin-dev-secret"
     }
   ],
   "clientScopes": [
@@ -128,7 +140,28 @@
       ]
     }
   ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "name": "declarative-user-profile",
+        "providerId": "declarative-user-profile",
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"email\",\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"firstName\",\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}}]}"
+          ]
+        }
+      }
+    ]
+  },
   "users": [
+    {
+      "username": "service-account-ticketflow-identity-admin",
+      "enabled": true,
+      "serviceAccountClientId": "ticketflow-identity-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-realm"]
+      }
+    },
     {
       "username": "customer1",
       "email": "customer1@ticketflow.dev",
