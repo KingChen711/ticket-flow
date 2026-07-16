@@ -1,0 +1,163 @@
+{
+  "realm": "ticketflow",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "customer", "description": "Buys tickets" },
+      { "name": "organizer", "description": "Creates/manages events, views revenue" },
+      { "name": "admin", "description": "Platform administrator" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ticketflow-dev",
+      "name": "TicketFlow dev client",
+      "description": "Dev-only: Direct Access Grants so curl/scripts can obtain a token by username+password before Phase 8's real frontend exists (Authorization Code + PKCE). Standard Flow left enabled for that later use.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-api",
+      "name": "TicketFlow API (resource server audience)",
+      "description": "Not used to log in — exists only so tokens can carry aud=ticketflow-api for services to validate against.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "bearerOnly": true
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "ticketflow-audience",
+      "protocol": "openid-connect",
+      "description": "Adds ticketflow-api to the token audience so resource servers can validate aud.",
+      "protocolMappers": [
+        {
+          "name": "ticketflow-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "ticketflow-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "profile",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds the user's name to the token.",
+      "protocolMappers": [
+        {
+          "name": "full name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-full-name-mapper",
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "email",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds the user's email to the token.",
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "email verified",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "jsonType.label": "boolean",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds realm roles to the token so IsInRole()/[Authorize(Roles=...)] can read them.",
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "customer1",
+      "email": "customer1@ticketflow.dev",
+      "firstName": "Customer",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "customer123", "temporary": false }],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "organizer1",
+      "email": "organizer1@ticketflow.dev",
+      "firstName": "Organizer",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],
+      "realmRoles": ["organizer"]
+    },
+    {
+      "username": "admin1",
+      "email": "admin1@ticketflow.dev",
+      "firstName": "Admin",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "realmRoles": ["admin"]
+    }
+  ]
+}

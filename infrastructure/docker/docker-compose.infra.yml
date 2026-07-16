@@ -129,6 +129,30 @@ services:
       timeout: 5s
       retries: 10
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7
+    container_name: ticketflow-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_PORT: "8180"
+    ports:
+      - "8180:8180"
+      # 9000 is already MinIO's host port (same conflict class as ClickHouse's native port
+      # earlier) — Keycloak's management/health port maps to host 9020 instead.
+      - "9020:9000"
+    volumes:
+      - ../keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # This image ships without curl/wget, so probe the management health
+      # endpoint via bash's /dev/tcp instead of a HTTP client binary.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
 volumes:
   postgres-data:
   minio-data:

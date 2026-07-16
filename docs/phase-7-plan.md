@@ -1,0 +1,208 @@
+---
+title: "Phase 7 — Gateway, BFF & Security — Kế hoạch commit"
+phase: 7
+chapters: [Ch11 API Gateway & BFF, Ch13 Security]
+created: 2026-07-16
+tags: [ticketflow, phase-7, plan, keycloak, oauth2, oidc, jwt, yarp, gateway, security, authorization]
+---
+
+# Phase 7 — Kế hoạch chi tiết theo commit
+
+> **Mục tiêu (từ scope mục 10):** hoàn thiện gateway + bảo mật thật. Đây là nơi **Ch13 (Security — OAuth2/OIDC, JWT, role-based authz)** sống thật, và **Ch11 (Gateway/BFF)** được chốt phần gateway (phần BFF xem quyết định mục 4 — đề xuất dời).
+> **DoD:** login qua Keycloak → gọi API có token; endpoint organizer chặn user thường.
+
+> ⚠️ **Viết TRƯỚC khi code** (giống [phase-2](phase-2-plan.md)…[phase-6](phase-6-plan.md)). Version package + "lệch kế hoạch / bug tự bắt được" bổ sung dần khi thực thi. Phase này **ngắn hơn Phase 5/6** về code mới (không service mới, không datastore mới) nhưng **đụng vào mọi service hiện có** (auth xuyên suốt) — rủi ro chính là **cấu hình** (issuer/claim mapping), không phải logic.
+
+---
+
+## Bối cảnh: cái gì đã có, cái gì Phase 7 thay/thêm
+
+- **Đã có, sẽ bị thay thế:**
+  - `identity-service` (Phase 1): user store riêng (Postgres, PBKDF2 hash), `POST /register`, `GET /users`, và **`POST /dev-token`** — JWT ký HMAC bằng static key từ config. `DevTokenGenerator` **tự ghi chú trong doc comment từ ngày viết**: "This whole class gets thrown away in Phase 7 when real OAuth2/OIDC (Keycloak/Duende) replaces it". Giờ trả nợ đó.
+  - `Role` enum sẵn có: `Customer`/`Organizer`/`Admin` — map thẳng thành 3 realm role Keycloak.
+- **Đã có, sẽ được nâng cấp:**
+  - `gateway` (Phase 1/6): YARP, 7 route config-based (`catalog`/`identity`/`ordering`/`reservation`/`search`/`recommendation`/`analytics`), **chưa có bất kỳ auth nào** — mọi request đi thẳng. Phase 7 thêm JWT validation + authorization policy per-route.
+  - `TicketFlow.Web` building block: đã là chỗ đặt cross-cutting web concern (`ExceptionHandlingMiddleware`, health) — auth wiring dùng chung (`AddTicketFlowAuth`) đặt vào đây, mọi service hưởng cùng 1 chỗ, đúng pattern `AddTicketFlowMessaging`.
+  - `ordering`/`recommendation`: đang **tin request body/query param** cho danh tính (`PlaceOrderCommand.CustomerId/CustomerName/CustomerEmail` là "plain trusted request fields" — gap đã ghi rõ trong doc comment từ Phase 5; `GET /recommendations?userId=` cũng tự khai). Phase 7 đóng gap này ở ordering: **danh tính lấy từ JWT claims**, không tin body nữa.
+- **Phase 7 thêm mới (hạ tầng):**
+  - **Keycloak** vào `docker-compose.infra.yml` — OAuth2/OIDC authority, realm `ticketflow` import từ JSON (reproducible), port host **8180** (8080 đã là gateway).
+- **Phase 7 KHÔNG thêm:** service mới, datastore mới, frontend. (BFF/GraphQL — xem quyết định mục 4/5.)
+
+---
+
+## Quyết định kiến trúc cho Phase 7
+
+### 1. Keycloak, KHÔNG phải Duende IdentityServer
+- **Duende = bẫy license** đúng loại dự án này đã né 2 lần (MassTransit 9.x, MediatR): free chỉ cho dev/testing/công ty <1M USD doanh thu, còn lại thương mại. Codebase convention: không package có bẫy license.
+- **Keycloak = Apache-2.0, chạy như 1 container** — khớp cách mọi hạ tầng khác của dự án đang sống (Postgres/Redis/RabbitMQ/Kafka/ES/Mongo/ClickHouse đều là container trong `docker-compose.infra.yml`). Không cần viết code .NET nào để có OAuth2/OIDC server đầy đủ chuẩn.
+- Chạy `start-dev` + `--import-realm` từ `infrastructure/keycloak/realm-export.json` (mount volume). **Dev dùng H2 nội bộ, chấp nhận mất data khi recreate container** — vì realm (roles/clients/users seed) tái tạo từ JSON mỗi lần start, reproducible là đủ cho học; production thật sẽ trỏ Postgres riêng (ghi backlog, không làm).
+
+### 2. Số phận `identity-service`: Keycloak là AUTHORITY, identity giữ vai USER DIRECTORY (mỏng đi, không chết)
+- **AuthN (mật khẩu, token, session) chuyển 100% sang Keycloak.** `DevTokenGenerator` + `POST /dev-token` **xoá hẳn** (đúng lời hứa trong doc comment). PBKDF2 hasher + password hash column trở thành dead code — xoá luôn phần authenticate, user không còn mật khẩu ở identity-service.
+- **identity-service còn lại gì:** user directory/profile (`GET /users`, `GET /users/{id}` — Ordering/Notification tương lai cần tra display name/email theo userId) + **đăng ký**: `POST /register` giờ tạo user ở **cả 2 nơi** — Keycloak (qua Admin REST API, kèm password + role) và bảng users local (profile). Giữ **cùng userId** 2 bên (tạo Guid trước, truyền vào Keycloak làm user id) để claims `sub` khớp thẳng với dữ liệu các service khác đang giữ.
+- **Vì sao không xoá hẳn identity-service:** bảng scope (mục 4) vẫn cần "user, role" directory; và các service khác (ordering event stream, recommendation purchase history) đang lưu `UserId` — cần 1 chỗ tra ngược ra người thật. Vì sao không dùng Keycloak Admin API làm directory luôn: coupling mọi service vào Keycloak API + Admin API không phải để serve high-read traffic. **🔑 Sẽ hỏi lại ở Commit 3** nếu lúc code thấy 2-nơi-ghi (dual write) quá phiền so với giá trị.
+- **Users seed trong realm-export.json** (1 customer, 1 organizer, 1 admin, password dev đơn giản) để verify được ngay từ Commit 1 không cần flow đăng ký.
+
+### 3. AuthN/AuthZ đặt ở ĐÂU: gateway validate + service enforce (2 tầng, mỗi tầng đúng vai)
+- **Gateway (YARP):** validate JWT (chữ ký, expiry, issuer/audience) cho **mọi route trừ nhóm public** — chặn sớm request rác trước khi vào mạng nội bộ. YARP gắn `AuthorizationPolicy` per-route; token forward nguyên vẹn xuống service (YARP giữ `Authorization` header mặc định).
+- **Route public (anonymous qua gateway):** `GET /search/**`, `GET /catalog/events**` (browse/search/chi tiết là trải nghiệm chưa-đăng-nhập), `POST /identity/register` + các endpoint token của Keycloak (đương nhiên). Còn lại yêu cầu token hợp lệ.
+- **Service (chỉ nơi có business rule về role):** service tự validate JWT + enforce policy bằng `AddTicketFlowAuth` (TicketFlow.Web) — KHÔNG phải mọi service, chỉ:
+  - `catalog`: mọi endpoint **ghi** (POST venues/events, publish/cancel/reschedule, seatmap, price-tiers) → policy `organizer` (admin kế thừa). GET giữ anonymous.
+  - `analytics`: `GET /revenue` → `organizer` (dashboard doanh số là của organizer, scope mục 4).
+  - `ordering`: mọi endpoint → authenticated; **danh tính lấy từ claims** (`sub`/`email`/`name`) thay vì tin body — đóng gap Phase 5. 2 endpoint admin-override confirm/cancel → policy `admin`.
+- **Service KHÔNG enforce (giữ anonymous ở tầng service):** `search`/`recommendation`/`reservation` — vì có **caller nội bộ service-to-service không mang user token**: catalog aggregator (Commit 5 Phase 6) gọi reservation + recommendation; recommendation gọi search. Bật auth ở đây sẽ gãy aggregator ngay. Cách đúng chuẩn là client-credentials flow cho S2S — **quá dày cho DoD phase này, ghi backlog**; trade-off "mạng nội bộ Docker là trusted zone" ghi rõ trong doc comment. Gateway vẫn chặn các đường này từ ngoài (trừ nhóm public).
+- **Đây là điểm học Ch13 thật:** authN tập trung (authority + gateway), authZ phân tán (service nào sở hữu rule role thì service đó enforce) — không phải "bật [Authorize] khắp nơi cho có".
+
+### 4. BFF per frontend: DỜI SANG PHASE 8 — phản biện scope thẳng
+- Scope ghi "BFF riêng cho từng frontend" ở Phase 7. Nhưng **cả 4 frontend chưa tồn tại** (Phase 8) — dựng 4 BFF bây giờ là viết composition layer cho client chưa có nhu cầu thật nào để compose. Đúng loại vaporware đã cắt 2 lần (genre-recommendation không có field genre; review-source không có review-service).
+- **BFF đúng nghĩa Ch11 chỉ có thể thiết kế khi client thật định hình nhu cầu** (customer-web cần gộp gì, scanner cần endpoint tối giản nào). Phase 8 dựng frontend nào → dựng BFF cho frontend đó, có aggregator endpoint thật của Phase 6 làm nguyên liệu.
+- Phase 7 giữ **1 gateway duy nhất, làm thật đậm phần security** — YARP route + authn policy chính là nền mọi BFF sau này kế thừa. Sẽ ghi rõ vào scope.md khi reconcile (commit cuối).
+
+### 5. GraphQL federation (scope ghi "tùy chọn"): DROP
+- Không có client nào tiêu thụ GraphQL (chưa có frontend), thêm HotChocolate là thêm dependency lớn cho zero user. Scope tự đánh dấu "tùy chọn" — chọn không. Backlog nếu Phase 8 customer-web thật sự cần.
+
+### 6. ⚠️ Rủi ro cấu hình lớn nhất phase — issuer mismatch giữa host và Docker network
+- Token xin từ **host** (curl/frontend dev): `http://localhost:8180/realms/ticketflow` → claim `iss` = `localhost:8180`. Service **trong Docker** validate với authority `http://keycloak:8180/realms/ticketflow` → issuer không khớp → 401 **dù token hoàn toàn hợp lệ**. Đây là cái bẫy kinh điển của Keycloak-trong-compose, và là ứng viên số 1 cho "bug thật" của phase.
+- **Hướng xử lý dự kiến (chốt lúc probe Commit 1):** `TokenValidationParameters.ValidIssuers` = cả 2 URL (dev-only, ghi rõ lý do), hoặc `KC_HOSTNAME` cố định. **Probe thật trước khi wire vào service** — xin token thật từ host, validate thật từ trong container, nhìn claim `iss` thật rồi mới quyết.
+- Rủi ro cấu hình thứ 2: **realm roles của Keycloak nằm trong claim lồng `realm_access.roles`**, không phải claim `role` phẳng mà `ClaimsPrincipal.IsInRole()` của .NET đọc. Phải chọn: mapper phía Keycloak (client scope flatten roles) hoặc claim transformation phía .NET (trong `AddTicketFlowAuth`). Probe cùng lúc với issuer.
+
+### 7. Kế thừa & không đụng
+- Toàn bộ messaging (RabbitMQ/Kafka), saga, datastore của Phase 1-6: **không đổi**. Auth là tầng HTTP, không chạm message contract nào.
+- `TicketFlow.Web` là điểm mở rộng duy nhất dùng chung; các service chỉ thêm 1-2 dòng `AddTicketFlowAuth`/policy — không service nào cần project mới.
+
+---
+
+## Nhóm A — Keycloak authority
+
+### Commit 1 — `feat(infra): Keycloak + realm ticketflow + probe token thật` ✅ DONE
+
+- `docker-compose.infra.yml`: `keycloak` image pin **`quay.io/keycloak/keycloak:26.7`**, `start-dev --import-realm`, port host **8180**, management/health port host **9020** (9000 đã là port host của MinIO — cùng loại xung đột với ClickHouse native port trước đây), mount `infrastructure/keycloak/realm-export.json` read-only.
+- `realm-export.json`: realm `ticketflow`; 3 realm role; client `ticketflow-api` (bearer-only, audience) + `ticketflow-dev` (public, Direct Access Grants); 3 user seed. Đúng như plan ban đầu, cộng thêm phần sửa ở bug bên dưới.
+
+**🐛 Bug thật #1 — healthcheck `curl` không tồn tại trong image.** `quay.io/keycloak/keycloak:26.7` là image tối giản (UBI micro-based), **không có `curl`/`wget`/`which`** — chỉ có `bash`. Healthcheck ban đầu viết `curl -sf http://localhost:9000/health/ready` fail mãi dù server log xác nhận start thành công (confirm bằng `docker exec ... curl --version` → `exec: "curl": executable file not found in $PATH`). Fix: dùng thủ thuật `bash` `/dev/tcp` để tự tay dựng HTTP GET request thô, `grep` tìm `200 OK` trong response — không cần binary HTTP client nào:
+```
+test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q '200 OK' <&3"]
+```
+Xác nhận `/bin/sh` trong image này thực chất symlink sang `bash` (`readlink -f /bin/sh` → `/usr/bin/bash`) nên `CMD-SHELL` (chạy qua `/bin/sh -c`) vẫn hiểu cú pháp `/dev/tcp`. Container hiện báo `healthy` đúng ~70-80s sau start (30 retries × interval 10s là dư).
+
+**🐛 Bug thật #2 — 3 client scope built-in (`profile`/`email`/`roles`) bị import bỏ qua âm thầm.** Realm-export.json tối giản viết tay **không tự có sẵn** các client scope chuẩn của Keycloak (`profile`/`email`/`roles`) — chúng chỉ tồn tại nếu (a) export từ 1 realm đã boot đầy đủ, hoặc (b) tự định nghĩa tường minh. Vì `ticketflow-dev.defaultClientScopes` tham chiếu 3 tên này mà không có định nghĩa tương ứng trong `clientScopes` top-level, Keycloak **log warning và bỏ qua từng cái một** lúc import (`Referenced client scope 'X' doesn't exist. Ignoring`) — im lặng, build vẫn "thành công", chỉ phát hiện qua đọc log kỹ. Hậu quả nếu không phát hiện: token thiếu hẳn `email`/`name`, và **quan trọng nhất — thiếu `realm_access.roles`** (vì mapper realm-role mặc định sống trong scope `roles`), tức là toàn bộ phase mất tác dụng ngay từ token đầu tiên.
+Fix: tự định nghĩa cả 3 scope trong `clientScopes` với protocol mapper chuẩn (`oidc-full-name-mapper` cho profile; `oidc-usermodel-property-mapper` × 2 cho email/email_verified; `oidc-usermodel-realm-role-mapper` claim `realm_access.roles` cho roles). Re-import (`docker rm -f` + `up -d` — dev dùng H2 nội bộ, không volume riêng nên recreate = realm sạch từ JSON) → log không còn dòng "Ignoring" nào.
+
+**Probe thật (rủi ro số 1 — mục 6), kết quả:**
+- Token xin qua `curl POST http://localhost:8180/.../token` (direct grant, host) → `iss = "http://localhost:8180/realms/ticketflow"` — đúng như dự đoán, vì issuer = URL client dùng để xin token, không phụ thuộc ai validate.
+- Chạy container .NET 10 SDK tối giản trong `ticketflow-network` (script `dotnet run` mount từ scratchpad, không phải code production), fetch metadata/JWKS qua `http://keycloak:8180/.../openid-configuration` (chỉ hostname internal mới resolve được — `localhost` trong container đó là chính nó, không phải Keycloak).
+- **Scenario A — `ValidIssuer` = issuer trong discovery doc (`keycloak:8180`)** → **FAIL thật** (`SecurityTokenInvalidIssuerException`, issuer token = `localhost:8180` ≠ `keycloak:8180`). Xác nhận rủi ro không phải lý thuyết.
+- **Scenario B — `ValidIssuers` = mảng gồm cả `localhost:8180` lẫn `keycloak:8180`** → **PASS**, claims đọc đúng đầy đủ. **Chốt phương án**: `AddTicketFlowAuth` (Commit 2) set `Authority = "http://keycloak:8180/realms/ticketflow"` (để fetch JWKS đúng từ trong Docker network) nhưng **override `TokenValidationParameters.ValidIssuers`** = 2 giá trị tường minh (dev-only, ghi rõ lý do trong code comment) thay vì để mặc định issuer = authority.
+- **Role claim xác nhận đúng dự đoán mục 6**: `realm_access = {"roles": ["customer"]}` — 1 object lồng, không phải claim `role` phẳng. **Chốt phương án**: `IClaimsTransformation` phía .NET (đặt trong `AddTicketFlowAuth`) unpack `realm_access.roles` thành các `ClaimTypes.Role` riêng lẻ để `IsInRole()`/`[Authorize(Roles=...)]` hoạt động bình thường — không cần đụng Keycloak-side mapper thêm.
+- **Ghi chú phụ phát hiện được lúc probe**: `JwtSecurityTokenHandler` mặc định remap 1 số claim sang URI kiểu cũ (`email` → `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress`) qua `DefaultInboundClaimTypeMap`. Cần tắt bằng `MapInboundClaims = false` trên `JwtBearerOptions` ở Commit 2 để giữ tên claim gốc (`email`, `sub`, `name`) — nếu không, code đọc `User.FindFirst("email")` sẽ ra `null`.
+
+**Verify thật:** container `healthy`; log import sạch (0 dòng "Ignoring"); `curl` token endpoint thành công cho cả 3 seed user (`customer1`/`organizer1`/`admin1`), decode JWT xác nhận đúng role tương ứng (`realm_access.roles` = `["customer"]`/`["organizer"]`/`["admin"]`); `docker ps` = đủ **20 container**, tất cả healthy (kể cả Keycloak).
+
+> Sự cố môi trường không liên quan Commit 1: phát hiện 1 project clone cũ, bỏ hoang tại `C:\Users\Kingc\OneDrive\Desktop\TicketFlow` (git dừng ở Phase 1, không remote) có 6 container đang chạy giữ đúng `container_name` cố định trùng với project này (`ticketflow-kafka` conflict khi `up -d`). Đã dừng+xoá đúng 6 container đó sau khi xác nhận qua `docker inspect`/`git log` và hỏi lại — không đụng file/volume nào trong thư mục OneDrive đó.
+
+## Nhóm B — Services enforce
+
+### Commit 2 — `feat(web): AddTicketFlowAuth + catalog/analytics phân quyền organizer`
+- `TicketFlow.Web`: `AddTicketFlowAuth(configuration)` — `AddAuthentication().AddJwtBearer(...)` (authority/audience từ config `Keycloak:*`, kèm giải pháp issuer + role claim đã chốt ở Commit 1) + `AddAuthorization` với policy đặt tên: `RequireOrganizer` (organizer HOẶC admin), `RequireAdmin`, `RequireAuthenticated`. `UseTicketFlowWeb` gọi `UseAuthentication/UseAuthorization` khi auth đã đăng ký.
+- `catalog`: mọi endpoint ghi → `.RequireAuthorization("RequireOrganizer")`; GET giữ anonymous (browse công khai). `analytics`: `GET /revenue` → `RequireOrganizer`.
+- **Verify thật (đây chính là nửa sau của DoD):** token organizer tạo venue/event OK; **token customer bị 403** trên cùng endpoint; không token → 401; GET events không token vẫn 200. Verify cả trực tiếp lẫn qua gateway (gateway chưa validate — chứng minh service tự đứng được). Regression 79/79.
+
+### Commit 3 — `feat(identity): Keycloak nhận authN, identity thành user directory`
+- Xoá `DevTokenGenerator` + `POST /dev-token` + `AuthenticateAsync`/password hash khỏi identity (giữ migration cũ, thêm migration drop cột hash — hoặc giữ cột chết có ghi chú, chốt lúc code).
+- `POST /register` → tạo user Keycloak qua **Admin REST API** (`HttpClient` + admin service account client-credentials; probe nhỏ API này lúc code) với Guid định trước + gán role, rồi lưu profile local cùng Guid. Rollback ngược (xoá Keycloak user) nếu lưu local fail — dual-write có bù trừ tối thiểu, ghi rõ trade-off.
+- `GET /users*` → `RequireAdmin` (directory nội bộ không phải public API).
+- **🔑 Hỏi lại trước khi code commit này** nếu dual-write lúc thiết kế chi tiết thấy quá phiền: phương án thay thế là bỏ `POST /register` hẳn, user tạo bằng Keycloak admin console/API trực tiếp, identity chỉ còn read-directory sync thủ công.
+- **Verify thật:** register user mới qua REST → login được ngay bằng Keycloak token endpoint → token mang đúng role; user xuất hiện cả Keycloak admin lẫn `GET /users` (admin token); rollback path test bằng cách ép fail local save.
+
+## Nhóm C — Gateway enforce
+
+### Commit 4 — `feat(gateway): JWT validation + authorization policy per-route + ordering lấy danh tính từ claims`
+- Gateway: `AddTicketFlowAuth` + YARP `AuthorizationPolicy` per-route — nhóm public (mục 3: search GET, catalog GET, identity register, và **route mới `/auth` → Keycloak** nếu quyết định proxy token endpoint qua gateway thay vì client gọi thẳng 8180; chốt lúc code — nghiêng về client gọi thẳng Keycloak, gateway không proxy authority) vs nhóm authenticated.
+- `ordering`: `AddTicketFlowAuth`, mọi endpoint authenticated; `PlaceOrderCommand` **bỏ tin `CustomerId`/`CustomerName`/`CustomerEmail` từ body** — đọc từ claims (`sub`/`name`/`email`) tại endpoint, body chỉ còn dữ liệu đơn hàng thật. 2 endpoint admin-override → `RequireAdmin`. (Đây là thay đổi contract HTTP của ordering — client duy nhất hiện tại là verify script, chấp nhận break.)
+- `recommendation` qua gateway: route yêu cầu authenticated; service vẫn anonymous (S2S từ aggregator — mục 3). **`GET /recommendations` qua gateway lấy userId từ claim `sub`** — cần transform YARP (append query từ claim) hoặc endpoint đọc header chuyển tiếp; **chốt lúc code, nghiêng về giữ query param cho S2S + gateway transform** để aggregator không đổi.
+- **Verify thật (nửa đầu DoD khép luôn ở đây):** login Keycloak → token → **mua vé end-to-end 100% qua gateway có token** (danh tính trong order/event stream = từ claims); không token → 401 tại gateway trước khi chạm service; token customer gọi `POST /catalog/events` qua gateway → 403 (2 tầng cùng chặn); search/browse không token vẫn chạy. Regression 79/79 + sửa test nào đụng `PlaceOrderCommand` shape.
+
+## Nhóm D — Finalize
+
+### Commit 5 — `chore: finalize Phase 7 — DoD checklist, scope reconcile`
+- Reconcile `scope.md`: chốt Keycloak (bỏ "hoặc Duende"); BFF per-frontend **dời Phase 8** (ghi rõ lý do mục 4); GraphQL federation drop → backlog; identity-service đổi mô tả trách nhiệm ("User directory/profile; authN đã chuyển Keycloak"); bảng hạ tầng thêm Keycloak.
+- `docker compose ps` đủ **20 container** (19 + keycloak). Verify end-to-end DoD lần cuối. Tick DoD, cập nhật doc này.
+
+---
+
+## Sơ đồ Phase 7
+
+### Luồng token + 2 tầng enforce (Ch13)
+
+```mermaid
+sequenceDiagram
+    actor U as Client (curl / frontend Phase 8)
+    participant KC as Keycloak :8180
+    participant GW as Gateway :8080 (YARP)
+    participant CAT as catalog
+    participant ORD as ordering
+
+    U->>KC: POST /realms/ticketflow/protocol/openid-connect/token<br/>(dev: direct grant; Phase 8: auth code + PKCE)
+    KC-->>U: access_token (JWT, realm_access.roles)
+
+    U->>GW: POST /catalog/events (Bearer token)
+    note over GW: Tầng 1 — validate chữ ký/expiry/issuer<br/>(AuthorizationPolicy per-route)
+    GW->>CAT: forward + Authorization header nguyên vẹn
+    note over CAT: Tầng 2 — RequireOrganizer<br/>(service sở hữu business rule)
+    alt token organizer
+        CAT-->>U: 201 Created
+    else token customer
+        CAT-->>U: 403 Forbidden (DoD!)
+    end
+
+    U->>GW: POST /ordering/orders (Bearer token)
+    GW->>ORD: forward
+    note over ORD: Danh tính từ claims (sub/name/email),<br/>KHÔNG tin body — đóng gap Phase 5
+    ORD-->>U: 201 (order gắn đúng user thật)
+```
+
+### Bản đồ enforce toàn hệ (ai chặn gì)
+
+```mermaid
+flowchart LR
+    subgraph PUBLIC["Anonymous qua gateway"]
+        S1["GET /search/**"]
+        S2["GET /catalog/events**"]
+        S3["POST /identity/register"]
+    end
+    subgraph AUTH["Authenticated qua gateway"]
+        O1["/ordering/** (identity từ claims)"]
+        R1["/recommendation/** (sub → userId)"]
+        RES["/reservation/**"]
+    end
+    subgraph ROLE["Service tự enforce role"]
+        C1["catalog WRITE → organizer"]
+        A1["analytics /revenue → organizer"]
+        O2["ordering admin-override → admin"]
+        I1["identity /users → admin"]
+    end
+    subgraph S2S["Nội bộ không token (trade-off, backlog: client credentials)"]
+        AGG["catalog aggregator → reservation + recommendation"]
+        REC2["recommendation → search"]
+    end
+```
+
+---
+
+## Kiểm chứng DoD cuối Phase 7
+
+| DoD | Kiểm chứng |
+|---|---|
+| Login qua Keycloak → gọi API có token | Commit 1 (token thật) + Commit 4 (mua vé end-to-end qua gateway bằng token, danh tính từ claims) |
+| Endpoint organizer chặn user thường | Commit 2: customer token → 403 trên catalog write + analytics revenue; xác nhận lại 2 tầng ở Commit 4 |
+
+## Hướng mở rộng (backlog — không thuộc Phase 7)
+- **BFF per frontend** — dời Phase 8, dựng cùng frontend tương ứng (mục 4).
+- **GraphQL federation** cho customer BFF — chỉ khi Phase 8 thật sự cần.
+- **Client-credentials cho S2S** (aggregator → reservation/recommendation, recommendation → search) — thay trade-off trusted-network hiện tại.
+- **Keycloak production-grade**: Postgres backing, `start` mode + hostname/TLS thật, không import realm mỗi lần boot.
+- **Refresh token/logout flow phía client** — chuyện của frontend Phase 8.
+- **Ownership check ở ordering** (`GET /orders/{id}` chỉ chủ đơn xem được — hiện chỉ authenticated là xem được, cần so `sub` với `CustomerId`).
+
+## Thứ tự đọc trước khi code (scope mục 13)
+Đọc **Ch11 (API Gateway & BFF)** — gateway vs BFF, tại sao BFF theo client, edge concerns (authn tại gateway). Và **Ch13 (Security)** — OAuth2/OIDC flows (authorization code + PKCE vs client credentials vs direct grant), JWT structure/validation, role-based authorization. Bổ sung ngoài sách: **Keycloak** docs (realm/client/role, import-export, Admin REST API, health endpoints), **Microsoft.AspNetCore.Authentication.JwtBearer** (authority/metadata discovery, TokenValidationParameters, claim transformation), **YARP authorization** (per-route `AuthorizationPolicy`), và đọc kỹ bẫy **issuer mismatch trong Docker network** (mục 6 — rủi ro số 1 của phase).
