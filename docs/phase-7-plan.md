@@ -153,9 +153,15 @@ Fix: tự định nghĩa cả 3 scope trong `clientScopes` với protocol mapper
 
 ## Nhóm D — Finalize
 
-### Commit 5 — `chore: finalize Phase 7 — DoD checklist, scope reconcile`
-- Reconcile `scope.md`: chốt Keycloak (bỏ "hoặc Duende"); BFF per-frontend **dời Phase 8** (ghi rõ lý do mục 4); GraphQL federation drop → backlog; identity-service đổi mô tả trách nhiệm ("User directory/profile; authN đã chuyển Keycloak"); bảng hạ tầng thêm Keycloak.
-- `docker compose ps` đủ **20 container** (19 + keycloak). Verify end-to-end DoD lần cuối. Tick DoD, cập nhật doc này.
+### Commit 5 — `chore: finalize Phase 7 — DoD checklist, scope reconcile` ✅ DONE
+
+- Reconcile `scope.md`: Phase 7 section đổi tên "Gateway, BFF & Security" → "Gateway & Security" (BFF không còn thuộc phase này), 4 bullet viết lại đúng những gì thực sự làm (JWT validation per-route, Keycloak, phân quyền 2 tầng, identity từ claims), thêm dòng "Hoàn thành 2026-07-16" đúng style Phase 6 tóm tắt verify + 3 quyết định lệch scope + bug đáng chú ý nhất. Bảng Bounded Context: `gateway` → "Định tuyến, xác thực token (BFF dời Phase 8)"; `identity-service` → "User directory/profile; authN đã chuyển Keycloak (Phase 7)", bỏ luôn "Redis (session)" ở store phụ (chưa bao giờ thực sự dùng — identity chỉ có Postgres). Bảng Ch11/Ch13: Ch11 ghi rõ BFF dời Phase 8; Ch13 bỏ "Duende IdentityServer", thêm "role-based 2 tầng". Bảng hạ tầng dùng chung: thêm dòng Keycloak.
+- **Sự cố môi trường giữa lúc verify cuối (không phải bug code):** Docker Desktop tự restart backend giữa phiên (đã xảy ra nhiều lần xuyên suốt dự án, ghi nhận lại lần này) — cả 20 container bị kill (`Exited 137`), nhưng **filesystem của từng container được giữ nguyên** (không phải recreate) nên `docker start` từng container theo tên là đủ khôi phục, không cần build lại hay re-import Keycloak. Xác nhận qua thật: sau khi start lại, token vẫn mang đúng claim `sub` đã vá ở Commit 4, order đặt trước đó (`Confirmed`) vẫn còn nguyên trong Postgres — chứng minh state thật sự persist qua sự cố, không phải trùng hợp may mắn.
+- **Verify DoD cuối cùng (real, không phải suy luận từ verify từng commit):**
+  - `docker ps` = đủ **20 container**, tất cả healthy.
+  - **DoD 1 — login qua Keycloak → gọi API có token:** order đặt ở Commit 4 (qua gateway, danh tính từ claims) vẫn `GET` được, status `Confirmed`.
+  - **DoD 2 — endpoint organizer chặn user thường:** organizer token → `POST /catalog/venues` qua gateway → `201`; customer token → cùng endpoint → `403`; không token → `401`.
+  - Regression: **79/79**, không hỏng gì sau toàn bộ Phase 7.
 
 ---
 
@@ -223,8 +229,10 @@ flowchart LR
 
 | DoD | Kiểm chứng |
 |---|---|
-| Login qua Keycloak → gọi API có token | Commit 1 (token thật) + Commit 4 (mua vé end-to-end qua gateway bằng token, danh tính từ claims) |
-| Endpoint organizer chặn user thường | Commit 2: customer token → 403 trên catalog write + analytics revenue; xác nhận lại 2 tầng ở Commit 4 |
+| ✅ Login qua Keycloak → gọi API có token | Commit 1 (token thật) + Commit 4 (mua vé end-to-end qua gateway bằng token, danh tính từ claims) + Commit 5 (verify lại lần cuối sau sự cố Docker Desktop restart) |
+| ✅ Endpoint organizer chặn user thường | Commit 2: customer token → 403 trên catalog write + analytics revenue; xác nhận lại 2 tầng ở Commit 4 + Commit 5 |
+
+**Phase 7 hoàn thành 2026-07-16.** 5/5 commit xong, DoD đạt đủ, 79/79 test, 20 container healthy.
 
 ## Hướng mở rộng (backlog — không thuộc Phase 7)
 - **BFF per frontend** — dời Phase 8, dựng cùng frontend tương ứng (mục 4).

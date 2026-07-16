@@ -94,8 +94,8 @@ flowchart TB
 
 | Service | Trách nhiệm | DB chính | Store phụ | Port (HTTP/gRPC) |
 |---|---|---|---|---|
-| **gateway** | Định tuyến, BFF, xác thực token | — | — | 8080 |
-| **identity-service** | Auth, user, role (customer/organizer/admin) | PostgreSQL | Redis (session) | 8001 / 9001 |
+| **gateway** | Định tuyến, xác thực token (BFF dời Phase 8) | — | — | 8080 |
+| **identity-service** | User directory/profile; authN đã chuyển Keycloak (Phase 7) | PostgreSQL | — | 8001 / 9001 |
 | **catalog-service** | Sự kiện, venue, sơ đồ ghế, hạng giá | PostgreSQL | — | 8002 / 9002 |
 | **reservation-service** | Giữ chỗ (hold có TTL), tình trạng ghế, chống overselling | Redis (lock/hold) | PostgreSQL (chốt) | 8003 / 9003 |
 | **ordering-service** | Vòng đời đơn hàng, **host Saga** (event-sourced + CQRS) | PostgreSQL (Marten) | — | 8004 / 9004 |
@@ -130,6 +130,7 @@ Frontends (micro-frontends — Ch12):
 | **RabbitMQ** | **Command/work queue** + transport cho MassTransit Saga (routing, ack, retry) | Ch4, Ch9 |
 | **MinIO** | Lưu poster, PDF vé (S3-compatible) | Ch15 |
 | **ClickHouse** | Kho analytics dạng cột, query tổng hợp nhanh | Ch16 |
+| **Keycloak** | OAuth2/OIDC authority — realm/client/role reproducible từ JSON | Ch13 |
 | **OpenTelemetry + Jaeger** | Distributed tracing | Ch16 |
 | **Prometheus + Grafana** | Metrics + dashboard + alert | Ch16 |
 | **ELK (Serilog→ES→Kibana)** | Log tập trung | Ch16 |
@@ -158,9 +159,9 @@ Frontends (micro-frontends — Ch12):
 | **Ch8** Database strategies | DB-per-service, polyglot persistence | Mỗi service DB riêng: Postgres/Mongo/Redis/ES/ClickHouse |
 | **Ch9** **Saga** | Distributed transaction + compensation | **PurchaseSaga**: giữ ghế→thanh toán→phát vé→thông báo |
 | **Ch10** Resiliency | Retry, Circuit Breaker, Timeout, Bulkhead | Payment bọc Polly; idempotency; graceful degradation |
-| **Ch11** API & BFF Gateway | Gateway, BFF per client | YARP gateway + BFF riêng cho customer/organizer/scanner |
+| **Ch11** API & BFF Gateway | Gateway, BFF per client | YARP gateway + JWT validation per-route (Phase 7); BFF riêng cho customer/organizer/scanner dời Phase 8 (dựng cùng frontend thật) |
 | **Ch12** Micro-frontends | Composition ở frontend | 4 app Next.js, shell + Module Federation, shared UI package |
-| **Ch13** Security | AuthN/AuthZ, OAuth2/OIDC, JWT | Keycloak/Duende IdentityServer; role-based; token ở gateway |
+| **Ch13** Security | AuthN/AuthZ, OAuth2/OIDC, JWT | Keycloak (authority); role-based 2 tầng — gateway validate token, service sở hữu rule tự enforce |
 | **Ch14** Container hosting | Docker, Kubernetes, Helm | Dockerfile mỗi service; K8s manifest/Helm; deploy kind/minikube |
 | **Ch15** Serverless | FaaS, event-triggered | Function: transcode poster, sinh PDF vé, cron nhắc lịch sự kiện |
 | **Ch16** Observability | Trace/Metric/Log | OpenTelemetry toàn hệ; Jaeger + Prometheus/Grafana + ELK |
@@ -339,12 +340,13 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 4. `analytics-service`: consume event doanh số/lượt xem → **ClickHouse**; query tổng hợp. **Bật Kafka Rider ở đây** (dời từ Phase 3 — xem ghi chú Phase 3) trong `BuildingBlocks.Messaging`: đây là consumer đầu tiên thật sự cần ngữ nghĩa stream/replay (event log doanh số thông lượng cao), khác RabbitMQ pub/sub thông thường đã dùng từ Phase 3.
 - **DoD:** ✅ tìm sự kiện qua ES; ✅ trang chi tiết 1 request trả dữ liệu gộp; ✅ dashboard doanh số query ClickHouse. **Hoàn thành 2026-07-15** — verify qua `docker compose ps` (19 container) + luồng mua vé thật 100% qua gateway (venue→event→seatmap→publish→inventory→hold→order, không chạm port trực tiếp bước nào), xác nhận cả 3 DoD phản ánh đúng ngay sau: sự kiện mới lên `GET /search/events`, doanh số lên `GET /analytics/revenue`, lịch sử mua lên `GET /recommendation/recommendations`. Xem [docs/phase-6-plan.md](docs/phase-6-plan.md) để biết chi tiết từng commit — 2 bug thật đáng chú ý: **Ordering treo vô thời hạn lúc start** (Commit 6) do saga's constructor phụ thuộc trực tiếp `ITopicProducer` của Kafka Rider gắn cùng bus → deadlock DI vòng tròn khi MassTransit khởi tạo (fix: resolve publisher lúc consume message, không phải lúc construct saga) — debug qua 5 vòng bisect bằng probe container thật; và ClickHouse `sum()` trên cột `UInt32` trả về `UInt64` chứ không phải `Int64`, driver cast cứng throw ngay (Commit 7). Cũng phát hiện gap thiết kế nhỏ ở Recommendation (popular-fallback không loại trừ sự kiện vừa mua) — ghi backlog, không sửa vì đúng tinh thần "đơn giản, không ML" đã chốt ở Commit 4.
 
-### Phase 7 — Gateway, BFF & Security *(Ch11, Ch13)* — ~2 tuần
-1. Hoàn thiện **YARP gateway** + BFF riêng cho từng frontend.
-2. Dựng **Keycloak** (hoặc Duende IdentityServer) — OAuth2/OIDC.
-3. JWT validation ở gateway; phân quyền role (customer/organizer/admin).
-4. (Tùy chọn) GraphQL federation cho customer BFF.
+### Phase 7 — Gateway & Security *(Ch11, Ch13)* — ~2 tuần
+1. Hoàn thiện **YARP gateway**: JWT validation + authorization policy per-route.
+2. Dựng **Keycloak** — OAuth2/OIDC, realm reproducible từ JSON.
+3. Phân quyền role (customer/organizer/admin) 2 tầng: gateway validate rộng, service sở hữu rule tự enforce.
+4. `ordering` đổi danh tính từ JWT claims thay vì tin request body — đóng gap Phase 5.
 - **DoD:** login qua Keycloak → gọi API có token; endpoint organizer chặn user thường.
+- **Hoàn thành 2026-07-16** — verify qua `docker compose ps` (20 container) + mua vé end-to-end 100% qua gateway bằng token thật (`customerId` trong order khớp chính xác claim `sub`, không lấy từ body). Xem [docs/phase-7-plan.md](docs/phase-7-plan.md) để biết chi tiết từng commit. 3 quyết định lệch scope ban đầu, đều ghi rõ lý do trong plan doc: **Keycloak thay vì "Keycloak hoặc Duende IdentityServer"** (Duende là bẫy license thương mại, cùng loại rủi ro đã né với MassTransit 9.x/MediatR); **BFF per-frontend dời sang Phase 8** (4 frontend chưa tồn tại, dựng BFF bây giờ là composition layer cho nhu cầu chưa có thật — cùng loại vaporware đã cắt ở Phase 6); **GraphQL federation drop hẳn** (scope tự đánh dấu "tùy chọn", không có client nào tiêu thụ). Nhiều bug thật phát hiện qua probe Keycloak Admin API/realm-export.json trước khi code (không đoán docs) — đáng chú ý nhất: access token của Keycloak 26.7 **mặc định không có claim `sub`** (xác nhận bằng cách test cả client hệ thống `admin-cli`, không phải lỗi cấu hình riêng), phải tự thêm protocol mapper.
 
 ### Phase 8 — Micro-frontends *(Ch12)* — ~2.5 tuần
 1. `customer-web` (Next.js): tìm → chọn ghế → mua → xem vé.
