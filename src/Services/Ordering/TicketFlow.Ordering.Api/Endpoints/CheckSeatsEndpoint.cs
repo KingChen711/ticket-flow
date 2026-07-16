@@ -21,6 +21,6 @@ public static class CheckSeatsEndpoint
             var grpcResponse = await reservationClient.CheckSeatAvailabilityAsync(grpcRequest, cancellationToken: ct);
 
             return Results.Ok(new CheckSeatsResponse(grpcResponse.AllAvailable, grpcResponse.UnavailableSeatIds));
-        }).WithTags("Ordering");
+        }).WithTags("Ordering").RequireAuthorization("RequireAuthenticated");
     }
 }

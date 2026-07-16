@@ -55,7 +55,7 @@
     {
       "name": "ticketflow-audience",
       "protocol": "openid-connect",
-      "description": "Adds ticketflow-api to the token audience so resource servers can validate aud.",
+      "description": "Adds aud + sub to the access token — this Keycloak version omits both by default.",
       "protocolMappers": [
         {
           "name": "ticketflow-api-audience",
@@ -65,6 +65,19 @@
             "included.client.audience": "ticketflow-api",
             "id.token.claim": "false",
             "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "id",
+            "claim.name": "sub",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
           }
         }
       ]

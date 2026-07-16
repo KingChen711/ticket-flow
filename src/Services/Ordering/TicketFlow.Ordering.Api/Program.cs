@@ -15,6 +15,7 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
 builder.Services.AddOrderingInfrastructure(builder.Configuration);

@@ -10,4 +10,8 @@
     <PackageReference Include="Yarp.ReverseProxy" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+  </ItemGroup>
+
 </Project>
