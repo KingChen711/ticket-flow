@@ -12,7 +12,7 @@ public static class VenueEndpoints
         {
             var venue = await service.RegisterAsync(request, ct);
             return Results.Created($"/venues/{venue.Id}", venue);
-        });
+        }).RequireAuthorization("RequireOrganizer");
 
         group.MapGet("/", async (VenueService service, CancellationToken ct) =>
             Results.Ok(await service.ListAsync(ct)));

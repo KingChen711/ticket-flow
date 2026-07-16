@@ -29,6 +29,11 @@
       IOpenApiMediaType.Example read-only, which breaks that generator at compile time).
     -->
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <!-- Phase 7 Commit 2 — Keycloak JWT validation. Not part of the ASP.NET Core shared
+         framework despite living under the Microsoft.AspNetCore.* namespace (confirmed by a
+         real build failure before adding this — CS0234, namespace didn't resolve via
+         FrameworkReference alone). Pinned to match the other ASP.NET Core 10.0.9 packages above. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageVersion Include="Microsoft.OpenApi" Version="2.10.0" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.16.11" />
     <PackageVersion Include="StackExchange.Redis" Version="3.0.17" />

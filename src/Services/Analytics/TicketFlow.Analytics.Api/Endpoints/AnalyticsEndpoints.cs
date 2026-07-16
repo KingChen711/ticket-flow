@@ -19,6 +19,6 @@ public static class AnalyticsEndpoints
         {
             var result = await salesStore.GetRevenueAsync(new RevenueQuery(eventId, from, to), ct);
             return Results.Ok(result);
-        }).WithTags("Analytics");
+        }).WithTags("Analytics").RequireAuthorization("RequireOrganizer");
     }
 }

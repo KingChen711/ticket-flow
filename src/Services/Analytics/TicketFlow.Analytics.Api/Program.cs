@@ -10,30 +10,28 @@ using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Messaging;
 using TicketFlow.Web;
 
-const string SaleRecordedTopic = "sale-recorded";
+const string saleRecordedTopic = "sale-recorded";
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddAnalyticsInfrastructure(builder.Configuration);
 
 var kafkaHost = builder.Configuration["Kafka:Host"]
-    ?? throw new InvalidOperationException("Configuration 'Kafka:Host' was not found.");
+                ?? throw new InvalidOperationException("Configuration 'Kafka:Host' was not found.");
 
 // Must run BEFORE AddTicketFlowMessaging — Analytics' TopicEndpoint below would crash bus startup
 // if the topic doesn't exist yet (confirmed via a real probe, Commit 6). Idempotent: fine even if
 // Ordering already auto-created this topic via its own first Produce().
-await KafkaTopicSetup.EnsureCreatedAsync(kafkaHost, SaleRecordedTopic);
+await KafkaTopicSetup.EnsureCreatedAsync(kafkaHost, saleRecordedTopic);
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "analytics",
-    configureKafka: rider =>
-    {
-        rider.AddConsumer<SaleRecordedConsumer>();
-    },
+    configureKafka: rider => { rider.AddConsumer<SaleRecordedConsumer>(); },
     configureKafkaFactory: (context, kafkaConfigurator) =>
     {
-        kafkaConfigurator.TopicEndpoint<SaleRecorded>(SaleRecordedTopic, "analytics-sale-recorded", endpoint =>
+        kafkaConfigurator.TopicEndpoint<SaleRecorded>(saleRecordedTopic, "analytics-sale-recorded", endpoint =>
         {
             endpoint.ConfigureConsumer<SaleRecordedConsumer>(context);
             // Replay the full topic on first run — analytics wants the complete sales history,

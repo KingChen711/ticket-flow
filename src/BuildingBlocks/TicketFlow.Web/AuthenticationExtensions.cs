@@ -1,0 +1,53 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.Tokens;
+
+namespace TicketFlow.Web;
+
+public static class AuthenticationExtensions
+{
+    // Only the services that own a real role-based business rule call this (catalog writes,
+    // analytics revenue, ordering, identity users, gateway) — see docs/phase-7-plan.md mục 3.
+    // Authority/ValidIssuers split is the real fix found by Phase 7 Commit 1's probe: the
+    // Docker-internal hostname (keycloak:8180) is needed to fetch JWKS from inside the network,
+    // but tokens issued via the host-facing URL (localhost:8180) carry that as their iss claim —
+    // a naive Authority-equals-issuer setup 401s valid tokens.
+    public static IServiceCollection AddTicketFlowAuth(this IServiceCollection services, IConfiguration configuration)
+    {
+        var keycloak = configuration.GetSection("Keycloak");
+        var authority = keycloak["Authority"]
+            ?? throw new InvalidOperationException("Missing configuration: Keycloak:Authority");
+        var audience = keycloak["Audience"]
+            ?? throw new InvalidOperationException("Missing configuration: Keycloak:Audience");
+        var validIssuers = keycloak.GetSection("ValidIssuers").Get<string[]>();
+        if (validIssuers is null || validIssuers.Length == 0)
+            throw new InvalidOperationException("Missing configuration: Keycloak:ValidIssuers");
+
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.Authority = authority;
+                options.RequireHttpsMetadata = false; // dev: Keycloak này chạy HTTP thuần, không TLS
+                options.MapInboundClaims = false; // giữ tên claim gốc (email/sub/name) — mặc định remap sang URI kiểu cũ (xem mục 6 phase-7-plan.md)
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidIssuers = validIssuers,
+                    ValidateIssuer = true,
+                    ValidAudience = audience,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                };
+            });
+
+        services.AddSingleton<IClaimsTransformation, RealmRoleClaimsTransformation>();
+
+        services.AddAuthorizationBuilder()
+            .AddPolicy("RequireOrganizer", p => p.RequireRole("organizer", "admin"))
+            .AddPolicy("RequireAdmin", p => p.RequireRole("admin"))
+            .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser());
+
+        return services;
+    }
+}

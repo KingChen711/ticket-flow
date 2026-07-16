@@ -12,7 +12,7 @@ public static class SeatMapEndpoints
         {
             var seatMap = await service.CreateForEventAsync(eventId, ct);
             return Results.Created($"/events/{eventId}/seatmap", seatMap);
-        });
+        }).RequireAuthorization("RequireOrganizer");
 
         group.MapGet("/", async (Guid eventId, SeatMapService service, CancellationToken ct) =>
         {
@@ -21,6 +21,6 @@ public static class SeatMapEndpoints
         });
 
         group.MapPost("/sections", async (Guid eventId, AddSectionRequest request, SeatMapService service, CancellationToken ct) =>
-            Results.Ok(await service.AddSectionAsync(eventId, request, ct)));
+            Results.Ok(await service.AddSectionAsync(eventId, request, ct))).RequireAuthorization("RequireOrganizer");
     }
 }

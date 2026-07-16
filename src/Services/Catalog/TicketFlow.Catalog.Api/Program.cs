@@ -9,6 +9,7 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddCatalogApplication();
 // Messaging (bus + EF Core Outbox) wired inside AddCatalogInfrastructure — the outbox has to
 // share CatalogDbContext with the business writes for SaveChangesAsync to cover both in one

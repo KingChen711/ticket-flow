@@ -102,10 +102,17 @@ Fix: tự định nghĩa cả 3 scope trong `clientScopes` với protocol mapper
 
 ## Nhóm B — Services enforce
 
-### Commit 2 — `feat(web): AddTicketFlowAuth + catalog/analytics phân quyền organizer`
-- `TicketFlow.Web`: `AddTicketFlowAuth(configuration)` — `AddAuthentication().AddJwtBearer(...)` (authority/audience từ config `Keycloak:*`, kèm giải pháp issuer + role claim đã chốt ở Commit 1) + `AddAuthorization` với policy đặt tên: `RequireOrganizer` (organizer HOẶC admin), `RequireAdmin`, `RequireAuthenticated`. `UseTicketFlowWeb` gọi `UseAuthentication/UseAuthorization` khi auth đã đăng ký.
-- `catalog`: mọi endpoint ghi → `.RequireAuthorization("RequireOrganizer")`; GET giữ anonymous (browse công khai). `analytics`: `GET /revenue` → `RequireOrganizer`.
-- **Verify thật (đây chính là nửa sau của DoD):** token organizer tạo venue/event OK; **token customer bị 403** trên cùng endpoint; không token → 401; GET events không token vẫn 200. Verify cả trực tiếp lẫn qua gateway (gateway chưa validate — chứng minh service tự đứng được). Regression 79/79.
+### Commit 2 — `feat(web): AddTicketFlowAuth + catalog/analytics phân quyền organizer` ✅ DONE
+
+- `TicketFlow.Web`: [`AddTicketFlowAuth(configuration)`](../src/BuildingBlocks/TicketFlow.Web/AuthenticationExtensions.cs) — `AddAuthentication().AddJwtBearer(...)` đọc `Keycloak:Authority`/`Keycloak:Audience`/`Keycloak:ValidIssuers` từ config, áp đúng phương án chốt ở Commit 1 (`Authority` trỏ `keycloak:8180` để fetch JWKS trong network, `ValidIssuers` chấp cả `localhost:8180` lẫn `keycloak:8180`, `MapInboundClaims = false` để giữ tên claim gốc). [`RealmRoleClaimsTransformation`](../src/BuildingBlocks/TicketFlow.Web/RealmRoleClaimsTransformation.cs) (`IClaimsTransformation`) unpack `realm_access.roles` (JSON lồng) thành `ClaimTypes.Role` riêng lẻ. 3 policy: `RequireOrganizer` (`RequireRole("organizer", "admin")` — OR semantics có sẵn của .NET, admin tự động qua), `RequireAdmin`, `RequireAuthenticated`. `UseTicketFlowWeb` gọi `UseAuthentication/UseAuthorization` **có điều kiện** — check `IAuthenticationSchemeProvider` đã đăng ký chưa (service nào không gọi `AddTicketFlowAuth` thì `UseAuthorization()` sẽ throw lúc khởi động nếu gọi vô điều kiện).
+- `catalog`: 6 endpoint ghi (`POST /venues`, `POST /events`, `PUT /events/{id}`, `POST /events/{id}/publish|cancel|price-tiers`, `POST /events/{id}/seatmap`, `POST /events/{id}/seatmap/sections`) → `.RequireAuthorization("RequireOrganizer")`. Tất cả GET giữ anonymous. `analytics`: `GET /revenue` → `RequireOrganizer`.
+
+**🐛 Bug thật — `Microsoft.AspNetCore.Authentication.JwtBearer` KHÔNG nằm trong shared framework.** Giả định ban đầu (namespace `Microsoft.AspNetCore.*` nên chắc có sẵn qua `FrameworkReference`) sai — build thật ra lỗi `CS0234` ngay khi thêm `using`. Đây là 1 trong số ít gói `Microsoft.AspNetCore.*` vẫn cần `PackageReference` riêng dù chạy trên ASP.NET Core. Thêm `Microsoft.AspNetCore.Authentication.JwtBearer` version `10.0.9` (khớp các gói ASP.NET Core khác đã pin) vào `Directory.Packages.props` + `TicketFlow.Web.csproj`.
+
+**Verify thật (nửa sau của DoD, khớp chính xác dự đoán):**
+- Trực tiếp catalog (`:8002`) và analytics (`:8010`): organizer token → `201`/`200`; **customer token → `403`**; không token → `401`; `GET /venues` không token vẫn `200`. Admin token cũng `200` trên `/revenue` (xác nhận `RequireOrganizer` cho admin qua đúng như thiết kế OR).
+- Qua gateway (`:8080`, gateway **chưa** có auth riêng — Commit 4 mới thêm): cùng ma trận organizer `201` / customer `403` / GET không token `200` — chứng minh service tự đứng được, header `Authorization` được YARP forward nguyên vẹn mặc định, không cần cấu hình gì thêm ở gateway cho việc này.
+- Regression: **79/79** (`dotnet test` toàn solution, trừ `TicketFlow.Reservation.LoadTests` — NBomber throughput test, không phải correctness suite) — không có test nào hỏng dù build lại 2 image, xác nhận thay đổi auth không đụng logic nghiệp vụ nào.
 
 ### Commit 3 — `feat(identity): Keycloak nhận authN, identity thành user directory`
 - Xoá `DevTokenGenerator` + `POST /dev-token` + `AuthenticateAsync`/password hash khỏi identity (giữ migration cũ, thêm migration drop cột hash — hoặc giữ cột chết có ghi chú, chốt lúc code).
