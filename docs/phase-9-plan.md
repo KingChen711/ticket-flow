@@ -1,0 +1,156 @@
+---
+title: "Phase 9 — Serverless — Kế hoạch commit"
+phase: 9
+chapters: [Ch15 Serverless]
+created: 2026-07-17
+tags: [ticketflow, phase-9, plan, serverless, aws-lambda, localstack, s3, eventbridge, thumbnail, cron]
+---
+
+# Phase 9 — Kế hoạch chi tiết theo commit
+
+> **Mục tiêu (từ scope mục 10):** 3 function serverless — (1) thumbnail poster khi upload (event-triggered), (2) render PDF vé tách khỏi ticketing-service, (3) cron nhắc "sự kiện của bạn diễn ra sau 24h". Đây là nơi **Ch15 (Serverless)** sống thật.
+> **DoD:** upload poster → tự sinh thumbnail; cron nhắc lịch bắn notification.
+
+> ⚠️ **Viết TRƯỚC khi code** (giống phase-2…phase-8). Hai sự thật cần nói thẳng ngay từ đầu:
+> 1. **Đổi Azure Functions (scope gốc) → AWS Lambda** — phản biện scope có chủ đích, không phải trôi dạt: sách dạy Ch15 bằng Azure Functions, nhưng pattern của chương (FaaS, trigger/binding, event-driven compute, function-as-deployment-unit) là khái niệm chung không thuộc về vendor nào; AWS là stack phổ biến hơn hẳn trên thị trường việc làm, và **Phase 9 chưa có dòng code nào** nên chi phí đổi = sửa đúng file plan này. Sách vẫn đọc để lấy pattern; phần vendor-specific tự bù bằng docs AWS. Ghi vào scope.md khi reconcile (Commit 5).
+> 2. **"Serverless" chạy local qua LocalStack là mô phỏng, không phải AWS thật** — cái học được thật là programming model (Lambda handler, S3 event notification, EventBridge schedule, invoke API) và workflow deploy (`dotnet lambda package`, `awslocal`); elasticity/billing/cold-start thật cần AWS thật (backlog). LocalStack **Community edition** (bản Pro trả phí — đúng kỷ luật né bẫy license): đủ Lambda/S3/EventBridge cho phase này, nhưng hành vi có thể lệch AWS thật ở góc cạnh — mọi kết luận đều phải qua verify thật trên chính LocalStack, không đoán từ docs AWS.
+
+---
+
+## Bối cảnh: cái gì đã có, cái gì còn thiếu
+
+- **Đã có (Phase 1-8), function chỉ việc móc vào:**
+  - MinIO chạy sẵn trong compose (bucket `tickets` do ticketing tự tạo). PDF vé thật đã sinh và lưu ở đây từ Phase 5 — **không đụng vào**, Phase 9 không migrate storage đang chạy tốt.
+  - Render PDF hiện nằm **trong** ticketing-service: `IssueTicketsConsumer` gọi `ITicketPdfRenderer` (QuestPDF + QRCoder trong `Ticketing.Infrastructure`) rồi upload MinIO — đúng chỗ scope muốn "tách ra function".
+  - Notification-service tồn tại nhưng **log-only** — 2 consumer chỉ ghi log, **chưa có persistence nào** dù scope ghi MongoDB cho nó từ đầu.
+  - Contract sẵn có đủ nguyên liệu cho reminder: `CatalogEventPublished` mang `Title/StartsAt/Artist/VenueName` (+ `CatalogEventRescheduled` mang `StartsAt` mới, `CatalogEventCancelled`); `OrderCompleted` mang `OrderId/UserId/EventId`; `NotifyOrderCompleted` mang `CustomerName/CustomerEmail` (nhưng **không có EventId** — xem mục 6).
+- **Còn thiếu — gap chặn DoD (phát hiện khi khảo sát code thật):**
+  - **media-service không tồn tại.** Scope liệt kê (port 8011, "serverless") nhưng chưa từng dựng — không có chỗ upload poster, không bucket poster, catalog `Event` không có `PosterUrl`. DoD 1 cần dựng cả đường upload, không chỉ function thumbnail.
+  - **Không có runtime serverless nào trong compose** — chưa có LocalStack, chưa có Lambda nào, chưa có workflow build/deploy function.
+  - **Notification chưa có dữ liệu để nhắc lịch** — cần read model (lần đầu notification có DB thật).
+
+---
+
+## Quyết định kiến trúc cho Phase 9
+
+### 1. Runtime: AWS Lambda (.NET 8 managed runtime) trên **LocalStack Community**, 1 container thêm vào compose
+- LocalStack chạy như 1 service compose (`ticketflow-localstack`, port 4566) → **21 container**. Lambda thực thi bằng cách LocalStack tự spawn container con qua Docker socket (`/var/run/docker.sock` mount) — trên Docker Desktop Windows đây là **rủi ro số 1, phải probe trước tiên**: socket mount hoạt động không, và `LAMBDA_DOCKER_NETWORK` có cho lambda container join network của compose để với tới MinIO/RabbitMQ/notification không.
+- .NET Lambda theo workflow chính chủ AWS: class library + `Amazon.Lambda.Core`/`Amazon.Lambda.S3Events`, đóng gói bằng `dotnet lambda package` (Amazon.Lambda.Tools), tạo resource bằng `awslocal` trong **init script** mount vào `/etc/localstack/init/ready.d/` — hạ tầng function tái lập được từ script, cùng tinh thần realm-export.json của Keycloak. Pin version (LocalStack image, Amazon.Lambda.*) lúc code sau probe.
+- Loại phương án khác, ghi lý do: **Azure Functions + Azurite** (plan gốc — bị thay vì mục tiêu nghề nghiệp, xem đầu file); **SAM local** (chỉ invoke tay, không có event wiring thật — mất bài học event-triggered); **AWS thật** (tốn tiền + cần credentials, phá kỷ luật local-first Docker của cả dự án).
+
+### 2. Bao nhiêu Lambda? BA function riêng biệt (đúng ngữ nghĩa Lambda), MỘT project .NET
+- Khác plan Azure cũ (1 function app): Lambda vốn dĩ là **mỗi function một deployment unit** — `create-function` 3 lần là 3 unit độc lập thật, không phải trade-off phải nuốt. Nhưng code sống chung 1 project `src/Functions/TicketFlow.Functions/` (3 handler class) để build/package 1 lần — tách project khi nào 2 function cần dependency xung đột nhau, chưa tới.
+
+### 3. Poster: bucket `posters` trên **LocalStack S3** (không phải MinIO) — vì S3 event notification là chính bài học
+- Đường DoD 1: `POST /media/posters` qua gateway (`RequireOrganizer`) → **UploadPoster Lambda** ghi S3 `posters/` → **S3 event notification** (`s3:ObjectCreated:*`, canonical AWS pattern) trigger **ThumbnailPoster Lambda** → resize → ghi `posters/thumbs/`. `GET /media/**` (anonymous) stream qua Lambda — **không presigned URL**, đúng bẫy hostname-nội-bộ đã ăn từ Phase 7/8.
+- Vì sao không dùng MinIO cho poster: MinIO không trigger được Lambda của LocalStack một cách chính danh (webhook MinIO → Lambda function URL là franken-pattern, mất bài học S3 notification). Trade-off ghi thật: stack tạm có **2 object store** (MinIO cho tickets — di sản Phase 5 đang chạy tốt, LocalStack S3 cho posters — nơi bài học serverless cần S3 thật); AWS thật thì chỉ có S3, hợp nhất ghi backlog. **LocalStack Community không persist data qua restart** (persistence là tính năng Pro) — poster mất khi restart container, chấp nhận được cho learning phase, cùng tiền lệ "Keycloak dev H2 mất data khi recreate" đã ghi từ Phase 7.
+- Gateway → Lambda bằng đường nào: **probe quyết định** giữa Lambda **function URL** (gọn nhất, nhưng URL dạng subdomain `*.localhost.localstack.cloud` có thể không resolve trong Docker network trên Windows) và **LocalStack API Gateway** (REST, path-style, có trong Community) — YARP route `/media/*` trỏ vào một trong hai. Đây là **rủi ro số 2**.
+- **"Transcode" trong scope thực chất là resize ảnh.** Poster là ảnh tĩnh; không có video ở bất kỳ đâu trong domain — transcode video là vaporware, không làm.
+- Thư viện resize: **chốt sau probe giữa SkiaSharp (MIT, cần native assets Linux trong lambda container) và ImageSharp (3.x đổi sang Six Labors Split License — đúng loại bẫy license đã né 4 lần)**. Nghiêng SkiaSharp vì license sạch; thử resize thật trong môi trường Lambda trước khi chốt.
+- Catalog `Event.PosterUrl` + hiển thị poster trên frontend: **backlog** — DoD chỉ cần "upload → thumbnail".
+
+### 4. PDF vé: ticketing gọi Lambda **đồng bộ qua Invoke API** (`AmazonLambdaClient.InvokeAsync`, RequestResponse) — giữ nguyên ngữ nghĩa saga
+- `RenderTicketPdf` Lambda nhận `TicketPdfModel` + `objectKey` (**ticketing vẫn là chủ naming convention**), render QuestPDF/QRCoder, **tự upload MinIO** (bytes không round-trip), trả về key. QuestPDF/QRCoder **xoá khỏi `Ticketing.Infrastructure`** — dependency slimming là cái được thật của bài tách.
+- Vì sao đồng bộ: saga hiện hoàn thành đơn với `TicketPdfUrls` đã tồn tại thật — chuyển async là đổi ngữ nghĩa `OrderCompleted` (đơn Confirmed trước khi PDF tồn tại → "View PDF" race 404 trên UI), thay đổi hành vi người dùng thấy được chỉ để đổi cơ chế trigger. Invoke đồng bộ là first-class API của Lambda, không phải đi vòng. Lỗi Lambda → consumer throw → MassTransit retry sẵn có từ Phase 5 lo.
+- `ITicketPdfRenderer` (port) đổi thành `Task<string> RenderAndStoreAsync(model, objectKey, ct)`; adapter mới `LambdaTicketRenderClient` (AWSSDK.Lambda, endpoint trỏ LocalStack). Port nội bộ, đổi được.
+
+### 5. Cron reminder: **EventBridge schedule rule** (rate/cron) trigger Lambda **thin** — logic nằm ở notification-service
+- EventBridge rule (24h prod / 1 phút dev — configurable qua init script) trigger `EventReminderTimer` Lambda; Lambda chỉ làm một việc: publish `SendUpcomingEventReminders` lên RabbitMQ (MassTransit — project Functions tham chiếu `BuildingBlocks.Messaging` sẵn có; lambda container phải join được compose network, đã nằm trong rủi ro số 1). **Toàn bộ logic "ai cần nhắc" nằm trong notification-service** — nơi sở hữu dữ liệu người nhận, function là trigger, service là domain; nhét query + gửi vào Lambda là tuồn domain logic ra ngoài bounded context.
+- **Rủi ro số 3:** EventBridge schedule → Lambda trong LocalStack Community phải probe bắn thật theo chu kỳ, không tin docs.
+
+### 6. Reminder read model trong notification (lần đầu có Mongo thật, đúng DB scope hứa)
+- Consume `CatalogEventPublished`/`CatalogEventRescheduled`/`CatalogEventCancelled` (lịch) + `NotifyOrderCompleted` (người mua — **thêm `EventId` vào contract**: additive, backward-compatible, saga có sẵn trong state, tiền lệ Phase 6 đã thêm field vào `CatalogEventPublished`). Consumer `SendUpcomingEventRemindersConsumer` query "event bắt đầu trong cửa sổ X giờ, người mua chưa nhắc" → log notification (giả lập gửi, như mọi notification hiện tại) → đánh dấu đã nhắc (**idempotent** — chạy 2 lần không nhắc 2 lần).
+- **Verify không đợi 24h thật:** cửa sổ + lịch đều configurable; dev dùng rate 1 phút + seed event `StartsAt` trong cửa sổ — "không chứng minh điều âm bằng chờ thời gian thật" (nguyên tắc từ Phase 8 Commit 6).
+
+### 7. Auth: gateway enforce, Lambda tin Docker network — nhất quán mô hình 2 tầng Phase 7
+- `POST /media/posters` → `RequireOrganizer` tại gateway; `GET /media/**` anonymous. `RenderTicketPdf` và `EventReminderTimer` **không route qua gateway** — chỉ gọi được từ Docker network (cùng trust boundary có chủ đích như các service-tier endpoint khác của dự án).
+
+---
+
+## Nhóm A — Móng runtime
+
+### Commit 1 — `chore(functions): LocalStack + Lambda .NET hello — probe toàn chuỗi trigger` ✅ DONE
+
+- Compose thêm `ticketflow-localstack` (docker.sock mount, `LAMBDA_DOCKER_NETWORK: ticketflow-network`, init script mount `../localstack/init:/etc/localstack/init/ready.d:ro`, + mount riêng `../../src/Functions:/functions:ro` để init script đọc được zip build từ host). Scaffold `src/Functions/TicketFlow.Functions/` (class-library Lambda, `AWSProjectType=Lambda`, `Amazon.Lambda.Core` + `Amazon.Lambda.Serialization.SystemTextJson`) với 2 hàm probe: `HelloFunction` (invoke tay) và `HelloTimerFunction` (EventBridge rate 1 phút). Workflow deploy: `dotnet lambda package` chạy trên HOST (không có .NET SDK trong container LocalStack) → zip xuất hiện qua mount → `infrastructure/localstack/init/01-deploy-functions.sh` (idempotent, chạy tự động mỗi lần LocalStack start) tạo IAM role giả + 2 function + EventBridge rule/target/permission qua `awslocal`.
+
+**🐛 Sự cố môi trường thật (không phải bug code, nhưng đổi cả kiến trúc lệnh trong plan) — LocalStack không còn image Community miễn phí không cần tài khoản.** Kể từ tháng 3/2026 LocalStack gộp Community+Pro thành 1 image, **bắt buộc tài khoản + `LOCALSTACK_AUTH_TOKEN`** kể cả tier miễn phí "Hobby". Đây là lý do dừng lại hỏi hướng xử lý trước khi code Commit 1 — tạo tài khoản là hành động tôi không được tự làm thay user. User tự đăng ký, đưa token qua chat → lưu vào `.env` (gitignored) ở root, Docker Compose tự đọc khi `docker compose up`. Không có gì khác trong plan phải đổi — Lambda service vẫn nằm trong tier Hobby miễn phí, chỉ Layers/Kafka event source mapping mới khoá Pro (phase này không dùng cả 2).
+
+**🐛 Bug thật nghiêm trọng nhất — handler `void` làm crash Runtime Interface Emulator, gây vòng lặp invoke bất tận.** `HelloTimerFunction` bản đầu tiên có chữ ký `void Handler(JsonElement, ILambdaContext)` — deploy xong, gọi `awslocal lambda invoke` một lần, rồi quan sát thấy log tick lặp lại **mỗi ~2 giây liên tục hàng phút**, tưởng là bug retry policy của EventBridge. Cô lập nguyên nhân thật bằng cách loại từng biến số: (1) xoá hẳn EventBridge rule/target → vòng lặp **vẫn tiếp diễn**, loại bỏ khả năng do EventBridge retry; (2) gọi trực tiếp `awslocal lambda invoke` một lần duy nhất (không qua EventBridge) → **vẫn lặp** → chứng minh vòng lặp không liên quan gì tới nguồn trigger; (3) đọc log thật của container executor đã "Exited" → lộ ra `panic: runtime error: invalid memory address or nil pointer dereference` bên trong chính `aws-lambda-runtime-interface-emulator` (Go, phần lõi RIE đóng gói sẵn trong base image `public.ecr.aws/lambda/dotnet:10`) — container crash rồi bị LocalStack tự khởi động lại, khởi động lại thì lại crash, tạo thành vòng lặp nhìn giống hệt "invoke liên tục" từ bên ngoài. Đổi `void Handler(...)` → `string Handler(...)` (trả về message thay vì không trả gì) → hết crash, hết lặp, vẫn giữ `JsonElement` làm input (test riêng xác nhận input type KHÔNG phải nguyên nhân — chỉ return type `void` mới gây crash). **Quy tắc rút ra cho toàn bộ dự án từ giờ: mọi Lambda handler phải trả về giá trị thật, không dùng `void`** — ghi làm quy ước bắt buộc, không phải gợi ý.
+- Đây là bug thật đáng tin cậy để công khai vì lý do dotnet10 vừa được AWS Lambda hỗ trợ chính thức từ tháng 1/2026 (xác nhận qua tra cứu thật, không đoán) — RIE cho runtime này còn rất mới, hợp lý khi có edge case chưa chín.
+
+**Verify thật (3 rủi ro nêu ở đầu phase đều ngã ngũ ở đây):**
+- **Rủi ro #1 (docker.sock + `LAMBDA_DOCKER_NETWORK` trên Docker Desktop Windows):** xác nhận qua chính log tạo container của LocalStack (`'network': 'ticketflow-network'` trong debug log) — container executor Lambda thật sự join đúng network. Xác nhận độc lập bằng container `alpine` chạy tay trên `ticketflow-network`: `nc -zv rabbitmq 5672` và `nc -zv minio 9000` đều `open`. Không đợi tới Commit 3/4 mới biết — ngã ngũ ngay ở đây.
+- **.NET 10 managed runtime:** `awslocal lambda create-function --runtime dotnet10` được chấp nhận thẳng, LocalStack pull thật `public.ecr.aws/lambda/dotnet:10` (không phải giả lập riêng của LocalStack — dùng đúng base image AWS thật), khớp xác nhận trước đó qua tra cứu rằng AWS Lambda đã hỗ trợ .NET 10 từ 01/2026.
+- `awslocal lambda invoke --function-name HelloFunction` trả đúng response thật (`"Hello, world! ..."`), log xuất hiện đúng trong CloudWatch Logs (`awslocal logs describe-log-groups` → `/aws/lambda/HelloFunction`).
+- EventBridge rule `rate(1 minute)` sau khi fix bug void: theo dõi thật ~3 phút, đúng nhịp (không lặp), mỗi tick 1 request id riêng biệt, 1 container executor ổn định (không bị tạo lại liên tục).
+- **Restart resilience:** `docker compose stop/rm localstack` rồi `up -d` lại → init script tự chạy lại sạch (log `[functions] deploying...` xuất hiện lại), 2 function tồn tại trở lại, invoke thành công ngay, EventBridge tick lại đúng nhịp — đúng kỳ vọng "LocalStack Community không persist qua restart, nhưng init script tái lập từ đầu mỗi lần".
+- Regression: **81/81** (76 unit/domain + 5 Reservation integration test — không đổi vì Commit 1 không đụng code service nào có sẵn, chỉ thêm project mới). `dotnet build` cả solution sạch. `docker ps` đủ 21 container ổn định (không tính các container executor Lambda tạm thời, xuất hiện/biến mất theo `LAMBDA_KEEPALIVE_MS`).
+
+## Nhóm B — DoD 1: poster
+
+### Commit 2 — `feat(media): upload poster qua gateway + S3 notification → thumbnail Lambda (DoD 1)`
+- `UploadPoster` (route `/media` qua YARP → function URL hoặc API Gateway, chốt theo probe rủi ro số 2) ghi S3 `posters/`; bucket notification `s3:ObjectCreated:*` → `ThumbnailPoster` resize (SkiaSharp/ImageSharp — chốt sau probe license + chạy thật) → `posters/thumbs/`; `GetPoster` stream.
+- **Verify thật (DoD 1 khép ở đây):** upload ảnh thật, organizer token thật, qua gateway → thumbnail **tự** xuất hiện trong S3 (xác nhận `awslocal s3 ls` + GET thumbnail về xem bằng mắt); customer token → `403`; không token → `401`; GET không cần token → `200`; file không phải ảnh → từ chối sạch, không sinh thumbnail rác.
+
+## Nhóm C — tách PDF
+
+### Commit 3 — `feat(ticketing,functions): tách render PDF vé ra Lambda`
+- `RenderTicketPdf` Lambda (QuestPDF/QRCoder, upload MinIO, trả key); `IssueTicketsConsumer` gọi qua `LambdaTicketRenderClient` (AWSSDK.Lambda → LocalStack); **xoá QuestPDF/QRCoder khỏi `Ticketing.Infrastructure`**.
+- **Verify thật:** mua vé end-to-end thật → order `Confirmed`, PDF thật trong MinIO **do Lambda sinh** (log Lambda + PDF mở được, QR decode đúng payload); kịch bản lỗi: dừng LocalStack → mua vé → saga retry đúng như ticketing lỗi các phase trước, bật lại → đơn hoàn tất; regression 81/81 (sửa test đụng renderer port).
+
+## Nhóm D — DoD 2: cron reminder + finalize
+
+### Commit 4 — `feat(notification,functions): reminder read model + EventBridge cron (DoD 2)`
+- Thêm `EventId` vào `NotifyOrderCompleted` (additive). Notification: Mongo read model (lịch event + attendee + cờ đã-nhắc) từ 4 consumer; `SendUpcomingEventRemindersConsumer`. `EventReminderTimer` Lambda publish command qua MassTransit, EventBridge rule lịch configurable.
+- **Verify thật (DoD 2 khép ở đây):** seed event `StartsAt` trong cửa sổ + mua vé thật → tick (1 phút dev) → log notification đúng tên/email/tựa sự kiện thật; tick tiếp **không nhắc lại** (idempotent); event ngoài cửa sổ không bị nhắc; reschedule vào/ra cửa sổ → hành vi đổi đúng.
+
+### Commit 5 — `chore: finalize Phase 9 — scope reconcile, DoD`
+- Scope reconcile: **Azure Functions → AWS Lambda + LocalStack** (ghi lý do nghề nghiệp + pattern chung, sửa bảng hạ tầng mục 5 + folder structure); media-service = Lambda (không phải service :8011); "transcode" = resize ảnh. Tick DoD, cập nhật doc này.
+
+---
+
+## Sơ đồ Phase 9
+
+```mermaid
+flowchart LR
+    subgraph LS["ticketflow-localstack :4566 (Community)"]
+        S3[(S3 bucket posters)]
+        EB[EventBridge rule rate/cron]
+        subgraph Lambdas["Lambda (.NET 8, container con join compose network)"]
+            UP[UploadPoster]
+            TH[ThumbnailPoster]
+            GP[GetPoster]
+            RT[RenderTicketPdf]
+            TM[EventReminderTimer]
+        end
+    end
+    GW[Gateway :8080] -->|/media POST RequireOrganizer, GET anon| UP & GP
+    UP -->|PUT posters/| S3
+    S3 -.s3:ObjectCreated.-> TH
+    TH -->|PUT posters/thumbs/| S3
+    TIC[ticketing IssueTicketsConsumer] -->|Invoke API sync| RT
+    RT -->|PUT tickets/| MN[(MinIO — giữ nguyên từ Phase 5)]
+    EB -.trigger.-> TM
+    TM -->|SendUpcomingEventReminders| RB[[RabbitMQ]]
+    RB --> NOT[notification<br/>reminder read model Mongo]
+```
+
+---
+
+## Kiểm chứng DoD cuối Phase 9
+
+| DoD | Kiểm chứng |
+|---|---|
+| Upload poster → tự sinh thumbnail | Commit 2: upload thật qua gateway → S3 notification → thumbnail thật trong S3 |
+| Cron nhắc lịch bắn notification | Commit 4: EventBridge tick thật → command → notification log đúng người/sự kiện, idempotent |
+
+## Hướng mở rộng (backlog — không thuộc Phase 9)
+- **Deploy AWS thật** (Lambda + S3 + EventBridge Scheduler) — local chỉ mô phỏng; cold-start/billing/IAM thật học ở đó.
+- **Hợp nhất object store** (MinIO tickets → S3) khi lên AWS thật (mục 3).
+- **Catalog `Event.PosterUrl` + hiển thị poster trên customer-web/organizer-dashboard** (mục 3).
+- **Gửi email thật** (SES/SMTP) — notification vẫn log-only có chủ đích từ Phase 5.
+- **Amazon MQ event source mapping** (RabbitMQ trigger Lambda thật) nếu có ngày lên AWS thật — thay Invoke đồng bộ ở mục 4.
+- **Ký QR (HMAC/JWS)** — kế thừa backlog Phase 5/8, Lambda render là chỗ tự nhiên để thêm khi làm.
+
+## Thứ tự đọc trước khi code (scope mục 13)
+Đọc **Ch15 (Serverless)** — lấy pattern FaaS/trigger/binding (sách dùng Azure Functions, pattern là chung — đối chiếu quyết định đổi vendor ở đầu file). Bổ sung ngoài sách: **AWS Lambda .NET** (handler class library, `Amazon.Lambda.Tools`, managed runtime dotnet8), **LocalStack** (Community limits, `LAMBDA_DOCKER_NETWORK`, init hooks `ready.d/`, persistence không có ở Community), **S3 event notifications**, **EventBridge schedule expressions** (rate/cron), **Lambda function URL vs API Gateway**, license **ImageSharp 3.x vs SkiaSharp**, và MassTransit publish từ app không phải ASP.NET host.

@@ -6,6 +6,9 @@
     <Project Path="src/BuildingBlocks/TicketFlow.Messaging/TicketFlow.Messaging.csproj" />
     <Project Path="src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj" />
   </Folder>
+  <Folder Name="/src/Functions/">
+    <Project Path="src/Functions/TicketFlow.Functions/TicketFlow.Functions.csproj" />
+  </Folder>
   <Folder Name="/src/Gateway/">
     <Project Path="src/Gateway/TicketFlow.Gateway/TicketFlow.Gateway.csproj" />
   </Folder>

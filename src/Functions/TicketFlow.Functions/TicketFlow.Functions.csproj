@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Marks this a Lambda project for Amazon.Lambda.Tools (`dotnet lambda package`) — classic
+         class-library handler model targeting the managed dotnet10 runtime (docs/phase-9-plan.md
+         Commit 1), not the executable/RuntimeSupport custom-runtime style. -->
+    <AWSProjectType>Lambda</AWSProjectType>
+    <!-- Lambda's managed runtime only loads runtime-specific assemblies it ships itself
+         (System.*, netstandard, etc.) from its own base image, not from the deployment package —
+         but everything else (this project's own DLLs + third-party NuGet deps) must be present in
+         the zip since there's no separate "layer" step here. CopyLocalLockFileAssemblies ensures
+         `dotnet publish`/`dotnet lambda package` actually copies transitive package DLLs into the
+         output dir instead of assuming a shared framework has them. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Amazon.Lambda.Core" />
+    <PackageReference Include="Amazon.Lambda.Serialization.SystemTextJson" />
+  </ItemGroup>
+
+</Project>

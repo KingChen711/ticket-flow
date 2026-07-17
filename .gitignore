@@ -6,6 +6,10 @@
 # dotenv files
 .env
 
+# dotnet-lambda package output (Phase 9) — rebuilt by the deploy script every time, never the
+# thing under version control (same reasoning as bin/obj below).
+src/Functions/**/function.zip
+
 # User-specific files
 *.rsuser
 *.suo

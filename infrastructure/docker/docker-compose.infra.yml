@@ -153,12 +153,44 @@ services:
       timeout: 5s
       retries: 30
 
+  localstack:
+    # Unified image since the March-2026 Community/Pro image merge (docs/phase-9-plan.md
+    # Commit 1) — the old no-account `localstack/localstack` free image is archived; this one
+    # requires LOCALSTACK_AUTH_TOKEN even on the free non-commercial Hobby plan.
+    image: localstack/localstack:latest
+    container_name: ticketflow-localstack
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN}
+      SERVICES: lambda,events,logs,iam,sts,s3
+      # Lambda's Docker executor spawns sibling containers via the mounted socket below; without
+      # this they land on the default bridge network and can't reach rabbitmq/minio/etc. by
+      # service name (needed starting Commit 3/4) — join the same network this whole stack uses.
+      LAMBDA_DOCKER_NETWORK: ticketflow-network
+      DEBUG: "1"
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - localstack-data:/var/lib/localstack
+      - ../localstack/init:/etc/localstack/init/ready.d:ro
+      # Lambda deployment packages (function.zip) are built on the HOST by `dotnet lambda
+      # package` before `docker compose up` — there's no .NET SDK inside this container to build
+      # them, unlike every other service here which builds its own image from a Dockerfile. The
+      # init script below reads the already-built zip from this mount.
+      - ../../src/Functions:/functions:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
 volumes:
   postgres-data:
   minio-data:
   es-data:
   mongo-data:
   clickhouse-data:
+  localstack-data:
 
 networks:
   default:
