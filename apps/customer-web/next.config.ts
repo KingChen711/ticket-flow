@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Workspace packages ship raw TS source, no build step (see docs/phase-8-plan.md mục 6) —
+  // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
+  transpilePackages: ["@ticketflow/types", "@ticketflow/ui"],
 };
 
 export default nextConfig;

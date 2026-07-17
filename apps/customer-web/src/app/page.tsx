@@ -1,47 +1,65 @@
-import { auth, signIn, signOut } from "@/auth";
+import Link from "next/link";
+import type { SearchEventsResult } from "@ticketflow/types";
+import { fetchGateway } from "@/lib/gateway";
 
-// Phase 8 Commit 3 probe page — proves the Auth.js + Keycloak PKCE chain end-to-end before any
-// real screen gets built. Not the real customer-web home page (Commit 4 replaces this).
-export default async function Home() {
-  const session = await auth();
+// Browse/search, no auth needed — the gateway route is public for GET (Phase 7 Commit 4).
+// search-service (Elasticsearch-backed) serves both plain browsing (no filters) and filtered
+// search (q/artist/city), so this page only calls it — catalog's own /events list would just be
+// the same data without the search filters, no reason to fetch both (docs/phase-8-plan.md
+// Commit 4 simplification).
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; city?: string }>;
+}) {
+  const { q, city } = await searchParams;
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (city) params.set("city", city);
 
-  if (!session) {
-    return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-4">
-        <p>Not signed in.</p>
-        <form
-          action={async () => {
-            "use server";
-            await signIn("keycloak");
-          }}
-        >
-          <button type="submit" className="rounded bg-black px-4 py-2 text-white">
-            Sign in with Keycloak
-          </button>
-        </form>
-      </main>
-    );
-  }
+  const result = await fetchGateway<SearchEventsResult>(`/search/events?${params.toString()}`);
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4">
-      <p>Signed in as {session.user?.email}</p>
-      <p className="max-w-md break-all text-xs text-gray-500">
-        accessToken: {session.accessToken?.slice(0, 40)}...
-      </p>
-      <a href="/probe" className="rounded bg-blue-600 px-4 py-2 text-white">
-        Probe gateway calls
-      </a>
-      <form
-        action={async () => {
-          "use server";
-          await signOut();
-        }}
-      >
-        <button type="submit" className="rounded border px-4 py-2">
-          Sign out
+    <div className="mx-auto max-w-3xl p-6">
+      <form className="mb-6 flex gap-2" action="/">
+        <input
+          type="text"
+          name="q"
+          defaultValue={q}
+          placeholder="Search by title or artist..."
+          className="flex-1 rounded border px-3 py-2"
+        />
+        <input
+          type="text"
+          name="city"
+          defaultValue={city}
+          placeholder="City"
+          className="w-40 rounded border px-3 py-2"
+        />
+        <button type="submit" className="rounded bg-black px-4 py-2 text-white">
+          Search
         </button>
       </form>
-    </main>
+
+      {result.items.length === 0 ? (
+        <p className="text-gray-500">No events found.</p>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {result.items.map((event) => (
+            <li key={event.eventId} className="rounded border p-4">
+              <Link href={`/events/${event.eventId}`} className="text-lg font-semibold hover:underline">
+                {event.title}
+              </Link>
+              <p className="text-sm text-gray-600">
+                {event.artist} · {event.venueName}, {event.city}
+              </p>
+              <p className="text-sm text-gray-500">
+                {new Date(event.startsAt).toLocaleString()} · {event.status}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

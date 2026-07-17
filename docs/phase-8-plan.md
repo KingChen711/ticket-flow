@@ -121,9 +121,23 @@ tags: [ticketflow, phase-8, plan, nextjs, micro-frontends, pwa, signalr, pkce, b
 
 ## Nhóm B — customer-web (DoD 1)
 
-### Commit 4 — `feat(customer-web): auth + browse/search + event detail`
-- Auth.js wiring thật (từ kết quả probe). Trang: danh sách/tìm sự kiện (`GET /search/events` + `GET /catalog/events` — public, RSC fetch thẳng gateway), chi tiết sự kiện dùng **aggregator endpoint Phase 6** (`GET /catalog/events/{id}/detail` — seats + recommendations trong 1 request, đúng mục đích nó được sinh ra).
-- **Verify thật:** browse không cần login; login bằng seed user hoạt động; trang chi tiết render dữ liệu gộp thật.
+### Commit 4 — `feat(customer-web): auth + browse/search + event detail` ✅ DONE
+
+- `packages/types` lần đầu có nội dung thật: 8 interface khớp chính xác field/camelCase của các C# record đang dùng (`SearchDocument`, `SearchEventsResult`, `EventResponse`, `VenueResponse`, `SeatAvailabilityResponse`, `RecommendedEventSummary`, `EventDetailResponse`, `PriceTierResponse`). `next.config.ts` thêm `transpilePackages` — package workspace chỉ có TS nguồn, không có bước build riêng, Next cần biết để transpile thay vì coi như node_modules đã build sẵn.
+- `layout.tsx` giờ là chỗ đặt header dùng chung (link Home + sign-in/out) thay vì toàn bộ trang chủ là probe login như Commit 3; xoá hẳn `/probe`.
+- **Trang chủ (`/`)**: chỉ gọi `GET /search/events` (Elasticsearch-backed, hỗ trợ `q`/`city`) — **quyết định đơn giản hoá**: bỏ ý định gọi thêm `GET /catalog/events` song song như plan ban đầu phác thảo, vì catalog list chỉ là cùng dữ liệu thiếu bộ lọc tìm kiếm, gọi cả 2 là fetch trùng dữ liệu không có lý do. Server Component, fetch thẳng gateway, không cần session.
+- **Trang chi tiết (`/events/[id]`)**: gọi đúng 1 request `GET /catalog/events/{id}/detail` (aggregator Phase 6) — render gộp event + venue + seat availability + recommendations. Có truyền `userId` (lấy từ `session.userId`, tức claim `sub`) khi đã đăng nhập để gợi ý cá nhân hoá; ẩn danh vẫn hoạt động (aggregator tự fallback sang popular-events, đúng thiết kế Phase 6).
+
+**🐛 Bug thật — `declare module` không `import`/`export` bị TS coi là ghi đè thay vì merge (lặp lại y hệt bug Commit 3, nhắc lại vì dễ tái phạm).** Không phải lỗi mới, nhưng đáng ghi chú: mọi lần thêm field vào `Session`/`JWT` qua `next-auth.d.ts` đều phải nhớ giữ `export {}` ở đầu file.
+
+**🐛 Vấn đề thật nhỏ — gán `T | undefined` cho field optional (`id?: string`) vẫn bị TS strict-mode từ chối.** `session.userId = token.sub` (với `token.sub: string | undefined`) báo lỗi `Type 'string | undefined' is not assignable to type 'string'` dù field khai `userId?: string`. Thử intersect với `DefaultSession["user"]` cũng không hết. Fix cuối: narrowing bằng `if (token.sub) session.userId = token.sub;` thay vì gán trực tiếp — đơn giản, đúng ý nghĩa, không cần truy tìm chính xác flag TS nào gây ra hành vi này.
+
+**Verify thật — dùng dữ liệu backend thật, không giả lập:**
+- Tạo venue/event/seatmap/price-tier/publish/inventory thật qua organizer token → event lên `GET /search/events` sau publish (đúng luồng `CatalogEventPublished` → Search consumer từ Phase 6).
+- Mở `localhost:3000` **không đăng nhập** → thấy đủ danh sách sự kiện (kể cả event vừa tạo). Gõ `?q=Midnight` → lọc đúng còn 1 kết quả.
+- Click vào event → trang chi tiết render đúng: tên/nghệ sĩ/venue/địa chỉ/thời gian/mô tả, price tier `450,000 VND` khớp giá đã tạo, `8 of 8 seats available` khớp inventory đã provision, mục "You might also like" hiện gợi ý (popular fallback vì chưa có lịch sử mua).
+- Đăng nhập bằng `customer1` (round-trip Keycloak đầy đủ, giống Commit 3) → header đổi đúng thành email + nút Sign out; browse/detail vẫn hoạt động bình thường khi đã đăng nhập (userId được truyền cho aggregator, không lỗi).
+- `pnpm build` sạch 0 lỗi TS.
 
 ### Commit 5 — `feat(customer-web): chọn ghế → hold → đặt đơn → vé của tôi`
 - Seat map render từ availability, chọn ghế → `POST /reservation/holds` → countdown TTL → `POST /ordering/orders` (body không có danh tính — Phase 7) → poll trạng thái đơn đến `Confirmed` → trang "vé của tôi" (orders từ claims + tickets + link PDF từ Commit 1/2).
