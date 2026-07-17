@@ -19,8 +19,9 @@ public interface ISeatHoldStore
     /// </summary>
     Task<IReadOnlyList<Guid>> TryHoldAsync(Guid eventId, IReadOnlyList<Guid> seatIds, Guid holdId, TimeSpan ttl, CancellationToken cancellationToken = default);
 
-    /// <summary>Release every seat currently held under <paramref name="holdId"/>. True if anything was released.</summary>
-    Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default);
+    /// <summary>Release every seat currently held under <paramref name="holdId"/>. Returns the
+    /// seat ids actually released — empty means the hold was no longer valid.</summary>
+    Task<IReadOnlyList<Guid>> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Move the seats held under <paramref name="holdId"/> into the sold set (Redis side) and

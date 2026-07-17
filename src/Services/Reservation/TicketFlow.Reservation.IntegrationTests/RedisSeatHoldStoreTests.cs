@@ -65,7 +65,7 @@ public sealed class RedisSeatHoldStoreTests(RedisFixture fixture) : IClassFixtur
 
         var released = await store.ReleaseAsync(eventId, holdId);
 
-        Assert.True(released);
+        Assert.Equal([seatId], released);
         var statuses = await store.GetLiveStatusesAsync(eventId, [seatId]);
         Assert.Equal(SeatStatus.Available, statuses[seatId]);
     }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { PriceTierResponse, SeatAvailabilityResponse } from "@ticketflow/types";
 import { holdSeatsAction } from "./actions";
+import { useSeatMapLive } from "./useSeatMapLive";
 
 export function SeatPicker({
   eventId,
@@ -18,9 +19,11 @@ export function SeatPicker({
   signedIn: boolean;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const liveStatuses = useSeatMapLive(eventId, signedIn);
 
   const priceBySection = new Map(priceTiers.map((t) => [t.sectionId, t.amount]));
   const priceFor = (seat: SeatAvailabilityResponse) => priceBySection.get(seat.sectionId) ?? 0;
+  const statusFor = (seat: SeatAvailabilityResponse) => liveStatuses[seat.seatId] ?? seat.status;
   const total = seats
     .filter((s) => selected.has(s.seatId))
     .reduce((sum, s) => sum + priceFor(s), 0);
@@ -46,7 +49,7 @@ export function SeatPicker({
 
       <ul className="grid grid-cols-4 gap-2">
         {seats.map((seat) => {
-          const available = seat.status === "Available";
+          const available = statusFor(seat) === "Available";
           const isSelected = selected.has(seat.seatId);
           return (
             <li key={seat.seatId}>

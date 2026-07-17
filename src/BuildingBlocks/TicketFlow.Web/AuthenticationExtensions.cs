@@ -39,6 +39,22 @@ public static class AuthenticationExtensions
                     ValidateAudience = true,
                     ValidateLifetime = true,
                 };
+
+                // SignalR's WebSocket transport can't set an Authorization header during the
+                // handshake — its JS client instead appends ?access_token=... to the connection
+                // URL (Phase 8 Commit 6). Harmless fallback for everything else: only kicks in
+                // when the query string actually carries the token AND the path is a hub path.
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+                        if (!string.IsNullOrEmpty(accessToken) && context.HttpContext.Request.Path.Value?.Contains("/hubs/") == true)
+                            context.Token = accessToken;
+
+                        return Task.CompletedTask;
+                    },
+                };
             });
 
         services.AddSingleton<IClaimsTransformation, RealmRoleClaimsTransformation>();

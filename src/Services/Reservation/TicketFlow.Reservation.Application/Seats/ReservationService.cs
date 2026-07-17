@@ -7,6 +7,7 @@ public sealed class ReservationService(
     ISeatRepository seatRepository,
     ISeatHoldStore holdStore,
     IUnitOfWork unitOfWork,
+    ISeatMapNotifier notifier,
     TimeProvider timeProvider,
     ReservationOptions options)
 {
@@ -20,13 +21,25 @@ public sealed class ReservationService(
         var holdId = Guid.NewGuid();
         var unavailable = await holdStore.TryHoldAsync(request.EventId, request.SeatIds, holdId, _holdTtl, cancellationToken);
 
-        return unavailable.Count == 0
-            ? HoldSeatsResult.Succeeded(holdId, timeProvider.GetUtcNow().Add(_holdTtl))
-            : HoldSeatsResult.Unavailable(unavailable);
+        if (unavailable.Count > 0)
+            return HoldSeatsResult.Unavailable(unavailable);
+
+        // Best-effort broadcast — a dropped SignalR message just means a live viewer's seat map
+        // goes stale until their next refetch, never a source-of-truth issue (Redis already
+        // holds the real state). Not awaited-with-retry, not part of any transaction.
+        await notifier.SeatsUpdatedAsync(request.EventId, request.SeatIds, "Held", cancellationToken);
+        return HoldSeatsResult.Succeeded(holdId, timeProvider.GetUtcNow().Add(_holdTtl));
     }
 
-    public Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default) =>
-        holdStore.ReleaseAsync(eventId, holdId, cancellationToken);
+    public async Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
+    {
+        var releasedSeatIds = await holdStore.ReleaseAsync(eventId, holdId, cancellationToken);
+        if (releasedSeatIds.Count == 0)
+            return false;
+
+        await notifier.SeatsUpdatedAsync(eventId, releasedSeatIds, "Available", cancellationToken);
+        return true;
+    }
 
     /// <summary>
     /// Redis confirm first (moves the held seats into the sold set and tells us which seats),
@@ -47,6 +60,7 @@ public sealed class ReservationService(
             seat.MarkSold();
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        await notifier.SeatsUpdatedAsync(eventId, confirmedSeatIds, "Sold", cancellationToken);
         return confirmedSeatIds;
     }
 

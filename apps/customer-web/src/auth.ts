@@ -7,6 +7,44 @@ import Keycloak from "next-auth/providers/keycloak";
 // Keycloak, this server to the gateway) uses the same host-facing localhost URLs.
 // AUTH_KEYCLOAK_ISSUER is the plain host URL, not the keycloak:8180 one — confirmed via a real
 // probe (Commit 3).
+// Keycloak's access token TTL is 1 hour (Phase 7 realm-export.json) — found the hard way while
+// probing Commit 6 (SignalR negotiate started 401'ing with NO code change on either side; turned
+// out the session was just old enough for its embedded access_token to expire, and nothing was
+// refreshing it). This is the real implementation of the refresh-token rotation Commit 3's plan
+// section claimed Auth.js would provide but never actually wired up.
+async function refreshAccessToken(token: TokenSet) {
+  const issuer = process.env.AUTH_KEYCLOAK_ISSUER;
+  const res = await fetch(`${issuer}/protocol/openid-connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: process.env.AUTH_KEYCLOAK_ID!,
+      client_secret: process.env.AUTH_KEYCLOAK_SECRET!,
+      refresh_token: token.refreshToken!,
+    }),
+  });
+
+  if (!res.ok) return { ...token, error: "RefreshTokenError" as const };
+
+  const refreshed = await res.json();
+  return {
+    ...token,
+    accessToken: refreshed.access_token,
+    // Keycloak doesn't always rotate the refresh token itself — keep the old one if absent.
+    refreshToken: refreshed.refresh_token ?? token.refreshToken,
+    expiresAt: Math.floor(Date.now() / 1000) + refreshed.expires_in,
+    error: undefined,
+  };
+}
+
+interface TokenSet {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  error?: "RefreshTokenError";
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [Keycloak],
   callbacks: {
@@ -17,11 +55,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
+        return token;
       }
-      return token;
+
+      if (token.expiresAt && Date.now() / 1000 < (token.expiresAt as number) - 30) {
+        return token;
+      }
+
+      return refreshAccessToken(token as TokenSet);
     },
     async session({ session, token }) {
       session.accessToken = token.accessToken as string;
+      session.error = token.error as string | undefined;
       if (token.sub) session.userId = token.sub;
       return session;
     },

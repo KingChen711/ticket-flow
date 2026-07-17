@@ -44,15 +44,15 @@ public sealed class RedisSeatHoldStore(IConnectionMultiplexer redis) : ISeatHold
         return unavailable.Select(seatId => Guid.Parse((string)seatId!)).ToList();
     }
 
-    public async Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<Guid>> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
     {
         RedisKey[] keys = [RedisKeys.HoldSeatsSet(holdId)];
         RedisValue[] values = [eventId.ToString(), holdId.ToString()];
 
         var result = await Db.ScriptEvaluateAsync(ReleaseHoldScript.Source, keys, values);
-        var releasedCount = (long)result;
+        var released = (RedisValue[]?)result ?? [];
 
-        return releasedCount > 0;
+        return released.Select(seatId => Guid.Parse((string)seatId!)).ToList();
     }
 
     public async Task<IReadOnlyList<Guid>> ConfirmAsync(Guid eventId, Guid holdId,

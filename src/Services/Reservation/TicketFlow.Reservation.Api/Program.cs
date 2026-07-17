@@ -4,8 +4,10 @@ using Scalar.AspNetCore;
 using TicketFlow.Messaging;
 using TicketFlow.Reservation.Api.Consumers;
 using TicketFlow.Reservation.Api.Endpoints;
+using TicketFlow.Reservation.Api.Hubs;
 using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
+using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Infrastructure;
 using TicketFlow.Web;
 
@@ -26,6 +28,8 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<ISeatMapNotifier, SignalRSeatMapNotifier>();
 
 // Postgres + Redis wiring (Infrastructure), then the orchestration services on top
 // (Application) — ISeatHoldStore now has a real implementation (Commit 4-6), so this no
@@ -58,6 +62,12 @@ app.MapScalarApiReference();
 app.MapInventoryEndpoints();
 app.MapAvailabilityEndpoints();
 app.MapHoldEndpoints();
+
+// Anonymous at the service tier, same as the REST endpoints above (Phase 7 Commit 4 mục 3 —
+// gateway is the trust boundary for this route, reservation itself stays a trusted-network
+// callee for S2S). Path under /hubs so AddTicketFlowAuth's query-string-token fallback (gateway
+// side) can key off a stable prefix if more hubs ever get added.
+app.MapHub<SeatMapHub>("/hubs/seatmap");
 
 app.MapGrpcService<ReservationServiceImpl>();
 

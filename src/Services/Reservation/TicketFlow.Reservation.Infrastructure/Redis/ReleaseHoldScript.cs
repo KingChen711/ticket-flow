@@ -18,7 +18,8 @@ internal static class ReleaseHoldScript
     /// project runs a single Redis node, so it's an acceptable simplification (see
     /// docs/phase-2-plan.md) that avoids a round trip to fetch the seat list before calling this.
     ///
-    /// Returns the count of seats actually released.
+    /// Returns the seat ids actually released — Phase 8 Commit 6 needs the real list (not just a
+    /// count) to broadcast which seats went back to Available, same reasoning as ConfirmHoldScript.
     /// </remarks>
     public const string Source = """
         local hold_seats_key = KEYS[1]
@@ -26,13 +27,13 @@ internal static class ReleaseHoldScript
         local hold_id = ARGV[2]
 
         local seat_ids = redis.call('SMEMBERS', hold_seats_key)
-        local released = 0
+        local released = {}
 
         for _, seat_id in ipairs(seat_ids) do
             local hold_key = 'hold:' .. event_id .. ':' .. seat_id
             if redis.call('GET', hold_key) == hold_id then
                 redis.call('DEL', hold_key)
-                released = released + 1
+                table.insert(released, seat_id)
             end
         end
 
