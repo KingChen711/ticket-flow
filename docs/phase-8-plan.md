@@ -197,9 +197,27 @@ tags: [ticketflow, phase-8, plan, nextjs, micro-frontends, pwa, signalr, pkce, b
 
 ## Nhóm D — scanner + finalize
 
-### Commit 8 — `feat(gate-scanner): PWA quét QR check-in (DoD 2)`
-- PWA installable (manifest, không cần offline caching — backlog), camera + đọc QR (**probe `BarcodeDetector` API trước, fallback thư viện JS nếu thiếu** — pin lúc code), login organizer → quét → `POST /tickets/validate` → màn hình xanh (valid) / vàng (already-checked-in) / đỏ (not-found).
-- **Verify thật (DoD 2 khép ở đây):** quét QR từ PDF vé mua thật ở Commit 5 → valid; quét lại → already-checked-in; QR bịa → not-found.
+### Commit 8 — `feat(gate-scanner): PWA quét QR check-in (DoD 2)` ✅ DONE
+
+- `gate-scanner` (Commit 3 chỉ scaffold rỗng) giờ có Auth.js + role gate y hệt organizer-dashboard (copy `auth.ts`/`next-auth.d.ts`, `POST /tickets/validate` cũng là `RequireOrganizer`).
+- **PWA installable tối thiểu:** `public/manifest.json` (icon SVG tự vẽ, `display: standalone`) + `metadata.manifest` trong `layout.tsx`. Không service worker/offline caching — đúng quyết định mục ban đầu, backlog.
+- **`ScannerClient` (client component):** 2 nguồn quét — camera trực tiếp (`getUserMedia` + vòng lặp `requestAnimationFrame`) và upload ảnh (`<input type="file">`, thực tế hữu ích khi camera không đọc được QR bị lóa/hỏng — không chỉ để test). Cả 2 dùng chung `decodeFrame()`: thử `BarcodeDetector` native trước nếu có, fallback `jsQR` (npm, thuần JS, không dependency) nếu không.
+- `POST /api/validate` (Route Handler proxy, BFF mục 2) — `ScannerClient` là client component nên không tự cầm được `accessToken`; route đọc session server-side rồi gọi `POST /ticketing/tickets/validate` thay client.
+- Kết quả render toàn màn hình: xanh (`Valid`), vàng (`AlreadyCheckedIn`), đỏ (`NotFound`), nút "Scan next" quay lại trạng thái quét.
+
+**🐛 Probe thật — `BarcodeDetector`: xác nhận đúng dự đoán, không có sẵn trên desktop.** `'BarcodeDetector' in window` → `false` trên Chromium/Electron của môi trường test này — đúng thực tế đã biết của Shape Detection API (chủ yếu chỉ có trên Android Chrome/ChromeOS, không mặc định trên desktop). Xác nhận quyết định "jsQR làm fallback thật, không phải phương án dự phòng hiếm khi chạy" — trên desktop, jsQR **là** đường chạy chính.
+
+**🐛 Bug thật, ảnh hưởng cả 3 app (phát hiện nhờ app thứ 3 mới lộ ra) — session cookie đè lẫn nhau giữa customer-web/organizer-dashboard/gate-scanner.** `gate-scanner` vừa mở lần đầu tiên (chưa từng đăng nhập bao giờ) đã hiện sẵn "not an organizer" — hoá ra đang đọc **session cookie của app khác**. Nguyên nhân: cookie trình duyệt chỉ scope theo **hostname**, không theo **port** (đúng RFC 6265) — cả 3 app cùng chạy trên `localhost` (chỉ khác port 3000/3001/3002) nên dùng chung 1 cookie jar; Auth.js mặc định đặt tên cookie session giống hệt nhau (`authjs.session-token`) ở cả 3 app, và cả 3 `.env.local` từng dùng chung 1 `AUTH_SECRET` (copy nhanh lúc scaffold) nên app này còn **giải mã được** session cookie của app kia — đăng nhập ở app A âm thầm ghi đè/đọc nhầm session của app B, dù người dùng chưa từng chạm app B. Fix 2 lớp cho cả 3 app: (1) mỗi app 1 `AUTH_SECRET` riêng (đã khác client Keycloak sẵn, giờ secret cũng khác — cookie "lạ" từ app khác không giải mã được nữa thay vì bị chấp nhận nhầm); (2) mỗi app đặt tên cookie session riêng qua `cookies.sessionToken.name` (`authjs.<app>.session-token`) — sửa tận gốc việc dùng chung 1 "ô nhớ" cookie. Ghi backlog nhỏ: các cookie tạm thời trong lúc login (`pkceCodeVerifier`, `state`, `nonce`, `callbackUrl`, `csrfToken`) chưa đổi tên riêng — chỉ va chạm nếu 2 app cùng thực hiện OAuth handshake đồng thời trong cùng trình duyệt, tình huống hiếm với 1 nhân viên gate-staff thao tác tuần tự.
+
+**Sự cố môi trường (không phải bug code, nhưng ăn khá nhiều thời gian debug):** Docker Desktop tự tắt hoàn toàn giữa phiên làm việc (không chỉ container exit như các lần trước — toàn bộ `Docker Desktop.exe` biến mất khỏi tasklist). Bật lại app, `docker compose up -d` lại — 20 container phục hồi đúng, **dữ liệu Postgres/catalog/order vẫn còn** (volume không mất, khác hẳn tình huống "recreate Keycloak" ở Commit 2). Nhưng **session Keycloak (SSO + refresh token) không sống sót qua restart** dù user/client config thì có — browser giữ refresh token cũ, gọi refresh thất bại (`ECONNREFUSED` ngay lúc Keycloak vừa tắt) rồi kẹt ở trạng thái lỗi vĩnh viễn cho tới khi đăng xuất/đăng nhập lại thật. Bài học thực dụng: sau khi Docker phục hồi, **luôn đăng xuất + đăng nhập lại** trên mọi app trước khi verify tiếp, đừng cố refresh session cũ.
+
+**Verify thật (DoD 2 khép ở đây) — dùng vé mua thật, không tạo dữ liệu giả:**
+- Mua 1 vé thật qua customer-web (event "Commit 7 Verify Show", ghế `7dd94f42`) → tải PDF thật qua `GET /ticketing/tickets/{id}/pdf` → **rasterize PDF thật thành PNG** (công cụ verify riêng, không phải code sản phẩm) → **decode QR bằng OpenCV** để lấy đúng chuỗi payload thật: `{orderId}:{seatId}` — khớp chính xác định dạng đã tài liệu hoá từ Phase 5.
+- Gọi thẳng `/api/validate` (route thật của app, đăng nhập `organizer1` thật) với payload thật lần 1 → `Valid`, set `checkedInAt`; gọi lại y hệt → `AlreadyCheckedIn` (cùng `checkedInAt`, không bị ghi đè); payload bịa (2 GUID không tồn tại) → `NotFound`.
+- **Verify cả đường quét ảnh thật của UI** (không chỉ gọi API thẳng): nạp PNG thật vào `<input type="file">` qua `DataTransfer` + dispatch `change` event thật (mô phỏng chọn file, không phải giả lập kết quả) — `ScannerClient` tự decode bằng `jsQR` (đường chạy thật trên desktop, xác nhận từ probe ở trên), tự gọi `/api/validate`, tự render đúng màn hình **vàng "ALREADY CHECKED IN"** kèm đúng giờ check-in đã set ở bước trước. Nút "Scan next" reset đúng về màn hình quét ban đầu.
+- **Giới hạn ghi nhận trung thực:** không có camera vật lý trong môi trường test này nên đường quét camera trực tiếp (`getUserMedia`) chỉ được xác nhận qua code review + cùng hàm `decodeFrame()` đã verify thật ở đường upload ảnh (2 đường dùng chung logic decode, chỉ khác nguồn frame) — không phải một lỗ hổng verify, vì đây đúng là giới hạn vật lý của môi trường, không phải giới hạn của công cụ.
+- Chặn role (nhắc lại chính sách đã có từ Commit 1, xác nhận không đổi): customer token → `POST /tickets/validate` → `403`; không token → `401`. UI: đăng nhập `customer1` → "This app is for organizers only" đúng như organizer-dashboard.
+- Regression: không đổi (commit này thuần frontend). `pnpm build` sạch cho cả 3 app sau khi thêm cookie fix. `docker ps` đủ 20 container, tất cả healthy.
 
 ### Commit 9 — `chore: finalize Phase 8 — Multi-Zones shell, scope reconcile, DoD`
 - Ghép Multi-Zones: customer-web làm shell, rewrite `/organizer/*` + `/scanner/*` (chốt hình dạng cuối theo probe Commit 3). Scope reconcile: admin-panel → backlog (mục 7), Module Federation → Multi-Zones (mục 1), BFF = Next.js server-side (mục 2), SignalR đã có. Tick DoD, cập nhật doc này.
@@ -258,8 +276,8 @@ sequenceDiagram
 
 | DoD | Kiểm chứng |
 |---|---|
-| Hành trình mua vé hoàn chỉnh trên UI thật | Commit 5: browse → login → chọn ghế → hold → đặt → Confirmed → PDF vé, 100% trên browser |
-| Scanner validate được vé đã mua | Commit 8: quét QR vé thật → valid → quét lại → already-checked-in |
+| Hành trình mua vé hoàn chỉnh trên UI thật | ✅ Commit 5: browse → login → chọn ghế → hold → đặt → Confirmed → PDF vé, 100% trên browser |
+| Scanner validate được vé đã mua | ✅ Commit 8: quét QR vé thật (upload ảnh QR thật từ PDF thật) → valid → quét lại → already-checked-in |
 
 ## Hướng mở rộng (backlog — không thuộc Phase 8)
 - **admin-panel** — dựng khi có yêu cầu quản trị thật (mục 7).

@@ -47,6 +47,18 @@ interface TokenSet {
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [Keycloak],
+  // Real bug found wiring gate-scanner (Commit 8): browser cookies are scoped by hostname only,
+  // NOT by port — so customer-web (:3000), organizer-dashboard (:3001), and gate-scanner (:3002)
+  // all share ONE cookie jar on "localhost". Auth.js's default cookie name
+  // (`authjs.session-token`) is identical across apps, so without a per-app name here, signing
+  // into one app silently overwrites/reads the session cookie of whichever app last set it —
+  // observed live as gate-scanner rendering "not an organizer" using customer-web's leftover
+  // session on its very first load, before ever visiting it. Distinct cookie name per app fixes
+  // the actual collision; distinct AUTH_SECRET per app (already the case) means a foreign cookie
+  // also fails to decrypt rather than being silently accepted.
+  cookies: {
+    sessionToken: { name: "authjs.customer-web.session-token" },
+  },
   callbacks: {
     // Access token and sub aren't on the session by default — pages need the token to call the
     // gateway as this user, and the sub (Keycloak user id) to ask for personalized recommendations.

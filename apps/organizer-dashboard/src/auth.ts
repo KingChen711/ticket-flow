@@ -60,6 +60,13 @@ interface TokenSet {
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [Keycloak],
+  // Cookies are scoped by hostname only, not port — customer-web/organizer-dashboard/gate-scanner
+  // all share one cookie jar on "localhost". Without a per-app name, Auth.js's default session
+  // cookie name collides across all 3 apps (real bug found wiring gate-scanner, docs/phase-8-plan.md
+  // Commit 8) — signing into one app silently overwrites the others' session.
+  cookies: {
+    sessionToken: { name: "authjs.organizer-dashboard.session-token" },
+  },
   callbacks: {
     async jwt({ token, account }) {
       if (account) {

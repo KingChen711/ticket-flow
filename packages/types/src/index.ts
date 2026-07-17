@@ -113,6 +113,13 @@ export interface TicketResponse {
   checkedInAt: string | null;
 }
 
+// ticketing-service — POST /ticketing/tickets/validate (gate-scanner, Phase 8 Commit 8)
+export interface ValidateTicketResponse {
+  status: "Valid" | "AlreadyCheckedIn" | "NotFound";
+  ticketId: string | null;
+  checkedInAt: string | null;
+}
+
 // catalog-service — POST/GET /catalog/events/{eventId}/seatmap, POST .../seatmap/sections
 export interface SectionResponse {
   id: string;
