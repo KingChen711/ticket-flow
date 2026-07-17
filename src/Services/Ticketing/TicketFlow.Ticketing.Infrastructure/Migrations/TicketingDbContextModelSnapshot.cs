@@ -247,6 +247,10 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<DateTimeOffset?>("CheckedInAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("checked_in_at");
+
                     b.Property<DateTimeOffset>("IssuedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("issued_at");
@@ -273,6 +277,10 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_tickets");
+
+                    b.HasIndex("QrPayload")
+                        .IsUnique()
+                        .HasDatabaseName("ix_tickets_qr_payload");
 
                     b.HasIndex("OrderId", "SeatId")
                         .IsUnique()

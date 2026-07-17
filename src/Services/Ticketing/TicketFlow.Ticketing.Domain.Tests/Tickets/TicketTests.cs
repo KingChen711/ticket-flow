@@ -46,4 +46,24 @@ public class TicketTests
 
         Assert.NotEqual(first.Id, second.Id);
     }
+
+    [Fact]
+    public void CheckIn_FirstScan_SetsCheckedInAt()
+    {
+        var ticket = Ticket.Issue(Guid.NewGuid(), Guid.NewGuid(), "qr-1", "tickets/1.pdf", DateTimeOffset.UtcNow);
+        var checkInTime = DateTimeOffset.UtcNow;
+
+        ticket.CheckIn(checkInTime);
+
+        Assert.Equal(checkInTime, ticket.CheckedInAt);
+    }
+
+    [Fact]
+    public void CheckIn_AlreadyCheckedIn_Throws()
+    {
+        var ticket = Ticket.Issue(Guid.NewGuid(), Guid.NewGuid(), "qr-1", "tickets/1.pdf", DateTimeOffset.UtcNow);
+        ticket.CheckIn(DateTimeOffset.UtcNow);
+
+        Assert.Throws<InvalidOperationException>(() => ticket.CheckIn(DateTimeOffset.UtcNow));
+    }
 }

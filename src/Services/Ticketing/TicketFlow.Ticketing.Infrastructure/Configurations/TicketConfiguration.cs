@@ -15,6 +15,7 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.Property(t => t.SeatId).IsRequired();
         builder.HasIndex(t => new { t.OrderId, t.SeatId }).IsUnique();
         builder.Property(t => t.QrPayload).IsRequired().HasMaxLength(500);
+        builder.HasIndex(t => t.QrPayload).IsUnique();
         builder.Property(t => t.PdfObjectKey).IsRequired().HasMaxLength(500);
     }
 }

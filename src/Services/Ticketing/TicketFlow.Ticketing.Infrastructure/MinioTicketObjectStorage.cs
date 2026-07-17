@@ -32,6 +32,19 @@ public sealed class MinioTicketObjectStorage(IMinioClient minioClient, string bu
         return objectKey;
     }
 
+    public async Task<byte[]> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
+    {
+        using var memoryStream = new MemoryStream();
+        await minioClient.GetObjectAsync(
+            new GetObjectArgs()
+                .WithBucket(bucketName)
+                .WithObject(objectKey)
+                .WithCallbackStream(stream => stream.CopyTo(memoryStream)),
+            cancellationToken);
+
+        return memoryStream.ToArray();
+    }
+
     private async Task EnsureBucketExistsAsync(CancellationToken cancellationToken)
     {
         var exists = await minioClient.BucketExistsAsync(

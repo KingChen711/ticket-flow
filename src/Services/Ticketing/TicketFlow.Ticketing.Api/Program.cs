@@ -4,6 +4,7 @@ using QuestPDF.Infrastructure;
 using Scalar.AspNetCore;
 using TicketFlow.Messaging;
 using TicketFlow.Ticketing.Api.Consumers;
+using TicketFlow.Ticketing.Api.Endpoints;
 using TicketFlow.Ticketing.Application;
 using TicketFlow.Ticketing.Infrastructure;
 using TicketFlow.Web;
@@ -15,6 +16,7 @@ QuestPDF.Settings.License = LicenseType.Community;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddTicketingApplication();
 builder.Services.AddTicketingInfrastructure(builder.Configuration);
@@ -57,5 +59,7 @@ app.UseTicketFlowWeb();
 
 app.MapOpenApi();
 app.MapScalarApiReference();
+
+app.MapTicketEndpoints();
 
 app.Run();

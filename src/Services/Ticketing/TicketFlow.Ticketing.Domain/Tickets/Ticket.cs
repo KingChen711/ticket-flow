@@ -19,6 +19,7 @@ public sealed class Ticket : Entity<Guid>
     public string QrPayload { get; private set; } = null!;
     public string PdfObjectKey { get; private set; } = null!;
     public DateTimeOffset IssuedAt { get; private set; }
+    public DateTimeOffset? CheckedInAt { get; private set; }
 
     // Required by EF Core.
     private Ticket() { }
@@ -41,4 +42,16 @@ public sealed class Ticket : Entity<Guid>
             Guard.NotNullOrEmpty(qrPayload, nameof(qrPayload)),
             Guard.NotNullOrEmpty(pdfObjectKey, nameof(pdfObjectKey)),
             now);
+
+    // The one mutation this otherwise-immutable fact allows (see class doc comment) — one-way,
+    // no un-check-in. Throwing on a repeat scan (rather than silently no-op'ing) is deliberate:
+    // the gate-scanner UI (Phase 8) needs to tell "valid, first scan" apart from "already used"
+    // to flag a possible duplicate/resold ticket.
+    public void CheckIn(DateTimeOffset now)
+    {
+        if (CheckedInAt is not null)
+            throw new InvalidOperationException($"Ticket {Id} was already checked in at {CheckedInAt:O}.");
+
+        CheckedInAt = now;
+    }
 }
