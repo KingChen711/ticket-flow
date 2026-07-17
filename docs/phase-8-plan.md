@@ -100,10 +100,24 @@ tags: [ticketflow, phase-8, plan, nextjs, micro-frontends, pwa, signalr, pkce, b
 - 3 client mới xác nhận đúng cấu hình qua Admin API (`publicClient: false`, `standardFlowEnabled: true`, đúng `redirectUris`/`webOrigins` từng port).
 - Regression: **81/81**, không hỏng gì. `docker ps` đủ 20 container.
 
-### Commit 3 — `chore(web): monorepo pnpm + probe composition & auth chain`
-- Dựng `apps/` + `packages/` (pnpm-workspace.yaml, `packages/types`, `packages/ui` skeleton, tsconfig base). Scaffold 3 app Next.js (port 3000/3001/3002), pin version sau probe.
-- **🐛 Probe TRƯỚC (2 rủi ro đầu phase):** (a) hiện trạng Module Federation cho Next.js 2026 → chốt Multi-Zones hay không (mục 1); (b) app tối giản Auth.js + Keycloak PKCE: login → session → refresh → gọi 1 API authenticated qua gateway — chốt cấu hình issuer/cookie thật bằng bằng chứng, không đoán docs.
-- **Verify thật:** `pnpm dev` cả 3 app lên; login/logout round-trip với Keycloak chạy được ở app probe.
+### Commit 3 — `chore(web): monorepo pnpm + probe composition & auth chain` ✅ DONE
+
+- Dựng `apps/` + `packages/` (`pnpm-workspace.yaml`, `packages/types`, `packages/ui` skeleton rỗng, `tsconfig.base.json`). Scaffold 3 app Next.js (`customer-web` :3000, `organizer-dashboard` :3001, `gate-scanner` :3002) qua `create-next-app` — TypeScript, Tailwind, App Router, `src/`. Version pin thật sau probe: **Next.js 16.2.10, React 19.2.4, TypeScript 5.9.3, next-auth 5.0.0-beta.31**.
+
+**🐛 Probe #1 — Module Federation cho Next.js: xác nhận đúng dự đoán, còn nặng hơn.** `npm view @module-federation/nextjs-mf` cho thấy package **vẫn được publish đều** (bản mới nhất cách 2 ngày, không hề "bị bỏ rơi" theo nghĩa ngừng phát hành) — nhưng đọc kỹ README + [issue #3153](https://github.com/module-federation/core/issues/3153) của chính team: **"Next.js support is in maintenance mode"**, dự kiến **EOL giữa-cuối 2026**, **App Router không có commitment phát triển nào** (chỉ Pages Router được backport fix nhỏ), lý do chính thức nêu rõ "Next.js is a hostile framework and Vercel is an adversary of federation", và team **khuyên chuyển hẳn sang Modern.js/Remix/TanStack**. Xác nhận chắc chắn quyết định Multi-Zones (mục 1) — không chỉ "an toàn hơn" mà là lựa chọn duy nhất còn được maintain cho App Router.
+
+**🐛 Probe #2 — chuỗi Auth.js + Keycloak PKCE qua gateway: chạy thật thành công, phát hiện 2 vấn đề dọc đường.**
+- **Bug thật #1 — `declare module` không có `import`/`export` ở top-level bị TS coi là ghi đè module, không phải augment.** File `next-auth.d.ts` (thêm field `accessToken` vào `Session`) chỉ chứa `declare module "next-auth" { ... }`, không có `import`/`export` nào khác trong file → TypeScript coi cả file là **global script**, khiến `declare module "next-auth"` **thay thế toàn bộ type của module thật** thay vì merge vào nó — lỗi build cực khó hiểu: `Type 'typeof import("next-auth")' has no call signatures` ngay tại chỗ gọi `NextAuth(...)`. Fix: thêm `export {};` ở đầu file để buộc TS coi file là module thật, kích hoạt đúng cơ chế declaration merging.
+- **Phát hiện môi trường (không phải bug):** thứ 2 hoá ra không cần xử lý gì thêm — vì frontend chạy trên **host** (không Dockerize phase này, mục 8), cả browser lẫn Next.js server đều gọi Keycloak qua cùng 1 URL host-facing `http://localhost:8180`, **không có vụ lệch issuer host-vs-Docker-network như Phase 7** (nỗi lo ban đầu của mục 3 hoá ra không áp dụng ở tầng frontend — chỉ áp dụng khi có 2 phía nằm ở 2 mạng khác nhau, ở đây cả 2 phía đều là host). Token phát ra mang `iss = localhost:8180`, khớp thẳng 1 trong 2 giá trị `ValidIssuers` gateway đã cấu hình sẵn từ Phase 7 — không cần sửa gì ở backend.
+- **Vấn đề công cụ (không phải bug code):** click qua Browser automation tool **không trigger được form submit** — kể cả trên form HTML thuần server-rendered của chính Keycloak (không phải vấn đề React hydration). Workaround: `document.querySelector('form').submit()` qua JS trực tiếp — chỉ dùng để test, không phải cách người dùng thật tương tác (người dùng thật click chuột bình thường vẫn hoạt động, đây thuần là hạn chế của tool tự động hoá).
+- **Sự cố .gitignore (bắt được lúc rà `git status`):** rule `.NET` cũ `**/[Pp]ackages/*` (ignore NuGet packages folder) vô tình **nuốt luôn** `packages/` npm workspace mới — `git status` không hề hiện `packages/` dù đã tạo file thật bên trong. Fix bằng negation pattern `!/packages/` + `!/packages/**`, giữ lại `/packages/**/node_modules/` phòng khi sau này có package tự cài dep riêng.
+
+**Verify thật:**
+- `pnpm build` sạch cho `customer-web` (0 lỗi TS sau fix declaration-merging).
+- `pnpm dev` cả 3 app cùng lên đúng port (`curl` xác nhận `200` trên `:3000`/`:3001`/`:3002`).
+- **Round-trip login/logout thật với Keycloak** trên app probe (`customer-web`): click "Sign in" → redirect `localhost:8180` → điền `customer1`/`customer123` → redirect ngược về `localhost:3000` → session hiện đúng `customer1@ticketflow.dev` + `accessToken` thật.
+- **Trang `/probe` gọi thật qua gateway bằng access token từ session:** `GET /catalog/venues` (public) → `200`; `GET /ordering/orders` (authenticated, header `Authorization` lấy từ session) → `200`, trả về **đúng order thật của customer1** (order đã verify ở Commit 2) — chứng minh token do Auth.js lấy được chấp nhận bởi JWT validation + ownership check phía backend, không cần sửa gì cả 2 bên.
+- Sign out → session bị xoá, quay lại "Not signed in" — round-trip đầy đủ.
 
 ## Nhóm B — customer-web (DoD 1)
 

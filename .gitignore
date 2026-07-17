@@ -482,3 +482,16 @@ $RECYCLE.BIN/
 *.swp
 
 /.claude
+
+# Node / Next.js (apps/, packages/ — Phase 8)
+.next/
+.pnpm-store/
+*.tsbuildinfo
+
+# Root-level packages/ is the npm workspace (Phase 8), not a NuGet packages folder — the .NET
+# template's "**/[Pp]ackages/*" rule near the top of this file would otherwise ignore it whole.
+!/packages/
+!/packages/**
+/packages/**/node_modules/
+.env.local
+.env.*.local

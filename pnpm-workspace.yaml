@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# sharp (next/image optimization) and unrs-resolver (ESLint tooling) are well-known,
+# legitimate packages that need their native build step — pnpm 11 blocks install scripts by
+# default (supply-chain hardening) and auto-wrote this stub key name for us (allowBuilds,
+# not the older onlyBuiltDependencies array syntax) the first time it hit the block.
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
