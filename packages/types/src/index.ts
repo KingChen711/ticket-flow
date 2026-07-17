@@ -112,3 +112,29 @@ export interface TicketResponse {
   issuedAt: string;
   checkedInAt: string | null;
 }
+
+// catalog-service — POST/GET /catalog/events/{eventId}/seatmap, POST .../seatmap/sections
+export interface SectionResponse {
+  id: string;
+  name: string;
+  capacity: number;
+}
+
+export interface SeatMapResponse {
+  id: string;
+  eventId: string;
+  sections: SectionResponse[];
+}
+
+// analytics-service — GET /analytics/revenue (organizer-dashboard)
+export interface EventRevenue {
+  eventId: string;
+  revenue: number;
+  seatCount: number;
+}
+
+export interface RevenueResult {
+  totalRevenue: number;
+  totalSeats: number;
+  byEvent: EventRevenue[];
+}
