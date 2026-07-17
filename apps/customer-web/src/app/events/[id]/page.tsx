@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import type { EventDetailResponse } from "@ticketflow/types";
 import { auth } from "@/auth";
+import { SeatPicker } from "./SeatPicker";
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
 
@@ -44,9 +45,16 @@ export default async function EventDetailPage({ params }: { params: Promise<{ id
 
       <section className="mt-6">
         <h2 className="font-semibold">Seats</h2>
-        <p className="text-sm text-gray-600">
+        <p className="mb-3 text-sm text-gray-600">
           {availableSeats} of {detail.seats.length} seats available
         </p>
+        <SeatPicker
+          eventId={id}
+          seats={detail.seats}
+          priceTiers={detail.event.priceTiers}
+          currency={detail.event.priceTiers[0]?.currency ?? "VND"}
+          signedIn={!!session}
+        />
       </section>
 
       {detail.recommendations.length > 0 && (

@@ -38,6 +38,9 @@ export default async function RootLayout({
           </Link>
           {session ? (
             <div className="flex items-center gap-4 text-sm">
+              <Link href="/orders" className="text-blue-600 underline">
+                My orders
+              </Link>
               <span>{session.user?.email}</span>
               <form
                 action={async () => {

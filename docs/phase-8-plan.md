@@ -139,9 +139,21 @@ tags: [ticketflow, phase-8, plan, nextjs, micro-frontends, pwa, signalr, pkce, b
 - Đăng nhập bằng `customer1` (round-trip Keycloak đầy đủ, giống Commit 3) → header đổi đúng thành email + nút Sign out; browse/detail vẫn hoạt động bình thường khi đã đăng nhập (userId được truyền cho aggregator, không lỗi).
 - `pnpm build` sạch 0 lỗi TS.
 
-### Commit 5 — `feat(customer-web): chọn ghế → hold → đặt đơn → vé của tôi`
-- Seat map render từ availability, chọn ghế → `POST /reservation/holds` → countdown TTL → `POST /ordering/orders` (body không có danh tính — Phase 7) → poll trạng thái đơn đến `Confirmed` → trang "vé của tôi" (orders từ claims + tickets + link PDF từ Commit 1/2).
-- **Verify thật (DoD 1 khép ở đây):** hành trình mua vé hoàn chỉnh trên browser thật, không chạm curl bước nào; PDF vé mở được.
+### Commit 5 — `feat(customer-web): chọn ghế → hold → đặt đơn → vé của tôi` ✅ DONE
+
+- `packages/types` thêm 4 interface (`HoldResult`, `OrderPlacedResponse`, `MyOrderView`, `TicketResponse`) — ghi chú rõ `OrderPlacedResponse.orderId` khác `MyOrderView.id` (2 response shape khác nhau cho cùng 1 order, đúng tinh thần CQRS Ch6: response ghi ≠ response đọc).
+- `SeatPicker` (client component): checkbox chọn ghế, tính `totalAmount` real-time từ price tier theo `sectionId`, disable ghế không `Available`. Submit qua Server Action `holdSeatsAction` — gọi `POST /reservation/holds` bằng `session.accessToken` (token không rời server, đúng mô hình BFF mục 2), redirect sang `/checkout` kèm `holdId`.
+- `/checkout`: `Countdown` (client component, tick mỗi giây tới `expiresAt` của hold) + chọn phương thức thanh toán + Server Action `placeOrderAction` gọi `POST /ordering/orders` — body chỉ có dữ liệu đơn hàng thật, không có `CustomerId`/tên/email (đúng Phase 7 Commit 4) — rồi redirect `/orders/{id}`.
+- `/orders/[id]`: fetch order lần đầu server-side (ownership check đã có sẵn ở backend — 404 nếu không phải chủ đơn), sau đó `OrderStatus` (client component) **poll mỗi 2s** qua 1 route proxy same-origin cho tới khi `status = Confirmed`, rồi tự fetch vé + hiện link PDF.
+- **3 Route Handler proxy mới** (`/api/orders/[id]`, `/api/orders/[id]/tickets`, `/api/tickets/[id]/pdf`) — lý do cần thiết: client component polling/tải PDF không thể tự cầm `accessToken` (token chỉ sống server-side trong session), nên phải đi qua route same-origin để Next server tự gắn `Authorization` header thay client. `/api/tickets/[id]/pdf` chính là câu trả lời thực tế cho quyết định "stream PDF qua API, không presigned URL" đã chốt từ đầu phase (mục 4) — route này chính là cái hiện thực hoá quyết định đó.
+- `/orders`: trang "vé của tôi" — `GET /ordering/orders` không query param, danh tính từ claims (đúng Commit 2).
+
+**Verify thật (DoD 1 của cả Phase 8 khép ở đây) — 100% thao tác trên browser thật, không chạm curl bước nào trong chính luồng mua vé:**
+- Vào trang chi tiết event thật (đã publish ở Commit 4) → chọn 2 ghế → tổng tiền hiện đúng `900,000 VND` (2 × 450,000) → "Hold seats & continue" → redirect `/checkout`, countdown hiện `9:12` và đếm ngược thật.
+- "Place order" → **chỉ sau ~2 giây**, trang order đã tự chuyển sang `Status: Confirmed` (saga Phase 5 chạy xong: hold confirm → payment → tickets issued → order completed) và hiện đủ 2 vé kèm link "View PDF".
+- Click "View PDF" → trình duyệt nhận đúng response `200 OK`, kích hoạt tải file PDF thật (xác nhận qua network log, không phải trang lỗi).
+- Vào `/orders` ("vé của tôi") → thấy cả đơn cũ (từ Commit 2) lẫn đơn vừa mua, đều `Confirmed`.
+- Regression backend: **81/81** không đổi (commit này thuần frontend, không chạm code .NET). `pnpm build` sạch, `docker ps` đủ 20 container.
 
 ## Nhóm C — real-time + organizer
 

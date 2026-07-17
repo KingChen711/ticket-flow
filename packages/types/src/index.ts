@@ -68,3 +68,47 @@ export interface EventDetailResponse {
   seats: SeatAvailabilityResponse[];
   recommendations: RecommendedEventSummary[];
 }
+
+// reservation-service — POST /reservation/holds
+export interface HoldResult {
+  success: boolean;
+  holdId: string;
+  expiresAt: string;
+  unavailableSeatIds: string[];
+}
+
+// ordering-service — POST /ordering/orders response (note: "orderId", not "id" — the GET
+// endpoints below return MyOrderView, which uses "id" instead; two different response shapes
+// for the same underlying order, matching the write/read split of Ch6 CQRS).
+export interface OrderPlacedResponse {
+  orderId: string;
+  customerId: string;
+  catalogEventId: string;
+  seatIds: string[];
+  totalAmount: number;
+  currency: string;
+  status: string;
+}
+
+// ordering-service — GET /ordering/orders and GET /ordering/orders/{id} (MyOrderView projection)
+export interface MyOrderView {
+  id: string;
+  customerId: string;
+  catalogEventId: string;
+  seatIds: string[];
+  totalAmount: number;
+  currency: string;
+  status: string;
+  placedAt: string;
+  confirmedAt: string | null;
+  cancelledAt: string | null;
+}
+
+// ticketing-service — GET /ticketing/orders/{orderId}/tickets
+export interface TicketResponse {
+  id: string;
+  orderId: string;
+  seatId: string;
+  issuedAt: string;
+  checkedInAt: string | null;
+}
