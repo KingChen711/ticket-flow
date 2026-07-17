@@ -60,7 +60,7 @@ export default async function DashboardPage() {
       <section>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Events</h2>
-          <Link href="/events/new" className="text-sm text-blue-600 underline">
+          <Link href="/organizer/events/new" className="text-sm text-blue-600 underline">
             + New event
           </Link>
         </div>

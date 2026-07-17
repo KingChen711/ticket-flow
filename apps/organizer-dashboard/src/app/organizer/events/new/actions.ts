@@ -89,5 +89,5 @@ export async function createEventAction(formData: FormData) {
 
   await post<EventResponse>(`/catalog/events/${event.id}/publish`, accessToken, {});
 
-  redirect("/");
+  redirect("/organizer");
 }

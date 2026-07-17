@@ -41,12 +41,11 @@ Domain này **tự nhiên** đòi hỏi mọi pattern trong sách, không phải
 
 ```mermaid
 flowchart TB
-    subgraph Client["CLIENT LAYER — Next.js"]
+    subgraph Client["CLIENT LAYER — Next.js Multi-Zones (customer-web = shell)"]
         direction LR
         CW[customer-web]
         OD[organizer-dashboard]
         GS[gate-scanner PWA]
-        AD[admin-panel]
     end
 
     GW["GATEWAY LAYER — YARP<br/>API Gateway + BFF + Auth check"]
@@ -111,10 +110,9 @@ Frontends (micro-frontends — Ch12):
 
 | App | Vai trò | Tech | Port |
 |---|---|---|---|
-| customer-web | Duyệt, tìm, mua vé | Next.js 15 + shadcn | 3000 |
-| organizer-dashboard | Tạo sự kiện, sơ đồ ghế, xem doanh số | Next.js | 3001 |
-| gate-scanner | Quét QR check-in tại cổng | Next.js PWA | 3002 |
-| admin-panel | Quản trị nền tảng | Next.js | 3003 |
+| customer-web | Duyệt, tìm, mua vé; **shell** của Multi-Zones (rewrite `/organizer/*`, `/scanner/*`) | Next.js 16.2.10 + Tailwind (shadcn không dùng — component tự viết đủ cho nhu cầu, xem Phase 8 mục 6) | 3000 |
+| organizer-dashboard | Tạo sự kiện, sơ đồ ghế, xem doanh số | Next.js 16.2.10 | 3001 |
+| gate-scanner | Quét QR check-in tại cổng | Next.js 16.2.10 PWA (manifest, không service worker) | 3002 |
 
 ---
 
@@ -159,8 +157,8 @@ Frontends (micro-frontends — Ch12):
 | **Ch8** Database strategies | DB-per-service, polyglot persistence | Mỗi service DB riêng: Postgres/Mongo/Redis/ES/ClickHouse |
 | **Ch9** **Saga** | Distributed transaction + compensation | **PurchaseSaga**: giữ ghế→thanh toán→phát vé→thông báo |
 | **Ch10** Resiliency | Retry, Circuit Breaker, Timeout, Bulkhead | Payment bọc Polly; idempotency; graceful degradation |
-| **Ch11** API & BFF Gateway | Gateway, BFF per client | YARP gateway + JWT validation per-route (Phase 7); BFF riêng cho customer/organizer/scanner dời Phase 8 (dựng cùng frontend thật) |
-| **Ch12** Micro-frontends | Composition ở frontend | 4 app Next.js, shell + Module Federation, shared UI package |
+| **Ch11** API & BFF Gateway | Gateway, BFF per client | YARP gateway + JWT validation per-route (Phase 7); BFF = tầng server-side của chính từng Next.js app (Phase 8 mục 2) — không dựng service BFF .NET riêng, double-BFF vô nghĩa khi Next.js đã làm sẵn việc đó |
+| **Ch12** Micro-frontends | Composition ở frontend | 3 app Next.js (admin-panel backlog, mục 7), **Next.js Multi-Zones** (customer-web = shell) thay Module Federation — probe Commit 3 xác nhận package đó đã "maintenance mode", App Router không được hỗ trợ; shared `types` package (`ui` giữ rỗng, chưa có nhu cầu thật ≥2 app dùng chung component) |
 | **Ch13** Security | AuthN/AuthZ, OAuth2/OIDC, JWT | Keycloak (authority); role-based 2 tầng — gateway validate token, service sở hữu rule tự enforce |
 | **Ch14** Container hosting | Docker, Kubernetes, Helm | Dockerfile mỗi service; K8s manifest/Helm; deploy kind/minikube |
 | **Ch15** Serverless | FaaS, event-triggered | Function: transcode poster, sinh PDF vé, cron nhắc lịch sự kiện |
@@ -353,7 +351,7 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 2. `organizer-dashboard`: tạo sự kiện, thiết kế sơ đồ ghế, xem analytics.
 3. `gate-scanner` (PWA): quét QR check-in.
 4. `admin-panel`. Shared `ui`/`types` package; sơ đồ ghế real-time (SignalR).
-- **DoD:** hành trình mua vé hoàn chỉnh trên UI thật; scanner validate được vé đã mua.
+- **DoD:** ✅ hành trình mua vé hoàn chỉnh trên UI thật; ✅ scanner validate được vé đã mua. **Hoàn thành 2026-07-17** — verify qua `docker compose ps` (20 container) + toàn bộ hành trình mua vé thật trên browser 100% (không chạm curl bước nào trong chính luồng mua: browse → login PKCE thật qua Keycloak → chọn ghế (cập nhật real-time qua SignalR giữa 2 tab) → hold → đặt đơn → `Confirmed` → tải PDF vé thật) và scanner validate thật (upload ảnh QR thật rasterize từ PDF thật → `Valid` → quét lại → `AlreadyCheckedIn` → QR bịa → `NotFound`). Xem [docs/phase-8-plan.md](docs/phase-8-plan.md) để biết chi tiết từng commit (9 commit, lần đầu dự án có code ngoài .NET). 3 quyết định lệch scope ban đầu, đều ghi rõ lý do trong plan doc: **`admin-panel` cắt hẳn** (backlog — surface backend thật cho admin chỉ có ~3 endpoint, chưa đủ 1 sản phẩm, dựng app thứ 4 cho ngần đó là vaporware, lần cắt thứ 4 của dự án); **Module Federation → Next.js Multi-Zones** (probe xác nhận package Module Federation cho Next.js đã "maintenance mode", App Router không có commitment phát triển — Multi-Zones là cách composition chính chủ duy nhất còn sống cho App Router); **BFF per-frontend = tầng server-side của chính từng Next.js app**, không dựng 4 service .NET trung gian (double-BFF vô nghĩa khi Next.js đã làm sẵn việc đó). Nhiều bug thật phát hiện qua probe/verify trực tiếp trên browser thật (không đoán): `BarcodeDetector` API xác nhận không có sẵn trên desktop (đúng dự đoán, `jsQR` là đường chạy chính chứ không chỉ fallback); session cookie đè lẫn nhau giữa 3 app do cookie trình duyệt chỉ scope theo hostname chứ không theo port (RFC 6265) — fix bằng tên cookie + secret riêng mỗi app; và Next.js `basePath` xung đột với cơ chế parse request nội bộ của NextAuth khi đi qua Multi-Zones rewrite (đổi sang `assetPrefix` + tổ chức route thủ công theo đúng pattern chính chủ của Next.js).
 
 ### Phase 9 — Serverless *(Ch15)* — ~1 tuần
 1. Function transcode/thumbnail poster khi upload MinIO (event-triggered).

@@ -34,13 +34,13 @@ export default async function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <header className="flex items-center justify-between border-b px-6 py-4">
-          <Link href="/" className="text-lg font-semibold">
+          <Link href="/organizer" className="text-lg font-semibold">
             TicketFlow — Organizer
           </Link>
           {session ? (
             <div className="flex items-center gap-4 text-sm">
               {isOrganizer && (
-                <Link href="/events/new" className="text-blue-600 underline">
+                <Link href="/organizer/events/new" className="text-blue-600 underline">
                   New event
                 </Link>
               )}
@@ -48,7 +48,7 @@ export default async function RootLayout({
               <form
                 action={async () => {
                   "use server";
-                  await signOut();
+                  await signOut({ redirectTo: "/organizer" });
                 }}
               >
                 <button type="submit" className="text-blue-600 underline">
@@ -60,7 +60,10 @@ export default async function RootLayout({
             <form
               action={async () => {
                 "use server";
-                await signIn("keycloak");
+                // NextAuth's default post-login redirect is the site root ("/") — 404s now that
+                // this app's real content lives under /organizer, not "/" (Multi-Zones restructure,
+                // docs/phase-8-plan.md Commit 9).
+                await signIn("keycloak", { redirectTo: "/organizer" });
               }}
             >
               <button type="submit" className="text-blue-600 underline">
