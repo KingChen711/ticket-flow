@@ -49,6 +49,51 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "secret": "identity-admin-dev-secret"
+    },
+    {
+      "clientId": "ticketflow-customer-web",
+      "name": "customer-web (Phase 8)",
+      "description": "Confidential — token lives server-side in the Next.js app's session (Auth.js), browser never holds it. Authorization Code + PKCE, client-per-app per Keycloak's own recommendation.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "customer-web-dev-secret",
+      "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3000"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-organizer-dashboard",
+      "name": "organizer-dashboard (Phase 8)",
+      "description": "Same shape as ticketflow-customer-web, separate client so each app's sessions/tokens are independent.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "organizer-dashboard-dev-secret",
+      "redirectUris": ["http://localhost:3001/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3001"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-gate-scanner",
+      "name": "gate-scanner (Phase 8)",
+      "description": "Same shape as ticketflow-customer-web, separate client so each app's sessions/tokens are independent.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "gate-scanner-dev-secret",
+      "redirectUris": ["http://localhost:3002/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3002"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
     }
   ],
   "clientScopes": [

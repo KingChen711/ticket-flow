@@ -87,10 +87,18 @@ tags: [ticketflow, phase-8, plan, nextjs, micro-frontends, pwa, signalr, pkce, b
 - Validate ma trận đầy đủ: organizer quét lần 1 → `Valid` + `checkedInAt` set; quét lại cùng vé → `AlreadyCheckedIn` (cùng giá trị `checkedInAt`, không bị ghi đè — xác nhận `CheckIn()` throw đúng, không silently update); customer token → `403`; không token → `401` (chặn tại gateway trước khi chạm service); QR bịa → `NotFound` (không phải lỗi 404/500, response nghiệp vụ bình thường 200).
 - Regression: **81/81** (79 gốc + 2 test check-in mới) — không hỏng gì. `docker ps` đủ 20 container, tất cả healthy.
 
-### Commit 2 — `feat(ordering,keycloak): my-orders + ownership từ claims; realm client cho 3 app`
-- `GET /orders` bỏ query param `customerId` → lấy từ claim `sub`. `GET /orders/{id}`: so `sub` với `CustomerId`, khác → 404 (không lộ tồn tại đơn của người khác); admin xem được mọi đơn. Đóng backlog ownership Phase 7.
-- `realm-export.json`: 3 client confidential (mục 3) + redirect URI port 3000/3001/3002. Recreate Keycloak, verify import sạch.
-- **Verify thật:** token customer1 chỉ thấy đơn của mình; token customer khác → 404; admin thấy tất cả.
+### Commit 2 — `feat(ordering,keycloak): my-orders + ownership từ claims; realm client cho 3 app` ✅ DONE
+
+- `GET /orders` bỏ query param `customerId` → lấy từ claim `sub`. `GET /orders/{id}`: so `sub` với `order.CustomerId`; khác → **404** (không phải 403 — trả 403 sẽ vô tình xác nhận đơn đó tồn tại và thuộc người khác, chính nó đã là 1 rò rỉ thông tin nhỏ); admin (`IsInRole("admin")`) bypass check, xem được mọi đơn. Đóng backlog ownership Phase 7.
+- `realm-export.json`: 3 client confidential mới — `ticketflow-customer-web`/`ticketflow-organizer-dashboard`/`ticketflow-gate-scanner`, mỗi app 1 client riêng (đúng khuyến nghị client-per-app của Keycloak), redirect URI `http://localhost:300{0,1,2}/api/auth/callback/keycloak` (convention path callback mặc định của Auth.js/NextAuth), Authorization Code (`standardFlowEnabled`), không Direct Access Grants. Recreate Keycloak, verify import sạch, xác nhận cả 3 client hiện đúng cấu hình qua Admin API.
+
+**Lưu ý môi trường (không phải bug):** recreate Keycloak ở bước thêm client làm **toàn bộ user đổi UUID** (`sub` mới) — order thật đã tạo trong lần verify Commit 1 (trước khi recreate) không còn khớp `sub` hiện tại của `customer1` nữa, khiến lần test đầu tiên trả `[]`/`404` dù không có gì sai. Đặt lại 1 đơn mới dưới đúng Keycloak instance hiện tại để verify cho sạch — nhắc lại đúng bản chất "dev dùng H2 nội bộ, chấp nhận mất/đổi data khi recreate" đã ghi từ Commit 1 Phase 7, giờ lộ rõ thêm hệ quả: `sub` không phải hằng số ổn định qua các lần recreate realm, nên bất kỳ dữ liệu nào lưu `CustomerId` từ trước phải test lại với token mới sau mỗi lần recreate.
+
+**Verify thật:**
+- `GET /orders` (customer1, không query param) → thấy đúng đơn vừa đặt của chính mình.
+- `GET /orders/{id}` đúng chủ (customer1) → `200`. Đăng ký thêm 1 customer thứ 2 thật qua `POST /identity/register`, dùng token của họ gọi `GET /orders/{id}` lên đơn của customer1 → `404` (không lộ thông tin). Admin token → `200` (bypass đúng thiết kế). Customer2 tự `GET /orders` → `[]` (đúng, họ chưa mua gì). Không token → `401`.
+- 3 client mới xác nhận đúng cấu hình qua Admin API (`publicClient: false`, `standardFlowEnabled: true`, đúng `redirectUris`/`webOrigins` từng port).
+- Regression: **81/81**, không hỏng gì. `docker ps` đủ 20 container.
 
 ### Commit 3 — `chore(web): monorepo pnpm + probe composition & auth chain`
 - Dựng `apps/` + `packages/` (pnpm-workspace.yaml, `packages/types`, `packages/ui` skeleton, tsconfig base). Scaffold 3 app Next.js (port 3000/3001/3002), pin version sau probe.

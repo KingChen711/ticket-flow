@@ -50,13 +50,31 @@ public static class OrderEndpoints
         // Read side — handlers here go through IOrderViewStore (MyOrderView projection),
         // never IOrderStore/the event stream. That split is the actual point of Commit 6, not
         // just having separate endpoints.
-        group.MapGet("/{id:guid}", async (Guid id, GetOrderByIdQueryHandler handler, CancellationToken ct) =>
+        //
+        // Ownership check (Phase 8 Commit 2, closes the Phase 7 backlog item): a customer can
+        // only fetch their own order by id. Mismatch returns 404, not 403 — a 403 would confirm
+        // the order id exists and belongs to someone else, which is itself a (minor) information
+        // leak. Admin bypasses the check.
+        group.MapGet("/{id:guid}", async (Guid id, ClaimsPrincipal user, GetOrderByIdQueryHandler handler, CancellationToken ct) =>
         {
             var order = await handler.HandleAsync(new GetOrderByIdQuery(id), ct);
-            return order is null ? Results.NotFound() : Results.Ok(order);
+            if (order is null)
+                return Results.NotFound();
+
+            var customerId = Guid.Parse(user.FindFirstValue("sub")!);
+            if (order.CustomerId != customerId && !user.IsInRole("admin"))
+                return Results.NotFound();
+
+            return Results.Ok(order);
         });
 
-        group.MapGet("/", async (Guid customerId, GetMyOrdersQueryHandler handler, CancellationToken ct) =>
-            Results.Ok(await handler.HandleAsync(new GetMyOrdersQuery(customerId), ct)));
+        // "My orders" — always the caller's own, from the sub claim. No customerId query param
+        // anymore (Phase 7 backlog: this used to be a "plain trusted request field" the caller
+        // could set to anyone's id).
+        group.MapGet("/", async (ClaimsPrincipal user, GetMyOrdersQueryHandler handler, CancellationToken ct) =>
+        {
+            var customerId = Guid.Parse(user.FindFirstValue("sub")!);
+            return Results.Ok(await handler.HandleAsync(new GetMyOrdersQuery(customerId), ct));
+        });
     }
 }
