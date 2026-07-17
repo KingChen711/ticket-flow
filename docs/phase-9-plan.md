@@ -44,9 +44,9 @@ tags: [ticketflow, phase-9, plan, serverless, aws-lambda, localstack, s3, eventb
 ### 3. Poster: bucket `posters` trên **LocalStack S3** (không phải MinIO) — vì S3 event notification là chính bài học
 - Đường DoD 1: `POST /media/posters` qua gateway (`RequireOrganizer`) → **UploadPoster Lambda** ghi S3 `posters/` → **S3 event notification** (`s3:ObjectCreated:*`, canonical AWS pattern) trigger **ThumbnailPoster Lambda** → resize → ghi `posters/thumbs/`. `GET /media/**` (anonymous) stream qua Lambda — **không presigned URL**, đúng bẫy hostname-nội-bộ đã ăn từ Phase 7/8.
 - Vì sao không dùng MinIO cho poster: MinIO không trigger được Lambda của LocalStack một cách chính danh (webhook MinIO → Lambda function URL là franken-pattern, mất bài học S3 notification). Trade-off ghi thật: stack tạm có **2 object store** (MinIO cho tickets — di sản Phase 5 đang chạy tốt, LocalStack S3 cho posters — nơi bài học serverless cần S3 thật); AWS thật thì chỉ có S3, hợp nhất ghi backlog. **LocalStack Community không persist data qua restart** (persistence là tính năng Pro) — poster mất khi restart container, chấp nhận được cho learning phase, cùng tiền lệ "Keycloak dev H2 mất data khi recreate" đã ghi từ Phase 7.
-- Gateway → Lambda bằng đường nào: **probe quyết định** giữa Lambda **function URL** (gọn nhất, nhưng URL dạng subdomain `*.localhost.localstack.cloud` có thể không resolve trong Docker network trên Windows) và **LocalStack API Gateway** (REST, path-style, có trong Community) — YARP route `/media/*` trỏ vào một trong hai. Đây là **rủi ro số 2**.
+- **[Cập nhật sau Commit 2 — rủi ro số 2 kết luận khác dự tính ban đầu]** Cả 2 phương án nêu ra lúc lập plan (Function URL, LocalStack API Gateway) đều giả định gateway cần 1 URL HTTP cố định để route tới. Probe thật lộ ra vấn đề gốc không lường trước: Function URL của LocalStack sinh hostname **ngẫu nhiên** mỗi lần tạo và **không sống sót qua restart** (Community không persist) — không có URL nào đủ ổn định để gateway hardcode vào `appsettings.json`. Nghiệm đúng hoá ra đơn giản hơn cả 2 phương án đã liệt kê: gateway gọi thẳng qua **Lambda Invoke API theo TÊN function** (ổn định, không đổi qua restart) — chính là cách mục 4 đã chọn cho `RenderTicketPdf`, giờ dùng chung cho cả UploadPoster/GetPoster. Chi tiết đầy đủ trong phase-9-plan.md Commit 2.
 - **"Transcode" trong scope thực chất là resize ảnh.** Poster là ảnh tĩnh; không có video ở bất kỳ đâu trong domain — transcode video là vaporware, không làm.
-- Thư viện resize: **chốt sau probe giữa SkiaSharp (MIT, cần native assets Linux trong lambda container) và ImageSharp (3.x đổi sang Six Labors Split License — đúng loại bẫy license đã né 4 lần)**. Nghiêng SkiaSharp vì license sạch; thử resize thật trong môi trường Lambda trước khi chốt.
+- Thư viện resize: **SkiaSharp** (MIT) — chốt sau probe thật trong chính container Lambda (resize 800×600 → 200×150 thành công, `SkiaSharp.NativeAssets.Linux.NoDependencies` tự mang đủ native lib, không thiếu system dependency). ImageSharp 3.x vẫn Split-License dù learning project không chạm ngưỡng doanh thu — giữ đúng kỷ luật né license phức tạp của cả dự án.
 - Catalog `Event.PosterUrl` + hiển thị poster trên frontend: **backlog** — DoD chỉ cần "upload → thumbnail".
 
 ### 4. PDF vé: ticketing gọi Lambda **đồng bộ qua Invoke API** (`AmazonLambdaClient.InvokeAsync`, RequestResponse) — giữ nguyên ngữ nghĩa saga
@@ -88,9 +88,26 @@ tags: [ticketflow, phase-9, plan, serverless, aws-lambda, localstack, s3, eventb
 
 ## Nhóm B — DoD 1: poster
 
-### Commit 2 — `feat(media): upload poster qua gateway + S3 notification → thumbnail Lambda (DoD 1)`
-- `UploadPoster` (route `/media` qua YARP → function URL hoặc API Gateway, chốt theo probe rủi ro số 2) ghi S3 `posters/`; bucket notification `s3:ObjectCreated:*` → `ThumbnailPoster` resize (SkiaSharp/ImageSharp — chốt sau probe license + chạy thật) → `posters/thumbs/`; `GetPoster` stream.
-- **Verify thật (DoD 1 khép ở đây):** upload ảnh thật, organizer token thật, qua gateway → thumbnail **tự** xuất hiện trong S3 (xác nhận `awslocal s3 ls` + GET thumbnail về xem bằng mắt); customer token → `403`; không token → `401`; GET không cần token → `200`; file không phải ảnh → từ chối sạch, không sinh thumbnail rác.
+### Commit 2 — `feat(media): upload poster qua gateway + S3 notification → thumbnail Lambda (DoD 1)` ✅ DONE
+
+- 3 Lambda mới trong cùng project `TicketFlow.Functions`: `UploadPosterFunction`, `GetPosterFunction`, `ThumbnailPosterFunction`. Bucket S3 `posters` (LocalStack), object gốc ghi dưới `originals/`, thumbnail dưới `thumbs/` — tách prefix rõ ràng để bucket notification (`s3:ObjectCreated:*`, filter prefix `originals/`) không tự kích hoạt lại chính nó khi `ThumbnailPosterFunction` ghi thumbnail vào cùng bucket.
+- **Gateway KHÔNG route qua YARP tới Lambda** — đổi hẳn so với dự tính ban đầu, xem bug thật bên dưới. `MediaEndpoints.cs` là 2 minimal-API endpoint mới (`POST /media/posters` `RequireOrganizer`, `GET /media/{**key}` anonymous) gọi thẳng `AWSSDK.Lambda`'s `InvokeAsync` theo **tên function** (`UploadPosterFunction`/`GetPosterFunction`) — đúng pattern đã chốt sẵn ở mục 4 cho ticketing→`RenderTicketPdf`, giờ dùng luôn cho cả media. `ThumbnailPosterFunction` không có endpoint gọi trực tiếp — chỉ trigger qua S3 notification.
+- Chọn **SkiaSharp** (không ImageSharp) — tra cứu thật xác nhận ImageSharp 3.x vẫn Split-License (min. Apache-2.0 dưới $1M doanh thu/năm — với learning project thì thực ra vẫn miễn phí, nhưng giữ đúng kỷ luật né license phức tạp đã áp dụng suốt dự án). `SkiaSharp.NativeAssets.Linux.NoDependencies` build sẵn cho đúng bài toán: môi trường Lambda tối giản thiếu system lib (fontconfig...) mà SkiaSharp thường cần — gói `.NoDependencies` tự static-link, né đúng lớp lỗi "thiếu .so" mà môi trường serverless hay gặp.
+
+**🐛 Bug thật, đổi cả kiến trúc mục 3 — Lambda Function URL không dùng được để gateway route tới vì hostname random, không sống sót qua restart.** Thử phương án gốc trước: tạo `create-function-url-config`, LocalStack trả về hostname dạng `<random-id>.lambda-url.us-east-1.localhost.localstack.cloud:4566`. Probe 2 bước:
+  1. Gọi thẳng hostname đó từ container khác trên `ticketflow-network` → connection refused — hostname `*.localhost.localstack.cloud` là bản ghi DNS công khai trỏ CỨNG về `127.0.0.1`, chỉ đúng trên chính máy chạy LocalStack, không đúng từ container khác (loopback của container khác, không phải của LocalStack).
+  2. Dùng mẹo override header `Host` khi connect thẳng vào `ticketflow-localstack:4566` (địa chỉ container thật) → route ĐÚNG tới Lambda (xác nhận qua log: LocalStack build đúng payload kiểu API Gateway v2 gửi cho hàm) — nhưng đây chỉ giải quyết được vấn đề DNS, KHÔNG giải quyết được vấn đề gốc: **`<random-id>` đổi mỗi lần `create-function-url-config` chạy lại, và LocalStack Community không persist qua restart** → gateway (file `appsettings.json` tĩnh) không có cách nào biết trước giá trị này để hardcode.
+  - **Fix = đổi kiến trúc, không phải vá lỗi:** bỏ hẳn Function URL cho `UploadPosterFunction`/`GetPosterFunction`, gateway gọi thẳng qua **Lambda Invoke API theo tên function** (tên ổn định, không đổi qua restart) — đúng pattern mục 4 (ticketing→RenderTicketPdf) vốn đã chọn sẵn cho lý do khác (giữ ngữ nghĩa saga đồng bộ); giờ hoá ra còn là lựa chọn ĐÚNG duy nhất cho bài toán "gateway cần địa chỉ ổn định". Xoá luôn dependency `Amazon.Lambda.APIGatewayEvents` (chỉ cần khi expose HTTP trực tiếp) — 2 hàm Upload/Get đổi sang nhận/trả record C# thuần, không còn "vỏ" HTTP request/response nào cả.
+  - Bài học ghi rõ: đây là giới hạn thật của LocalStack Community trong Docker Compose cục bộ, không phải giới hạn của AWS thật (trên AWS thật, Function URL là 1 địa chỉ cố định gắn với function, deploy 1 lần là ổn định mãi) — nhưng đúng bản chất "học pattern, không giả vờ hơn" đã ghi ở đầu phase.
+
+**Verify thật (DoD 1 khép ở đây) — dùng ảnh PNG thật 800×600, không giả lập:**
+- Upload qua `POST /media/posters` với token `organizer1` thật, qua gateway thật (không gọi thẳng LocalStack) → `201`, trả đúng `{key, thumbnailKey}`. Vài giây sau, `awslocal s3 ls s3://posters/ --recursive` xác nhận thumbnail **tự xuất hiện** — không có bước gọi thumbnail thủ công nào.
+- Tải cả 2 file qua `GET /media/originals/...` và `GET /media/thumbs/...` (không token) → cả 2 `200`, `content-type: image/png`. Mở bằng Pillow xác nhận kích thước thật: gốc `800×600`, thumbnail đúng `200×150` (tỉ lệ giữ nguyên, đúng công thức resize).
+- Customer token → `403`; không token → `401` (cả 2 test trên `POST /media/posters`).
+- Upload 1 file text thuần (`.txt`) giả làm ảnh → `400` sạch (`"Uploaded file is not a recognized image"`), xác nhận qua `s3 ls` **không có object rác nào được tạo** — validate bằng magic byte thật (PNG/JPEG signature), không tin `Content-Type` client tự khai.
+- Kiểm tra chống vòng lặp vô hạn: sau toàn bộ test, bucket chỉ có đúng 1 cặp `originals/*`+`thumbs/*` mỗi lần upload — không có `thumbs/thumbs/...` hay chuỗi đệ quy nào, xác nhận filter prefix `originals/` hoạt động đúng.
+- **Restart resilience** (init script `02-deploy-media.sh`, chạy sau `01-deploy-functions.sh`): tear down toàn bộ LocalStack + build lại `function.zip` mới nhất → `docker compose up -d localstack` → cả 2 script tự chạy sạch, 5 function (`Hello*` + `UploadPoster`/`GetPoster`/`ThumbnailPoster`) tồn tại lại, bucket + notification config tái lập đúng — test lại toàn bộ luồng ngay sau restart, kết quả giống hệt trước khi restart.
+- Regression: **81/81** (76 unit/domain + 5 Reservation integration — không đổi, chỉ Gateway + Functions bị chạm, không service nghiệp vụ nào khác). `dotnet build` cả solution sạch. `docker ps` đủ 21 container ổn định (không tính executor Lambda tạm thời + `testcontainers-ryuk` do chính lần chạy integration test sinh ra).
 
 ## Nhóm C — tách PDF
 
@@ -116,7 +133,7 @@ flowchart LR
     subgraph LS["ticketflow-localstack :4566 (Community)"]
         S3[(S3 bucket posters)]
         EB[EventBridge rule rate/cron]
-        subgraph Lambdas["Lambda (.NET 8, container con join compose network)"]
+        subgraph Lambdas["Lambda (dotnet10, container con join compose network)"]
             UP[UploadPoster]
             TH[ThumbnailPoster]
             GP[GetPoster]
@@ -124,7 +141,7 @@ flowchart LR
             TM[EventReminderTimer]
         end
     end
-    GW[Gateway :8080] -->|/media POST RequireOrganizer, GET anon| UP & GP
+    GW[Gateway :8080] -->|"/media POST RequireOrganizer, GET anon<br/>Lambda Invoke API theo tên function (Commit 2)"| UP & GP
     UP -->|PUT posters/| S3
     S3 -.s3:ObjectCreated.-> TH
     TH -->|PUT posters/thumbs/| S3

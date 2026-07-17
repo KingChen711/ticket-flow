@@ -142,5 +142,31 @@
     -->
     <PackageVersion Include="Amazon.Lambda.Core" Version="3.1.1" />
     <PackageVersion Include="Amazon.Lambda.Serialization.SystemTextJson" Version="3.0.0" />
+    <!--
+      Phase 9 Commit 2 — S3 bucket notification event shape (ThumbnailPoster trigger). Official
+      AWS, Apache-2.0. (Amazon.Lambda.APIGatewayEvents was tried first for the media Lambdas —
+      dropped once Function URLs turned out not to work for gateway routing here, see
+      UploadPosterFunction's doc comment; a direct SDK Invoke call doesn't need an HTTP envelope.)
+    -->
+    <PackageVersion Include="Amazon.Lambda.S3Events" Version="4.0.0" />
+    <!-- Apache-2.0, official AWS SDK. Same S3-compatible client family already used for MinIO
+         (Minio package) — this one talks to LocalStack's S3 emulation instead. -->
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.101.2" />
+    <!--
+      Poster thumbnail resize (Commit 2). MIT license — chosen over SixLabors.ImageSharp 3.x,
+      which is Split-Licensed (free under Apache-2.0 only below $1M/year revenue as a direct
+      dependency, confirmed via a real license-page lookup, not assumed — same class of decision
+      as the MassTransit/Duende/Module Federation license traps avoided earlier in this project).
+      `.NativeAssets.Linux.NoDependencies` specifically statically links what a normal Linux
+      SkiaSharp install expects from system packages (fontconfig etc.) — exactly the missing-libs
+      failure mode a minimal Lambda execution image would otherwise hit; confirmed via a real
+      resize invoked inside the actual dotnet10 Lambda container before committing to this pick.
+    -->
+    <PackageVersion Include="SkiaSharp" Version="4.150.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.150.1" />
+    <!-- Gateway's thin proxy to the media Lambdas (Commit 2, mục 3) and ticketing's
+         RenderTicketPdf call (Commit 3) — both invoke by stable function name via the Lambda
+         Invoke API rather than routing raw HTTP through YARP. Apache-2.0, official AWS SDK. -->
+    <PackageVersion Include="AWSSDK.Lambda" Version="4.0.104" />
   </ItemGroup>
 </Project>
