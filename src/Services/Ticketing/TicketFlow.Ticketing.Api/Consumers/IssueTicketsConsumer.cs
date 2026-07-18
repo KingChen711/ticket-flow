@@ -6,16 +6,17 @@ using TicketFlow.Ticketing.Domain.Tickets;
 namespace TicketFlow.Ticketing.Api.Consumers;
 
 /// <summary>
-/// Real pipeline (Commit 8): render QR/PDF per seat, upload each to MinIO, persist, publish the
-/// result. Same two-layer idempotency as Payment (Commit 7): business-key dedup by OrderId here
-/// (GetByOrderIdAsync — a second physically distinct message for an already-issued order replays
-/// the existing PDF object keys instead of re-rendering/re-uploading) + MassTransit EF Core Inbox
-/// on this consumer's endpoint (wired in Program.cs) for the redelivered-same-message case.
+/// Real pipeline (Phase 5 Commit 8; PDF rendering extracted to a Lambda in Phase 9 Commit 3):
+/// render QR/PDF per seat via RenderTicketPdfFunction (which uploads to MinIO itself), persist,
+/// publish the result. Same two-layer idempotency as Payment (Commit 7): business-key dedup by
+/// OrderId here (GetByOrderIdAsync — a second physically distinct message for an already-issued
+/// order replays the existing PDF object keys instead of re-rendering/re-uploading) + MassTransit
+/// EF Core Inbox on this consumer's endpoint (wired in Program.cs) for the redelivered-same-message
+/// case.
 /// </summary>
 public sealed class IssueTicketsConsumer(
     ITicketRepository repository,
     ITicketPdfRenderer renderer,
-    ITicketObjectStorage objectStorage,
     IUnitOfWork unitOfWork,
     TimeProvider timeProvider,
     ILogger<IssueTicketsConsumer> logger) : IConsumer<IssueTickets>
@@ -60,12 +61,10 @@ public sealed class IssueTicketsConsumer(
 
                 var pdfModel = new TicketPdfModel(
                     ticket.Id, message.OrderId, message.EventId, seatId, message.CustomerName, qrPayload, now);
-                var pdfBytes = renderer.Render(pdfModel);
-
-                await objectStorage.UploadAsync(objectKey, pdfBytes, "application/pdf", context.CancellationToken);
+                var storedKey = await renderer.RenderAndStoreAsync(pdfModel, objectKey, context.CancellationToken);
 
                 repository.Add(ticket);
-                pdfObjectKeys.Add(objectKey);
+                pdfObjectKeys.Add(storedKey);
             }
 
             await unitOfWork.SaveChangesAsync(context.CancellationToken);

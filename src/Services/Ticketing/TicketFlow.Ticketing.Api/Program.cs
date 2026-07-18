@@ -1,6 +1,5 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
-using QuestPDF.Infrastructure;
 using Scalar.AspNetCore;
 using TicketFlow.Messaging;
 using TicketFlow.Ticketing.Api.Consumers;
@@ -8,10 +7,6 @@ using TicketFlow.Ticketing.Api.Endpoints;
 using TicketFlow.Ticketing.Application;
 using TicketFlow.Ticketing.Infrastructure;
 using TicketFlow.Web;
-
-// QuestPDF Community license — free for this learning project (see
-// Directory.Packages.props comment). Set once, globally, at startup.
-QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 

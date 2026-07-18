@@ -24,6 +24,12 @@
     <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="SkiaSharp" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+    <!-- Commit 3 — moved here from Ticketing.Infrastructure along with the rendering they support
+         (RenderTicketPdfFunction). Same versions, no license re-evaluation needed (Directory.
+         Packages.props still carries the original QuestPDF Community-license note). -->
+    <PackageReference Include="QuestPDF" />
+    <PackageReference Include="QRCoder" />
+    <PackageReference Include="Minio" />
   </ItemGroup>
 
 </Project>

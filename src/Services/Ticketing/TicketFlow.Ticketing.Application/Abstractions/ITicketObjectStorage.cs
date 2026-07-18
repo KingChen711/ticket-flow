@@ -3,13 +3,12 @@ namespace TicketFlow.Ticketing.Application.Abstractions;
 /// <summary>
 /// Separate from ITicketPdfRenderer — object storage is a genuinely distinct infrastructure
 /// concern (could swap MinIO for S3/Azure Blob later without touching rendering logic).
+/// Read-only since Commit 3: UploadAsync was deleted — the RenderTicketPdf Lambda now writes the
+/// tickets bucket directly (its own MinIO client, not this port), so the only remaining caller of
+/// this port is the ticket-download endpoint.
 /// </summary>
 public interface ITicketObjectStorage
 {
-    /// <returns>The object key the PDF was stored under (not a full URL — Phase 5 doesn't yet
-    /// expose a public/presigned URL scheme; see phase-5-plan.md backlog).</returns>
-    Task<string> UploadAsync(string objectKey, byte[] content, string contentType, CancellationToken cancellationToken = default);
-
     /// <summary>
     /// Phase 8 Commit 1 — streamed through the ticketing API rather than a MinIO presigned URL:
     /// a presigned URL generated inside the Docker network would carry the internal hostname

@@ -1,3 +1,5 @@
+using Amazon.Lambda;
+using Amazon.Runtime;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,7 +20,15 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
-        services.AddScoped<ITicketPdfRenderer, QuestPdfTicketRenderer>();
+        services.AddScoped<ITicketPdfRenderer, LambdaTicketRenderClient>();
+
+        // Commit 3 — same IAmazonLambda-pointed-at-LocalStack pattern as Gateway's Program.cs
+        // (Commit 2): "test"/"test" credentials because the SDK requires non-empty values to
+        // sign requests even though LocalStack doesn't validate them.
+        var lambdaServiceUrl = configuration["Aws:LambdaServiceUrl"]
+            ?? throw new InvalidOperationException("Configuration 'Aws:LambdaServiceUrl' was not found.");
+        services.AddSingleton<IAmazonLambda>(_ =>
+            new AmazonLambdaClient(new BasicAWSCredentials("test", "test"), new AmazonLambdaConfig { ServiceURL = lambdaServiceUrl }));
 
         var minioEndpoint = configuration["Minio:Endpoint"]
             ?? throw new InvalidOperationException("Configuration 'Minio:Endpoint' was not found.");

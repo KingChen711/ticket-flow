@@ -1,10 +1,11 @@
 namespace TicketFlow.Ticketing.Application.Abstractions;
 
 /// <summary>
-/// Application knows it needs "a PDF with this seat's QR embedded", not HOW (QRCoder + QuestPDF
-/// in Infrastructure). Rendering intentionally bundles QR generation + PDF composition into one
-/// operation — the QR image only exists to be embedded in the PDF, splitting them into two
-/// separate ports would add indirection with no real boundary behind it.
+/// Application knows it needs "a PDF with this seat's QR embedded, stored somewhere retrievable
+/// by objectKey", not HOW (QuestPDF/QRCoder + the MinIO upload, both now living in the
+/// RenderTicketPdf Lambda — docs/phase-9-plan.md Commit 3). Rendering intentionally bundles QR
+/// generation + PDF composition + storage into one operation — the bytes never need to round-trip
+/// back over the Invoke API, only the objectKey the caller already chose does.
 ///
 /// Note: the rendered ticket only shows raw IDs (EventId, SeatId), not a friendly event
 /// title/venue name — Ticketing has no access to Catalog's data (no cross-service DB read, and
@@ -13,7 +14,9 @@ namespace TicketFlow.Ticketing.Application.Abstractions;
 /// </summary>
 public interface ITicketPdfRenderer
 {
-    byte[] Render(TicketPdfModel model);
+    /// <returns>The object key the PDF was stored under — same value as <paramref name="objectKey"/>,
+    /// echoed back rather than assumed so a caller never has to trust an out-of-band contract.</returns>
+    Task<string> RenderAndStoreAsync(TicketPdfModel model, string objectKey, CancellationToken cancellationToken = default);
 }
 
 public sealed record TicketPdfModel(
