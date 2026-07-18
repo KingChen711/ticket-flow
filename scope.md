@@ -104,7 +104,7 @@ flowchart TB
 | **notification-service** | Email/SMS/push (vé, nhắc lịch) | MongoDB | RabbitMQ | 8005 |
 | **recommendation-service** | "Sự kiện gợi ý cho bạn" (theo nghệ sĩ/venue/phổ biến) | MongoDB | — | 8009 |
 | **analytics-service** | Doanh số, lượt xem, dashboard organizer | ClickHouse | — | 8010 |
-| **media-service** | Poster, ảnh nghệ sĩ, thumbnail (serverless) | MinIO | — | 8011 |
+| **media-service** | Poster, ảnh nghệ sĩ, thumbnail — **không phải service HTTP riêng** (không port :8011 như dự tính ban đầu). Là 2 AWS Lambda (`UploadPosterFunction`/`GetPosterFunction`/`ThumbnailPosterFunction`, chạy qua LocalStack, xem Phase 9) mà gateway gọi thẳng qua Lambda Invoke API — reconcile ở Phase 9 Commit 5 | LocalStack S3 | — | — |
 
 Frontends (micro-frontends — Ch12):
 
@@ -133,7 +133,7 @@ Frontends (micro-frontends — Ch12):
 | **Prometheus + Grafana** | Metrics + dashboard + alert | Ch16 |
 | **ELK (Serilog→ES→Kibana)** | Log tập trung | Ch16 |
 | **Docker + K8s** | Đóng gói & orchestration | Ch14 |
-| **Azure Functions** | Serverless (transcode ảnh, sinh PDF, nhắc lịch) | Ch15 |
+| **AWS Lambda + LocalStack** | Serverless (thumbnail poster, sinh PDF, cron nhắc lịch) — đổi từ **Azure Functions** (scope gốc) ở Phase 9 Commit 5: pattern FaaS/trigger/binding của Ch15 là khái niệm chung, không thuộc vendor; AWS phổ biến hơn trên thị trường việc làm, đổi lúc Phase 9 chưa có dòng code nào nên chi phí đổi = sửa plan. LocalStack chạy AWS thật (Community, không phải giả lập riêng) — "serverless" ở đây là mô phỏng local, không phải AWS thật (xem [phase-9-plan.md](docs/phase-9-plan.md) đầu file) | Ch15 |
 | **GitHub Actions** | CI/CD | Ch14, Ch17 |
 
 > **Vì sao cả Kafka lẫn RabbitMQ?** Đây chính là bài học Ch4: chọn đúng công cụ cho đúng kiểu giao tiếp.
@@ -244,10 +244,10 @@ ticketflow/
 │   │   ├── Search/
 │   │   ├── Notification/
 │   │   ├── Recommendation/
-│   │   ├── Analytics/
-│   │   └── Media/
+│   │   └── Analytics/
 │   ├── Gateway/                       # YARP + BFF
-│   └── Functions/                     # Azure Functions (serverless)
+│   └── Functions/                     # AWS Lambda (serverless, chạy qua LocalStack — Phase 9,
+│                                       # đổi từ "Azure Functions" scope gốc, xem mục 5)
 ├── contracts/                         # Event/message contracts (shared package)
 ├── apps/                              # Frontends Next.js (customer/organizer/scanner/admin)
 ├── packages/                          # ui, types, config dùng chung cho frontend
@@ -354,10 +354,10 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 - **DoD:** ✅ hành trình mua vé hoàn chỉnh trên UI thật; ✅ scanner validate được vé đã mua. **Hoàn thành 2026-07-17** — verify qua `docker compose ps` (20 container) + toàn bộ hành trình mua vé thật trên browser 100% (không chạm curl bước nào trong chính luồng mua: browse → login PKCE thật qua Keycloak → chọn ghế (cập nhật real-time qua SignalR giữa 2 tab) → hold → đặt đơn → `Confirmed` → tải PDF vé thật) và scanner validate thật (upload ảnh QR thật rasterize từ PDF thật → `Valid` → quét lại → `AlreadyCheckedIn` → QR bịa → `NotFound`). Xem [docs/phase-8-plan.md](docs/phase-8-plan.md) để biết chi tiết từng commit (9 commit, lần đầu dự án có code ngoài .NET). 3 quyết định lệch scope ban đầu, đều ghi rõ lý do trong plan doc: **`admin-panel` cắt hẳn** (backlog — surface backend thật cho admin chỉ có ~3 endpoint, chưa đủ 1 sản phẩm, dựng app thứ 4 cho ngần đó là vaporware, lần cắt thứ 4 của dự án); **Module Federation → Next.js Multi-Zones** (probe xác nhận package Module Federation cho Next.js đã "maintenance mode", App Router không có commitment phát triển — Multi-Zones là cách composition chính chủ duy nhất còn sống cho App Router); **BFF per-frontend = tầng server-side của chính từng Next.js app**, không dựng 4 service .NET trung gian (double-BFF vô nghĩa khi Next.js đã làm sẵn việc đó). Nhiều bug thật phát hiện qua probe/verify trực tiếp trên browser thật (không đoán): `BarcodeDetector` API xác nhận không có sẵn trên desktop (đúng dự đoán, `jsQR` là đường chạy chính chứ không chỉ fallback); session cookie đè lẫn nhau giữa 3 app do cookie trình duyệt chỉ scope theo hostname chứ không theo port (RFC 6265) — fix bằng tên cookie + secret riêng mỗi app; và Next.js `basePath` xung đột với cơ chế parse request nội bộ của NextAuth khi đi qua Multi-Zones rewrite (đổi sang `assetPrefix` + tổ chức route thủ công theo đúng pattern chính chủ của Next.js).
 
 ### Phase 9 — Serverless *(Ch15)* — ~1 tuần
-1. Function transcode/thumbnail poster khi upload MinIO (event-triggered).
+1. Function transcode/thumbnail poster khi upload (event-triggered).
 2. Function render PDF vé (tách khỏi ticketing service).
 3. Function theo lịch: nhắc "sự kiện của bạn diễn ra sau 24h".
-- **DoD:** upload poster → tự sinh thumbnail; cron nhắc lịch bắn notification.
+- **DoD:** ✅ upload poster → tự sinh thumbnail; ✅ cron nhắc lịch bắn notification. **Hoàn thành 2026-07-18** — verify qua `docker compose ps` (21 container, thêm `ticketflow-localstack`) + luồng thật không đoán: upload ảnh PNG 800×600 thật qua gateway → S3 notification thật trigger thumbnail Lambda → `200×150` đúng tỉ lệ; mua vé thật → PDF vé thật do Lambda sinh (không phải ticketing-service), QR nhúng đọc được; event trong cửa sổ 24h + mua vé thật → tick EventBridge thật → log nhắc đúng tên/email/sự kiện, tick sau không nhắc lại (idempotent, xác nhận bằng Mongo timestamp không đổi chứ không chỉ "không thấy log trùng"); event ngoài cửa sổ không bị nhắc, reschedule vào cửa sổ thì nhắc đúng. Xem [docs/phase-9-plan.md](docs/phase-9-plan.md) để biết chi tiết từng commit (5 commit). 1 quyết định lệch scope ban đầu, ghi rõ lý do trong plan doc: **Azure Functions → AWS Lambda + LocalStack** (đổi vì mục tiêu nghề nghiệp — AWS phổ biến hơn trên thị trường việc làm, pattern FaaS của Ch15 là khái niệm chung không thuộc vendor — đổi lúc Phase 9 chưa có dòng code nào nên chi phí đổi gần như 0; xem đầu [phase-9-plan.md](docs/phase-9-plan.md)). `media-service` (mục 4) hoá ra không phải service HTTP riêng như bảng gốc — là Lambda gateway gọi thẳng qua Invoke API, không port :8011 (cũng đã sửa ở mục 4). Bug thật đáng chú ý nhất: handler Lambda `void` làm crash Runtime Interface Emulator (Go-level nil pointer panic), gây vòng lặp trông giống retry storm — cô lập bằng cách loại bỏ từng biến số (xoá EventBridge rule, invoke tay, đọc log container thật), fix = mọi handler phải trả về giá trị, không dùng `void`, ghi thành quy ước bắt buộc cho cả dự án. LocalStack Function URL cũng phát hiện không dùng được cho gateway route (hostname random, không sống sót qua restart) — pivot sang Lambda Invoke API theo tên function, ổn định hơn hẳn.
 
 ### Phase 10 — Observability *(Ch16)* — ~1.5 tuần
 1. Chuẩn hóa OpenTelemetry toàn service → **Jaeger** (trace).

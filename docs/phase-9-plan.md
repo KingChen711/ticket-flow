@@ -136,8 +136,10 @@ tags: [ticketflow, phase-9, plan, serverless, aws-lambda, localstack, s3, eventb
 - **Test B (ngoài cửa sổ → reschedule vào cửa sổ):** event "Commit4 Verify - Out Of Window" `StartsAt` = now+48h (ngoài 24h), mua vé thật → order `Confirmed`, `reminderRecipients` doc tồn tại `RemindedAt: null` → chờ 1 tick thật, **không bị nhắc** (đúng — window filter thật sự loại nó, không phải "chưa kịp chạy"). Reschedule qua `PUT /catalog/events/{id}` (`StartsAt` mới = now+2h) → xác nhận `eventSchedules.StartsAt` trong Mongo đổi đúng giá trị mới → tick tiếp theo, **giờ mới bị nhắc**, `RemindedAt` chuyển từ null sang có giá trị — chứng minh đúng "hành vi đổi theo reschedule" DoD yêu cầu.
 - Regression: **81/81** (76 unit/domain + 5 Reservation integration). `dotnet build` cả solution sạch. `docker logs ticketflow-notification` suốt cửa sổ verify không có exception/error nào.
 
-### Commit 5 — `chore: finalize Phase 9 — scope reconcile, DoD`
-- Scope reconcile: **Azure Functions → AWS Lambda + LocalStack** (ghi lý do nghề nghiệp + pattern chung, sửa bảng hạ tầng mục 5 + folder structure); media-service = Lambda (không phải service :8011); "transcode" = resize ảnh. Tick DoD, cập nhật doc này.
+### Commit 5 — `chore: finalize Phase 9 — Azure→AWS reconcile, DoD` ✅ DONE
+- `scope.md` reconcile (3 chỗ): mục 5 (bảng hạ tầng) đổi dòng **Azure Functions → AWS Lambda + LocalStack**, ghi lý do nghề nghiệp + "pattern FaaS là khái niệm chung, không thuộc vendor" + nhắc rõ LocalStack là mô phỏng local; mục 4 (bảng service) sửa dòng **media-service**: không phải service HTTP :8011 như bảng gốc — là Lambda gateway gọi qua Invoke API; mục "Cấu trúc thư mục" xoá `Services/Media/` (không tồn tại — media nằm trong `Functions/`), sửa comment `Functions/` từ "Azure Functions" sang "AWS Lambda (LocalStack)".
+- `scope.md` mục "Phase 9" (lộ trình theo phase): tick DoD ✅✅, thêm đoạn "Hoàn thành 2026-07-18" theo đúng format các phase trước (Phase 7/8) — liệt kê verify thật + 1 quyết định lệch scope (Azure→AWS) + bug thật đáng chú ý nhất (Lambda `void` handler crash RIE, LocalStack Function URL không ổn định).
+- File plan này (`phase-9-plan.md`): đã cập nhật real-time qua từng Commit 1-4 (không đợi tới đây) — Commit 5 chỉ còn việc tick DoD cuối file + rà lại toàn bộ 1 lượt cho khớp trạng thái cuối.
 
 ---
 
@@ -173,8 +175,10 @@ flowchart LR
 
 | DoD | Kiểm chứng |
 |---|---|
-| Upload poster → tự sinh thumbnail | Commit 2: upload thật qua gateway → S3 notification → thumbnail thật trong S3 |
-| Cron nhắc lịch bắn notification | Commit 4: EventBridge tick thật → command → notification log đúng người/sự kiện, idempotent |
+| ✅ Upload poster → tự sinh thumbnail | Commit 2: upload thật qua gateway → S3 notification → thumbnail thật trong S3 |
+| ✅ Cron nhắc lịch bắn notification | Commit 4: EventBridge tick thật → command → notification log đúng người/sự kiện, idempotent |
+
+**Phase 9 hoàn thành 2026-07-18** — 5/5 commit xong, cả 5 đều verify bằng Docker/LocalStack thật (không dừng ở `dotnet build`). Regression giữ nguyên 81/81 xuyên suốt (không service nghiệp vụ nào có sẵn bị hỏng), riêng Notification đổi từ flat 1-project thành đúng Ports & Adapters ở Commit 4 (nhất quán kiến trúc với các service khác). Reconcile về `scope.md` đã ghi ở Commit 5 phía trên.
 
 ## Hướng mở rộng (backlog — không thuộc Phase 9)
 - **Deploy AWS thật** (Lambda + S3 + EventBridge Scheduler) — local chỉ mô phỏng; cold-start/billing/IAM thật học ở đó.
@@ -186,4 +190,4 @@ flowchart LR
 - **`MyOrderView` không expose PDF object key** (phát hiện khi verify Commit 3) — `MyOrdersProjection.Apply(OrderTicketsIssued, ...)` bỏ qua `TicketPdfUrls`, đơn `Confirmed` không tự lộ ra đường dẫn PDF qua `GET /ordering/orders/{id}`; hiện phải suy ra key qua convention `{orderId}/{seatId}.pdf` hoặc gọi `GET /tickets/{id}/pdf` bên ticketing riêng. Có từ trước Phase 9, không phải lỗi do tách Lambda.
 
 ## Thứ tự đọc trước khi code (scope mục 13)
-Đọc **Ch15 (Serverless)** — lấy pattern FaaS/trigger/binding (sách dùng Azure Functions, pattern là chung — đối chiếu quyết định đổi vendor ở đầu file). Bổ sung ngoài sách: **AWS Lambda .NET** (handler class library, `Amazon.Lambda.Tools`, managed runtime dotnet8), **LocalStack** (Community limits, `LAMBDA_DOCKER_NETWORK`, init hooks `ready.d/`, persistence không có ở Community), **S3 event notifications**, **EventBridge schedule expressions** (rate/cron), **Lambda function URL vs API Gateway**, license **ImageSharp 3.x vs SkiaSharp**, và MassTransit publish từ app không phải ASP.NET host.
+Đọc **Ch15 (Serverless)** — lấy pattern FaaS/trigger/binding (sách dùng Azure Functions, pattern là chung — đối chiếu quyết định đổi vendor ở đầu file). Bổ sung ngoài sách: **AWS Lambda .NET** (handler class library, `Amazon.Lambda.Tools`, managed runtime dotnet10 — xác nhận AWS hỗ trợ chính thức từ 01/2026, không phải dotnet8 như dự đoán ban đầu), **LocalStack** (Community limits, `LAMBDA_DOCKER_NETWORK`, init hooks `ready.d/`, persistence không có ở Community), **S3 event notifications**, **EventBridge schedule expressions** (rate/cron), **Lambda function URL vs API Gateway (Invoke API thắng, Commit 2/3)**, license **ImageSharp 3.x vs SkiaSharp**, và MassTransit publish từ app không phải ASP.NET host (generic host tối giản, Commit 4).
