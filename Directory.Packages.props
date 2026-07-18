@@ -168,5 +168,14 @@
          RenderTicketPdf call (Commit 3) — both invoke by stable function name via the Lambda
          Invoke API rather than routing raw HTTP through YARP. Apache-2.0, official AWS SDK. -->
     <PackageVersion Include="AWSSDK.Lambda" Version="4.0.104" />
+    <!--
+      Phase 9 Commit 4 — EventReminderTimer Lambda has no ASP.NET Core builder of its own to hang
+      DI/config off of (AWSProjectType=Lambda is a bare class library, not Sdk.Web), so it stands
+      up a minimal Microsoft.Extensions.Hosting generic host to reuse AddTicketFlowMessaging (same
+      RabbitMQ retry/endpoint-naming config every other service gets) instead of hand-rolling a
+      raw MassTransit bus. Pinned to the same 10.0.9 line as the other Microsoft.Extensions.*
+      packages already pinned above, for the aligned-.NET-10-runtime-family reason those carry.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
   </ItemGroup>
 </Project>

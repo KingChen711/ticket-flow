@@ -10,6 +10,8 @@
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
+    <ProjectReference Include="..\TicketFlow.Notification.Application\TicketFlow.Notification.Application.csproj" />
+    <ProjectReference Include="..\TicketFlow.Notification.Infrastructure\TicketFlow.Notification.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

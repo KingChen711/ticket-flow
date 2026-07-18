@@ -33,6 +33,8 @@
   </Folder>
   <Folder Name="/src/Services/Notification/">
     <Project Path="src/Services/Notification/TicketFlow.Notification.Api/TicketFlow.Notification.Api.csproj" />
+    <Project Path="src/Services/Notification/TicketFlow.Notification.Application/TicketFlow.Notification.Application.csproj" />
+    <Project Path="src/Services/Notification/TicketFlow.Notification.Infrastructure/TicketFlow.Notification.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/src/Services/Ordering/">
     <Project Path="src/Services/Ordering/TicketFlow.Ordering.Api/TicketFlow.Ordering.Api.csproj" />

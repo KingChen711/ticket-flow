@@ -30,6 +30,18 @@
     <PackageReference Include="QuestPDF" />
     <PackageReference Include="QRCoder" />
     <PackageReference Include="Minio" />
+    <!-- Commit 4 — EventReminderTimer stands up a minimal generic host to reuse
+         AddTicketFlowMessaging (see that method's project reference below) instead of hand-rolling
+         a raw MassTransit bus; see TicketFlow.Functions.csproj's Directory.Packages.props pin
+         comment for why a bare Lambda class library needs this explicitly. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.RabbitMQ" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

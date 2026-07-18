@@ -164,6 +164,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                 .Publish(context => new NotifyOrderCompleted(
                     context.Saga.CorrelationId,
                     context.Saga.UserId,
+                    context.Saga.CatalogEventId,
                     context.Saga.CustomerName,
                     context.Saga.CustomerEmail,
                     context.Saga.TicketPdfUrls))
