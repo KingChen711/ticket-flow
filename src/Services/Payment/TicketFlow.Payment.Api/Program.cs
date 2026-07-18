@@ -11,7 +11,13 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
-builder.Services.AddTicketFlowObservability(builder.Configuration, "payment");
+// Commit 5, mục 3 rủi ro số 3 — "Polly" is Polly.Extensions' own Meter name (not configurable),
+// turned on by PaymentGatewayResiliencePipeline's .ConfigureTelemetry(...) call. Same
+// configureMetrics escape hatch Ordering uses for its own ticketflow.tickets.sold Meter.
+builder.Services.AddTicketFlowObservability(
+    builder.Configuration,
+    "payment",
+    configureMetrics: m => m.AddMeter("Polly"));
 builder.Services.AddOpenApi();
 builder.Services.AddPaymentApplication();
 builder.Services.AddPaymentInfrastructure(builder.Configuration);

@@ -143,9 +143,22 @@ tags: [ticketflow, phase-10, plan, observability, opentelemetry, jaeger, prometh
 
 ## Nhóm D — Alert + finalize
 
-### Commit 5 — `chore: finalize Phase 10 — alert rules, scope reconcile, DoD`
-- Probe rủi ro số 3 (metric Polly) → 2 alert rule provisioned: **circuit breaker payment mở** + **error rate payment vượt ngưỡng**; ép lỗi thật (payment fail liên tục cho breaker mở) → alert chuyển Firing thật trong Grafana.
-- Scope reconcile: sửa mục 12 ("Observability sớm từ Phase 3" — không xảy ra, ghi thật); mục 8 tick `TicketFlow.Observability` đã tồn tại; cập nhật bảng hạ tầng nếu lệch. Tick DoD, cập nhật doc này với finding thật từng commit.
+### Commit 5 — `chore: finalize Phase 10 — alert rules, scope reconcile, DoD` ✅ DONE
+- **Probe rủi ro số 3 (metric Polly) — real finding trước khi viết code:** `Polly.Core` một mình phát ra **KHÔNG metric nào** — xác nhận bằng `MeterListener` sống bắt mọi Meter được publish trong lúc chạy đúng pipeline y hệt `PaymentGatewayResiliencePipeline`, chỉ thấy `System.Runtime`/`dotnet.exceptions` (không liên quan Polly). Meter `"Polly"` chỉ xuất hiện khi thêm package **`Polly.Extensions`** và gọi `.ConfigureTelemetry(...)` trên pipeline builder. Dùng overload chỉ-metric (`ConfigureTelemetry(new TelemetryOptions())`, không truyền `ILoggerFactory`) — xác nhận phát cùng measurement, không kéo thêm 1 luồng log ồn ào chồng lên Serilog (Commit 4). Counter `resilience.polly.strategy.events` (tag `event.name`: `OnCircuitOpened`, `OnRetry`, ...) đủ cho cả 2 alert, không cần custom counter riêng.
+- `Polly.Extensions` cùng dòng 8.7.0, cùng license BSD-3-Clause với `Polly.Core` — không trap license.
+- Payment đăng ký `configureMetrics: m => m.AddMeter("Polly")` (đúng pattern `configureMetrics` escape-hatch Ordering đã dùng ở Commit 3).
+- **2 alert rule provisioned qua file YAML** (`infrastructure/monitoring/grafana/provisioning/alerting/rules.yml`): **circuit breaker payment mở** (`increase(OnCircuitOpened[5m]) > 0`) + **error rate payment cao** (`rate(OnRetry[1m]) > 0.05`, `for: 1m`). Schema YAML không đoán — build và validate SỐNG qua chính Grafana Alerting Provisioning HTTP API (`POST /api/v1/provisioning/alert-rules` trên container đang chạy) rồi `export?format=yaml` để lấy đúng cấu trúc thật, sau đó mới ghi vào file.
+
+**3 bug thật gặp khi ráp alert (không phải lỗi PromQL logic thô):**
+1. **Metric name thiếu hậu tố `_total`** — cùng lớp lỗi UTF-8 naming đã gặp ở Commit 3 (`ticketflow.tickets.sold` → `ticketflow.tickets.sold_total`). `resilience.polly.strategy.events` (bare) query rỗng im lặng; tên thật trong TSDB là `resilience.polly.strategy.events_total`, xác nhận qua `/api/v1/label/__name__/values`.
+2. **Thiếu `instant: true`** — Grafana mặc định query A chạy RANGE (nhiều điểm) theo `relativeTimeRange`, node threshold (C) từ chối thẳng: `"invalid format of evaluation results ... only reduced data can be alerted on"`. `sum(...)` trong PromQL không tự động làm query "reduced" theo nghĩa Grafana alerting — phải `instant: true` (hoặc thêm node reduce riêng). Bắt được lỗi này từ 1 lần Firing thật thất bại, sửa, verify lại.
+3. **PUT sửa rule đã provisioned qua file bị chặn ("cannot change provenance from 'file' to '''")** — sau khi sửa YAML phải sửa TRỰC TIẾP file rồi restart Grafana để nó tự áp lại, không patch qua API (API chỉ dùng để probe schema ban đầu, không dùng để sửa rule đã do file sở hữu).
+
+**Verify thật:**
+- Đặt 2 đơn `.13` liên tiếp (cùng event, forced-fail deterministic từ Phase 5) → circuit breaker mở thật ngay từ đơn ĐẦU TIÊN (retry pipeline tự thử lại 1+3 lần trong ~1s, đủ chạm `MinimumThroughput=4` với 100% fail trong `SamplingDuration=10s`) → rule **"Payment circuit breaker open" chuyển `firing` thật**, xác nhận qua Grafana Prometheus-compat rules API.
+- Tạo event mới 6 ghế, đặt liên tục 6 đơn `.13` cách nhau 15s (~90s) để duy trì `rate(OnRetry) > 0.05` đủ 2 chu kỳ evaluate (group `interval: 1m` + rule `for: 1m`) → rule **"Payment gateway error rate high" cũng chuyển `firing` thật** — cả 2 rule đều có bằng chứng Firing thật, không chỉ 1.
+- Regression: **81/81**. `docker compose ps` vẫn **25 container** (Commit 5 không thêm container mới, chỉ thêm 1 file provisioning cho Grafana đã có sẵn).
+- Scope reconcile: mục 12 sửa "Observability sớm từ Phase 3" thành ghi thật — dự tính không xảy ra, toàn bộ OTel/Serilog/Prometheus/Grafana chỉ bắt đầu ở Phase 10 đúng như tên phase, không chặn tiến độ các phase trước. Mục 5 (bảng hạ tầng) và mục 8 (cấu trúc monorepo) đã đúng từ đầu, không cần sửa.
 
 ---
 
@@ -179,7 +192,9 @@ flowchart LR
 |---|---|
 | ✅ 1 lần mua vé → trace xuyên suốt mọi service trên Jaeger | Commit 2: 1 trace id duy nhất từ gateway xuyên saga RabbitMQ tới span Lambda invoke, cả happy path lẫn compensation |
 | ✅ Dashboard hoạt động | Commit 3: RED + "vé bán/phút" nhảy số từ purchase thật; Commit 4: TraceId từ log lỗi thật (Elasticsearch) mở đúng trace trên Jaeger, cả 2 chiều |
-| Alert hoạt động | Commit 5: ép breaker payment mở thật → rule Firing trong Grafana |
+| ✅ Alert hoạt động | Commit 5: ép breaker payment mở thật (2 đơn `.13` liên tiếp) → "Payment circuit breaker open" Firing thật; burst 6 đơn `.13` trong ~90s → "Payment gateway error rate high" cũng Firing thật — cả 2 rule provisioned từ file đều xác nhận Firing bằng bằng chứng thật, không chỉ provisioned |
+
+**Phase 10 hoàn tất — cả 3 DoD đều ✅, mọi finding thật (bug, license, trade-off) đã ghi vào lịch sử từng commit ở trên, không có mục nào "coi như xong" mà chưa verify.**
 
 ## Hướng mở rộng (backlog — không thuộc Phase 10)
 - **OTel bên trong Lambda** (traceparent qua payload + export từ executor container) + Serilog cho Functions — mục 2/4.

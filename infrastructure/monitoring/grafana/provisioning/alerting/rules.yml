@@ -1,0 +1,142 @@
+# Provisioning-as-code (docs/phase-10-plan.md mục 5) — same discipline as datasources/dashboards.
+# Both rules built and validated LIVE first via Grafana's own Alerting Provisioning HTTP API
+# (POST /api/v1/provisioning/alert-rules against the running container), then exported with
+# `.../export?format=yaml` to get this exact schema — not hand-guessed. `folder: TicketFlow
+# Alerts` is created automatically by the file provisioner on first apply (confirmed live), same
+# as datasource/dashboard provisioning needs no manual click-ops.
+#
+# Both rules read the SAME underlying metric — `resilience.polly.strategy.events` (a
+# Counter<int>), the Polly 8 built-in telemetry instrument (mục 3's rủi ro số 3, Commit 5).
+# real finding: `Polly.Core` alone emits NOTHING — confirmed via a live MeterListener probe
+# (only the unrelated `System.Runtime`/`dotnet.exceptions` counter fired). The `Polly` meter only
+# exists once `Polly.Extensions`'s `.ConfigureTelemetry(...)` is called on the pipeline builder
+# (PaymentGatewayResiliencePipeline.cs) — confirmed the metrics-only overload
+# (`ConfigureTelemetry(new TelemetryOptions())`, no ILoggerFactory) emits the same measurements
+# without adding a second, noisier logging stream on top of Serilog's own Payment logs.
+# `event.name` tag distinguishes what happened: `OnCircuitOpened` (breaker tripped) vs `OnRetry`
+# (one failed attempt, retrying) — no separate custom counter needed for either alert.
+#
+# Real bug caught before finalizing (same class as Commit 3's UTF-8 metric-name finding): the
+# PromQL below queries `resilience.polly.strategy.events_total`, NOT the bare instrument name —
+# Prometheus appends `_total` to any OTel Counter, confirmed via `curl .../api/v1/label/__name__/
+# values` against the live TSDB (same convention already seen with `ticketflow.tickets.sold` →
+# `ticketflow.tickets.sold_total` in Commit 3). The bare-name form was tried first, silently
+# returned an empty vector, and only Commit 3's own documented failure mode made it obvious to
+# check for a suffix rather than assume the query was simply too new to have data yet.
+#
+# Second real bug caught live: `instant: true` on query A is REQUIRED. Without it, Grafana's
+# Prometheus datasource defaults to a RANGE query across the whole `relativeTimeRange` (multiple
+# points), and the threshold node (C) rejects that outright — real error message from a live
+# Firing attempt: "invalid format of evaluation results for the alert definition C: looks like
+# time series data, only reduced data can be alerted on." `sum(...)` alone does not make a query
+# "reduced" in Grafana's alerting sense; either an instant query (this fix) or an explicit reduce
+# expression node between the query and the threshold is required. Verified by forcing 2 real
+# circuit-breaker-open events (2 separate `.13`-amount orders) and watching the rule actually
+# transition to `Firing` only after this fix.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: payment-resilience
+    folder: TicketFlow Alerts
+    interval: 1m
+    rules:
+      - uid: payment-circuit-breaker-open
+        title: Payment circuit breaker open
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: sum(increase({"resilience.polly.strategy.events_total", "event.name"="OnCircuitOpened"}[5m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: Payment gateway circuit breaker is open — Polly's CircuitBreaker strategy tripped, calls are failing fast without hitting the gateway.
+        labels:
+          service: payment
+          severity: critical
+        isPaused: false
+
+      # Proxy signal, not an exact SLI — `OnRetry` fires once per failed attempt that still has
+      # retries left; the final attempt that exhausts retries (MaxRetryAttempts=3) does NOT fire
+      # `OnRetry` (it either opens the circuit or lets the exception propagate), so this
+      # undercounts total failures by exactly 1 per failed pipeline execution. Adequate for an
+      # elevated-error-rate threshold, not claimed as a precise failure count — documented
+      # trade-off, same honesty standard as every other metric decision in this project.
+      - uid: payment-error-rate-high
+        title: Payment gateway error rate high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              expr: sum(rate({"resilience.polly.strategy.events_total", "event.name"="OnRetry", "strategy.name"="Retry"}[1m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0.05
+                    type: gt
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: Payment gateway calls are failing and retrying above the expected baseline rate.
+        labels:
+          service: payment
+          severity: warning
+        isPaused: false

@@ -145,6 +145,18 @@
     -->
     <PackageVersion Include="Polly.Core" Version="8.7.0" />
     <!--
+      Phase 10 Commit 5 — rủi ro số 3 (metric circuit-breaker Polly). Same BSD-3-Clause, same
+      Polly org, same 8.7.0 line as Polly.Core above — confirmed via NuGet before pinning. Real
+      finding from a live probe (MeterListener sniffing every Meter published while running the
+      exact pipeline shape PaymentGatewayResiliencePipeline builds): `Polly.Core` alone emits NO
+      Polly-specific metric — only the unrelated built-in `System.Runtime`/`dotnet.exceptions`
+      counter fired. The `Polly` meter (`resilience.polly.strategy.events` Counter&lt;int&gt;,
+      tagged `event.name` — `OnCircuitOpened`, `OnRetry`, etc.) only exists once
+      `Polly.Extensions`'s `.ConfigureTelemetry(...)` is called on the pipeline builder — this
+      package is that missing piece, not an alternative to Polly.Core.
+    -->
+    <PackageVersion Include="Polly.Extensions" Version="8.7.0" />
+    <!--
       Ticketing (Phase 5 Ch9/10 participant). QuestPDF's NuGet license metadata says MIT, but
       the library ALSO enforces its own Community/Commercial split in code via
       QuestPDF.Settings.License — must be set to LicenseType.Community at startup (free for

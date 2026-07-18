@@ -390,7 +390,7 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 
 - **Scope lớn** → bám nguyên tắc "mỗi phase phải chạy được", đừng làm song song nhiều phase.
 - **Đừng vàng hóa (gold-plating)**: payment/ML gợi ý chỉ cần *đủ để học pattern*, không cần production-grade.
-- **Observability sớm**: gắn OpenTelemetry ngay từ Phase 3, Phase 10 chỉ là hoàn thiện — nếu để tới cuối sẽ rất khó debug các phase trước.
+- **Observability sớm** (dự tính ban đầu, KHÔNG xảy ra — ghi thật): kế hoạch gốc là gắn OpenTelemetry từ Phase 3 để Phase 10 chỉ hoàn thiện, nhưng thực tế toàn bộ OTel/Serilog/Prometheus/Grafana chỉ bắt đầu ở Phase 10 Commit 1-5, đúng như tên phase. Debug Phase 3-9 dựa vào `docker logs` thô + breakpoint, không có trace/log tập trung — chậm hơn nhưng không chặn tiến độ (mỗi phase vẫn "chạy được" đúng nguyên tắc dòng trên). Rủi ro dự đoán trước không thành hiện thực đủ nghiêm trọng để đổi kế hoạch giữa chừng.
 - **Marten vs EventStoreDB**: chọn **Marten** (chạy trên Postgres sẵn có) để bớt 1 hạ tầng; ghi chú EventStoreDB là lựa chọn thay thế nếu muốn tìm hiểu event store chuyên dụng.
 
 ---
