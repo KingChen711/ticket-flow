@@ -17,6 +17,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   identity:
     build:
@@ -30,6 +32,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   reservation:
     build:
@@ -52,6 +56,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   ordering:
     build:
@@ -69,6 +75,8 @@ services:
         condition: service_healthy
       reservation:
         condition: service_started
+      es-ilm-init:
+        condition: service_completed_successfully
 
   notification:
     build:
@@ -82,6 +90,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   search:
     build:
@@ -97,6 +107,8 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   payment:
     build:
@@ -112,6 +124,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   ticketing:
     build:
@@ -129,6 +143,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   recommendation:
     build:
@@ -144,6 +160,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+      es-ilm-init:
+        condition: service_completed_successfully
 
   analytics:
     build:
@@ -164,6 +182,8 @@ services:
       # ready to serve admin requests, same as every other Kafka dependency in this stack.
       kafka:
         condition: service_started
+      es-ilm-init:
+        condition: service_completed_successfully
 
   gateway:
     build:
@@ -175,10 +195,16 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - catalog
-      - identity
-      - reservation
-      - ordering
+      catalog:
+        condition: service_started
+      identity:
+        condition: service_started
+      reservation:
+        condition: service_started
+      ordering:
+        condition: service_started
+      es-ilm-init:
+        condition: service_completed_successfully
 
 networks:
   default:

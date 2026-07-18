@@ -1,8 +1,14 @@
+using Elastic.Ingest.Elasticsearch;
+using Elastic.Ingest.Elasticsearch.DataStreams;
+using Elastic.Serilog.Sinks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using Serilog;
+using Serilog.Enrichers.Span;
 
 namespace TicketFlow.Observability;
 
@@ -24,6 +30,26 @@ public static class ServiceCollectionExtensions
     /// pull is idiomatic Prometheus, and this repo already accepted one no-stable-release OTel
     /// package for gRPC tracing (Commit 1), so a second one for the exporter isn't a new kind of
     /// risk, see Directory.Packages.props.
+    ///
+    /// Logs (Commit 4): `Log.Logger` is a process-wide static, set once here at startup — same
+    /// "one call, every service gets it" shape as the tracing/metrics setup above, just via
+    /// Serilog's own static instead of DI. `Enrich.WithSpan()` alone (no message-template
+    /// placeholder anywhere) is enough for the ECS formatter to map `TraceId`/`SpanId` onto the
+    /// real `trace.id`/`span.id` fields — confirmed with a live probe against this stack's actual
+    /// ES container before writing this, see Directory.Packages.props' Elastic.Serilog.Sinks
+    /// comment for why the package is pinned to 8.12.3 and not the latest 9.0.0. One data stream
+    /// per service (`logs-ticketflow-&lt;serviceName&gt;-local`) rather than one shared stream —
+    /// mirrors Prometheus' per-service scrape-job granularity (mục 3), and Kibana's index pattern
+    /// `logs-ticketflow-*` still spans all of them for the cross-service TraceId correlation view
+    /// the DoD needs. `IlmPolicy` references a custom policy provisioned by the one-shot init
+    /// container in docker-compose.monitoring.yml — the built-in "logs" ILM policy ES ships with
+    /// only has a hot/rollover phase and no delete phase (confirmed live: infinite retention by
+    /// default, and the policy itself is flagged `"deprecated": true` server-side), which is the
+    /// opposite of the "retention tối thiểu" mục 4 calls for. Console sink stays alongside ES —
+    /// `docker logs` keeps working exactly like every prior phase, no debug workflow lost.
+    /// `AddLogging` (not `IHostBuilder.UseSerilog`) because this method is an `IServiceCollection`
+    /// extension, not a host hook — confirmed via a live DI probe that `ILogger&lt;T&gt;` resolved
+    /// this way still round-trips into both sinks with the enriched trace/span properties intact.
     /// </summary>
     public static IServiceCollection AddTicketFlowObservability(
         this IServiceCollection services,
@@ -33,6 +59,26 @@ public static class ServiceCollectionExtensions
     {
         var otlpEndpoint = configuration["Otlp:Endpoint"]
             ?? throw new InvalidOperationException("Configuration 'Otlp:Endpoint' was not found.");
+        var elasticsearchUri = configuration["Elasticsearch:Uri"]
+            ?? throw new InvalidOperationException("Configuration 'Elasticsearch:Uri' was not found.");
+
+        Log.Logger = new LoggerConfiguration()
+            .Enrich.FromLogContext()
+            .Enrich.WithSpan()
+            .WriteTo.Console()
+            .WriteTo.Elasticsearch(new[] { new Uri(elasticsearchUri) }, opts =>
+            {
+                opts.DataStream = new DataStreamName("logs", $"ticketflow-{serviceName}", "local");
+                opts.BootstrapMethod = BootstrapMethod.Failure;
+                opts.IlmPolicy = "ticketflow-logs-retention";
+            })
+            .CreateLogger();
+
+        services.AddLogging(logging =>
+        {
+            logging.ClearProviders();
+            logging.AddSerilog(dispose: true);
+        });
 
         services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(serviceName))

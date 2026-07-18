@@ -75,6 +75,53 @@ services:
       timeout: 5s
       retries: 10
 
+  es-ilm-init:
+    # One-shot provisioning container — same "reproducible from a file, not click-ops" discipline
+    # as Keycloak's realm-export.json / Grafana's datasource+dashboard YAML. Elasticsearch does
+    # NOT validate an ILM policy's existence when a data-stream index template is PUT (confirmed
+    # live: `PUT _index_template/...` with `index.lifecycle.name` pointing at a policy that
+    # doesn't exist yet returns 200 acknowledged) — so this isn't strictly required for the sink
+    # to bootstrap without crashing, but without it retention wouldn't attach until ILM's next
+    # ~10-minute poll cycle picks up the policy after the fact. Every one of the 11 API/gateway
+    # processes depends_on this completing (docker-compose.yml) so retention is live from each
+    # service's very first log line, not eventually-consistent.
+    image: curlimages/curl:8.11.0
+    container_name: ticketflow-es-ilm-init
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ../monitoring/elasticsearch/ilm-policy.json:/ilm-policy.json:ro
+    entrypoint:
+      - sh
+      - -c
+      - >
+        curl -sf -X PUT http://elasticsearch:9200/_ilm/policy/ticketflow-logs-retention
+        -H "Content-Type: application/json" --data-binary @/ilm-policy.json
+    restart: "no"
+
+  kibana:
+    # Pinned to match the ES server's exact version (8.15.3, docker-compose.infra.yml) — Kibana
+    # enforces a compatible-version check against the cluster it connects to at startup.
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: ticketflow-kibana
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      # No security/xpack auth configured cluster-side (docker-compose.infra.yml sets
+      # xpack.security.enabled: "false", same as the Search service already relies on) — same
+      # "no login wall for a local learning stack" trade-off as Grafana's anonymous Viewer access.
+      XPACK_SECURITY_ENABLED: "false"
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
 volumes:
   prometheus-data:
   grafana-data:

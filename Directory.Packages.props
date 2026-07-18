@@ -53,6 +53,29 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="1.17.0-beta.1" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
+    <!--
+      Phase 10 Commit 4 — Serilog → Elasticsearch → Kibana. Serilog/Serilog.Sinks.Console/
+      Serilog.Extensions.Logging are Apache-2.0 (Serilog org), no license trap. Serilog.Enrichers.Span
+      (RehanSaeed, MIT) pulls TraceId/SpanId/ParentId straight from Activity.Current into every log
+      event's properties — confirmed via a live probe that this alone (no message-template
+      placeholder needed) is enough for the ECS formatter below to map them onto the real
+      `trace.id`/`span.id` fields, not just `labels.*`.
+
+      Elastic.Serilog.Sinks pinned to 8.12.3, NOT the latest 9.0.0 — real bug found via a live probe
+      against this repo's actual ES 8.15.3 container before writing any production code: 9.0.0 ships
+      an ECS 9.0.0 component-template mapping that sets `synthetic_source_keep` on the `tags` field,
+      a mapper parameter ES 8.15.3 doesn't recognize (`mapper_parsing_exception: unknown parameter
+      [synthetic_source_keep]`) — the sink crashes at construction (BootstrapMethod.Failure) before
+      a single service can even start. 8.12.3 (ECS 8.11.0 template) bootstraps cleanly against this
+      exact server version. Same Apache-2.0 license as 9.0.0, official Elastic-maintained package,
+      successor to the now-deprecated `Serilog.Sinks.Elasticsearch` (confirmed via that package's own
+      NuGet description pointing here).
+    -->
+    <PackageVersion Include="Serilog" Version="4.4.0" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageVersion Include="Serilog.Enrichers.Span" Version="3.1.0" />
+    <PackageVersion Include="Serilog.Extensions.Logging" Version="10.0.0" />
+    <PackageVersion Include="Elastic.Serilog.Sinks" Version="8.12.3" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.16.11" />
     <PackageVersion Include="StackExchange.Redis" Version="3.0.17" />
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />

@@ -20,6 +20,12 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
     <PackageReference Include="OpenTelemetry.Instrumentation.GrpcNetClient" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+    <!-- Commit 4 — Serilog console + Elasticsearch sinks, TraceId/SpanId enrichment. -->
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Enrichers.Span" />
+    <PackageReference Include="Serilog.Extensions.Logging" />
+    <PackageReference Include="Elastic.Serilog.Sinks" />
   </ItemGroup>
 
 </Project>

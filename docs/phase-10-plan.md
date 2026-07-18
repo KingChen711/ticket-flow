@@ -123,9 +123,23 @@ tags: [ticketflow, phase-10, plan, observability, opentelemetry, jaeger, prometh
 
 ## Nhóm C — Logs tập trung
 
-### Commit 4 — `feat(observability): Serilog → Elasticsearch → Kibana, log nối trace`
-- Probe rủi ro số 4 (sink đời mới + license) trước. Serilog vào `TicketFlow.Observability` (console giữ nguyên + ES sink, enrich TraceId/SpanId); `kibana` container + data view; nâng heap ES 512m→1g + retention tối thiểu (mục 4).
-- **Verify thật:** mua vé thật → log của ≥4 service hiện trong Kibana, structured, cùng `TraceId`; lấy TraceId từ 1 dòng log lỗi thật (ép lỗi payment) mở đúng trace trên Jaeger — mắt xích log↔trace chạy thật; search của search-service không vỡ (ES gánh 2 vai vẫn khoẻ); `docker compose ps` 25 container; regression 81/81.
+### Commit 4 — `feat(observability): Serilog → Elasticsearch → Kibana, log nối trace` ✅ DONE
+- Probe rủi ro số 4 trước khi viết code thật (scratch console app + ES 8.15.3 sống): license `Elastic.Serilog.Sinks` xác nhận Apache-2.0 (kế nhiệm chính chủ của `Serilog.Sinks.Elasticsearch` đã deprecated — chính NuGet description của package cũ trỏ sang package mới). `Serilog`/`Serilog.Sinks.Console`/`Serilog.Extensions.Logging` cũng Apache-2.0 (Serilog org), `Serilog.Enrichers.Span` (RehanSaeed) MIT — không package nào dính trap license.
+- **Bug thật tìm được ngay ở bước probe, trước khi đụng code production: `Elastic.Serilog.Sinks` bản mới nhất 9.0.0 crash cứng khi bootstrap chống lại ES 8.15.3 thật** (`mapper_parsing_exception: unknown parameter [synthetic_source_keep]` — template ECS 9.0.0 dùng 1 mapper param mà server 8.15.3 không hiểu, dù NuGet ghi rõ yêu cầu tối thiểu "Elastic Stack 8.15.0"). Hạ xuống `8.12.3` (template ECS 8.11.0) bootstrap sạch, verify lại bằng probe sống — pin bản này trong `Directory.Packages.props`, không phải bản mới nhất.
+- **Enrich TraceId/SpanId xác nhận qua probe sống: chỉ cần `Enrich.WithSpan()` (Serilog.Enrichers.Span đọc `Activity.Current`), KHÔNG cần message-template placeholder nào** — formatter ECS tự map đúng vào field `trace.id`/`span.id` thật trong document (xác nhận bằng `curl` thẳng vào ES sau khi log), không rơi vào `labels.*` như lo ngại ban đầu.
+- **Phát hiện thật thứ hai (cũng từ probe, trước khi code): ILM policy `logs` built-in của ES chỉ có hot/rollover phase, KHÔNG có delete phase — retention vô hạn mặc định, và chính policy này server đánh dấu `"deprecated": true`.** Ngược hẳn với "retention tối thiểu" mục 4 yêu cầu. Giải pháp: tự tạo ILM policy `ticketflow-logs-retention` (hot rollover 1d/1gb, xoá sau 3d) qua 1 container init một lần (`curlimages/curl`, `depends_on: elasticsearch healthy`), 11 process đều `depends_on: es-ilm-init: service_completed_successfully` (không strictly bắt buộc — xác nhận ES không validate ILM policy tồn tại lúc `PUT index template`, nhưng thiếu dependency thì retention chỉ gắn được sau khi ILM tự poll lại, mặc định ~10 phút, ăn eventual-consistency không cần thiết cho 1 lần dựng).
+- `AddTicketFlowObservability` (IServiceCollection extension, không có `IHostBuilder` để hook `UseSerilog`) — set `Log.Logger` tĩnh 1 lần (cùng kiểu "1 dòng gọi, mọi service có" như trace/metrics), rồi `services.AddLogging(l => { l.ClearProviders(); l.AddSerilog(dispose: true); })`. Xác nhận qua probe DI sống: `ILogger<T>` resolve theo đường này vẫn round-trip đúng cả 2 sink (console + ES) kèm `trace.id`/`span.id` enrich.
+- 1 data stream/service (`logs-ticketflow-<serviceName>-local`, không gộp chung) — cùng độ chi tiết per-service như Prometheus scrape job (mục 3); Kibana index pattern `logs-ticketflow-*` vẫn gộp xem chung được. Config `Elasticsearch:Uri` thêm vào appsettings 10 service còn lại + gateway (Search đã có sẵn từ Phase 6) — nhân tiện phát hiện và sửa 1 lệch nhỏ có sẵn từ Commit 3: `Search/appsettings.Development.json` vẫn trỏ ES cổng `9200` dù cổng host đã remap `19200` (chỉ lộ ra khi chạy service ngoài Docker, chưa từng bị Commit 3 phát hiện vì verify luôn qua compose).
+- ES heap `512m` → `1g` (docker-compose.infra.yml) — 1 node ES giờ gánh 2 vai (search index + log ingest từ 11 process), đúng trade-off đã ghi ở mục 4. `kibana:8.15.3` (ghim khớp đúng version ES — Kibana tự chặn khi lệch version cluster), port `5601` (xác nhận không trúng dải Windows port-exclusion `8854-9553` trước khi thêm).
+
+**Verify thật:**
+- Rebuild sequential cả 11 service (tránh crash Docker Desktop như Commit 2/3) → build sạch, không service nào crash lúc bootstrap sink — xác nhận cả 11 data stream `logs-ticketflow-*-local` tự tạo đúng, đều gắn `ilm_policy: ticketflow-logs-retention`.
+- Mua vé thật qua gateway (JWT thật từ Keycloak, customer1): tạo event mới + provision inventory tay (gặp lại đúng gap đã biết từ Commit 2 — Redis không persist qua restart nhưng Postgres nhớ "đã provision" nên không tạo lại được, phải dùng event mới) → hold ghế → đặt đơn → saga chạy hết `Confirmed`. Query Elasticsearch bằng `trace.id` từ log gateway → **1 TraceId duy nhất (`5fa28df51fca...`) xuất hiện ở 6 service: Payment, Ticketing, Gateway, Ordering, Reservation, Notification** — xác nhận log↔trace nối thật, không phải suy đoán từ code.
+- Lấy đúng TraceId đó gọi thẳng Jaeger API `/api/traces/{traceId}` — **khớp 100%, 49 span, 8 service** (thêm cả analytics/recommendation không log trực tiếp nhưng có OTel span) — mắt xích log↔trace 2 chiều xác nhận thật, không chỉ 1 chiều.
+- Ép lỗi payment thật (đặt đơn với `totalAmount` đuôi `.13` — deterministic-fail hook có sẵn từ Phase 5): dòng log `Warning` thật xuất hiện trong ES kèm `trace.id` (`3bf7613a...`), order compensation chạy đúng → `Cancelled`. Lấy đúng TraceId này mở lại trên Jaeger → khớp, 33 span, 4 service (reservation, ordering, payment, gateway) — đúng kịch bản DoD "lấy TraceId từ 1 dòng log lỗi thật mở đúng trace trên Jaeger".
+- Search-service: chạy query tìm kiếm thật sau khi log đã đổ vào ES — trả đúng kết quả (gồm cả event mới tạo), xác nhận ES gánh 2 vai (search index `events` + 11 data stream log) không vỡ lẫn nhau.
+- Console sink song song vẫn nguyên vẹn — `docker logs` đọc được y hệt 9 phase trước, không mất workflow debug.
+- Regression: **81/81**. `docker compose ps` **25 container** khoẻ (24 cũ + kibana) + 1 container init one-shot `es-ilm-init` exit 0 (không tính vào running count, đúng dự tính).
 
 ## Nhóm D — Alert + finalize
 
@@ -164,7 +178,7 @@ flowchart LR
 | DoD | Kiểm chứng |
 |---|---|
 | ✅ 1 lần mua vé → trace xuyên suốt mọi service trên Jaeger | Commit 2: 1 trace id duy nhất từ gateway xuyên saga RabbitMQ tới span Lambda invoke, cả happy path lẫn compensation |
-| Dashboard hoạt động | Commit 3: RED + "vé bán/phút" nhảy số từ purchase thật; Commit 4: Kibana log nối Jaeger qua TraceId |
+| ✅ Dashboard hoạt động | Commit 3: RED + "vé bán/phút" nhảy số từ purchase thật; Commit 4: TraceId từ log lỗi thật (Elasticsearch) mở đúng trace trên Jaeger, cả 2 chiều |
 | Alert hoạt động | Commit 5: ép breaker payment mở thật → rule Firing trong Grafana |
 
 ## Hướng mở rộng (backlog — không thuộc Phase 10)

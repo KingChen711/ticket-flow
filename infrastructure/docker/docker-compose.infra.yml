@@ -96,7 +96,11 @@ services:
       discovery.type: single-node
       xpack.security.enabled: "false"
       xpack.security.enrollment.enabled: "false"
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      # 512m was enough for search-index duty alone (Phase 6). Bumped for Phase 10 Commit 4 — this
+      # node now also ingests Serilog's ES sink from all 11 API/gateway processes (mục 4's "1 node
+      # ES gánh 2 vai" trade-off), and the sink's own bulk-indexing buffer adds real heap pressure
+      # on top of search's existing usage.
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
     ports:
       # Host-side only, same Windows port-exclusion workaround as MinIO's port comment above —
       # container still listens on 9200 (the healthcheck curl below runs inside the container).
