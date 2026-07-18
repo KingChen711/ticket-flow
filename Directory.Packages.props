@@ -44,8 +44,11 @@
       not a temporary gap specific to this pin. Used only for the ordering→reservation gRPC client
       span (Commit 1); accepted as the only real option, same spirit as accepting QuestPDF's
       in-code license split or AWSSDK's Apache-2.0 confirmation elsewhere in this file.
+      OpenTelemetry.Exporter.Prometheus.AspNetCore (Commit 3) has the exact same no-stable-release
+      situation — same acceptance logic, same beta line.
     -->
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.17.0-beta.1" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="1.17.0-beta.1" />

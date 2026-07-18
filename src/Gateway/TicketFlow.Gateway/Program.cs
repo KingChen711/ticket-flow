@@ -55,6 +55,7 @@ var app = builder.Build();
 // AddTicketFlowWeb was already providing them (health check, exception handling, auth/authz).
 app.UseCors();
 app.UseTicketFlowWeb();
+app.UseTicketFlowObservability();
 
 app.MapGet("/", () => Results.Ok(new { message = "TicketFlow API Gateway" }));
 

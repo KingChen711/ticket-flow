@@ -21,6 +21,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "recommendation",
 var app = builder.Build();
 
 app.UseTicketFlowWeb();
+app.UseTicketFlowObservability();
 
 app.MapOpenApi();
 app.MapScalarApiReference();

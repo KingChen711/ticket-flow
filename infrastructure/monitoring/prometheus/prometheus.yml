@@ -1,0 +1,52 @@
+# 11 static targets (10 API services + gateway) — Docker DNS container names are stable inside
+# ticketflow-network, no service discovery needed for a fixed-size local compose stack (same
+# reasoning docker-compose.yml's own service names already give every consumer of this file).
+# Each target's /metrics comes from the same Kestrel listener as its main HTTP port — no separate
+# metrics port, mirrors how /health already works (TicketFlow.Web.UseTicketFlowWeb).
+#
+# Real finding (docs/phase-10-plan.md Commit 3) — this image's Prometheus defaults to
+# `metric_name_validation_scheme: utf8` (confirmed via `/api/v1/status/config`), which keeps the
+# OTel exporter's dotted instrument names as-is in the TSDB (e.g. `ticketflow.tickets.sold_total`,
+# `http.server.request.duration_seconds_count`, and even label names like
+# `http.response.status_code`) instead of the classic underscore-only Prometheus convention. Every
+# PromQL query in the Grafana dashboard JSON uses the quoted `{"dotted.name"}` selector syntax
+# because of this — a bare `ticketflow_tickets_sold_total` silently matches nothing (no error, just
+# an empty result), confirmed by testing both forms against this exact stack before writing the
+# dashboard queries.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: catalog
+    static_configs:
+      - targets: ["catalog:8002"]
+  - job_name: identity
+    static_configs:
+      - targets: ["identity:8001"]
+  - job_name: reservation
+    static_configs:
+      - targets: ["reservation:8003"]
+  - job_name: ordering
+    static_configs:
+      - targets: ["ordering:8004"]
+  - job_name: notification
+    static_configs:
+      - targets: ["notification:8005"]
+  - job_name: search
+    static_configs:
+      - targets: ["search:8006"]
+  - job_name: payment
+    static_configs:
+      - targets: ["payment:8007"]
+  - job_name: ticketing
+    static_configs:
+      - targets: ["ticketing:8008"]
+  - job_name: recommendation
+    static_configs:
+      - targets: ["recommendation:8009"]
+  - job_name: analytics
+    static_configs:
+      - targets: ["analytics:8010"]
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:8080"]

@@ -6,6 +6,7 @@ using TicketFlow.Messaging;
 using TicketFlow.Ordering.Api.Consumers;
 using TicketFlow.Ordering.Api.Endpoints;
 using TicketFlow.Ordering.Api.Messaging;
+using TicketFlow.Ordering.Api.Metrics;
 using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
@@ -16,7 +17,11 @@ using TicketFlow.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
-builder.Services.AddTicketFlowObservability(builder.Configuration, "ordering");
+builder.Services.AddSingleton<TicketSalesMetrics>();
+builder.Services.AddTicketFlowObservability(
+    builder.Configuration,
+    "ordering",
+    configureMetrics: m => m.AddMeter(TicketSalesMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
@@ -61,6 +66,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
 var app = builder.Build();
 
 app.UseTicketFlowWeb();
+app.UseTicketFlowObservability();
 
 app.MapOpenApi();
 app.MapScalarApiReference();

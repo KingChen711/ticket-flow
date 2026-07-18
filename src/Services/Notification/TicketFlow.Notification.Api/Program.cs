@@ -23,5 +23,6 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", b
 var app = builder.Build();
 
 app.UseTicketFlowWeb();
+app.UseTicketFlowObservability();
 
 app.Run();

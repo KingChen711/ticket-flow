@@ -54,6 +54,7 @@ if (!app.Environment.IsProduction())
 }
 
 app.UseTicketFlowWeb();
+app.UseTicketFlowObservability();
 
 app.MapOpenApi();
 app.MapScalarApiReference();

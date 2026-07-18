@@ -1,0 +1,18 @@
+# Provisioning-as-code (docs/phase-10-plan.md mục 5) — same "reproducible from a file, not
+# click-ops" discipline as Keycloak's realm-export.json and LocalStack's init scripts.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Explicit uid — without it Grafana auto-generates one, which won't match the hardcoded
+    # `{"type": "prometheus", "uid": "prometheus"}` datasource reference every panel in
+    # ticketflow-overview.json uses. Real bug found via browser verification: every panel loaded
+    # its shell but stayed empty (0 canvas elements, no chart data) with a silent
+    # "Failed to load datasource" console warning — no error banner on the panel itself, easy to
+    # miss without actually opening the dashboard in a browser and checking the console.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

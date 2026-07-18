@@ -102,9 +102,24 @@ tags: [ticketflow, phase-10, plan, observability, opentelemetry, jaeger, prometh
 
 ## Nhóm B — Metrics + dashboard
 
-### Commit 3 — `feat(observability): Prometheus + Grafana — RED + "vé bán/phút"`
-- `/metrics` (Prometheus exporter) mọi service; `prometheus` + `grafana` container; provisioning-as-code (mục 5); dashboard: RED per-service + business panel "vé bán/phút" từ counter `ticketflow.tickets.sold` (Meter mới trong Ordering, mục 3).
-- **Verify thật:** Prometheus targets 11/11 UP; mua N vé thật → counter tăng đúng N ghế, panel Grafana nhảy số thật; RED phản ánh request thật (bắn 1 loạt request lỗi 4xx/5xx chủ đích → thấy trên dashboard); `docker compose ps` 24 container.
+### Commit 3 — `feat(observability): Prometheus + Grafana — RED + "vé bán/phút"` ✅ DONE
+- `AddTicketFlowObservability` thêm `.WithMetrics(...)`: `AddAspNetCoreInstrumentation()` (RED miễn phí — `http.server.request.duration` là histogram gộp sẵn rate/errors/duration theo route) + tham số `configureMetrics` mới (giống pattern `configure` của `AddTicketFlowMessaging`) để Ordering tự đăng ký `Meter` riêng. `UseTicketFlowObservability(app)` mới — map `/metrics` (`MapPrometheusScrapingEndpoint`), gọi ở cả 11 process cạnh `UseTicketFlowWeb()`.
+- Counter nghiệp vụ `ticketflow.tickets.sold` sống trong `OrderCompletedConsumer` (Ordering) — đúng chỗ sở hữu vòng đời đơn, không phải Analytics (đã là read model doanh số riêng, mục đích khác). Tăng bằng `SeatIds.Count` sau khi ghi domain event, cùng chỗ với guard "unknown OrderId" đã có.
+- `docker-compose.monitoring.yml` thêm `prometheus` (11 target tĩnh, `prometheus.yml`) + `grafana` (provisioning-as-code: datasource + dashboard JSON trong `infrastructure/monitoring/`).
+
+**3 bug thật gặp khi dựng Prometheus/Grafana (không phải lỗi PromQL/dashboard logic):**
+1. **Port 9090 (Prometheus) cũng trúng dải Windows loại trừ 8854-9553** — cùng lớp lỗi đã gặp ở Commit 2, remap host sang `19090:9090`.
+2. **Docker không tạo được mountpoint lồng bên trong 1 bind mount `:ro`** — thử mount riêng `grafana/dashboards` vào `provisioning/dashboards/files` (bên trong 1 mount `:ro` khác) → lỗi "read-only file system" thật khi container khởi động. Fix: đặt file JSON dashboard trực tiếp trong `provisioning/dashboards/files/`, không mount lồng.
+3. **Datasource UID không khớp làm mọi panel "Failed to load datasource" — Grafana crash hẳn khi cố sửa nửa vời.** Ban đầu không khai `uid` cho datasource trong provisioning YAML → Grafana tự sinh UID ngẫu nhiên, không khớp `"uid": "prometheus"` mà dashboard JSON tham chiếu cứng. Thêm `uid: prometheus` vào sau thì Grafana **crash lúc start** (`Datasource provisioning error: data source not found`) vì volume `grafana-data` cũ đã lưu bản ghi UID cũ — fix bằng cách xoá volume, để provisioning chạy lại sạch từ đầu (đúng tinh thần "mọi lần start là deploy mới" của LocalStack).
+
+**Phát hiện thật đáng chú ý nhất — Prometheus (bản đi kèm) mặc định `metric_name_validation_scheme: utf8`, giữ nguyên dấu chấm trong tên metric OTel thay vì đổi sang underscore như quy ước Prometheus cũ.** Xác nhận qua `curl .../api/v1/status/config` và `curl .../api/v1/label/__name__/values`: metric thật lưu trong TSDB là `ticketflow.tickets.sold_total`, `http.server.request.duration_seconds_count`, và **cả tên label** cũng giữ dấu chấm (`http.response.status_code`, không phải `http_response_status_code`). Query PromQL kiểu cũ (`ticketflow_tickets_sold_total`) **không báo lỗi, chỉ âm thầm trả rỗng** — phải test cả 2 dạng thật trên chính Prometheus mới phát hiện. Toàn bộ query trong dashboard JSON dùng cú pháp quote `{"dotted.name", "dotted.label"=~"value"}` vì lý do này — ghi rõ trong comment `prometheus.yml`.
+
+**Verify thật:**
+- Prometheus targets: **11/11 UP** (`/api/v1/targets`).
+- Mua 3 vé thật (3 order `Confirmed` riêng biệt) → `ticketflow_tickets_sold_total` (`.../metrics` của ordering) tăng đúng **3**, khớp chính xác số ghế đã bán, không lệch.
+- RED thật: bắn 401×3 (không token) + 400×3 (body sai) + 404×3 (event không tồn tại) → Prometheus ghi đúng breakdown theo `job`+`http.response.status_code` (`catalog 404×3`, `ordering 400×3`, `gateway 401×3/400×3/404×3`) — xác nhận qua `increase()` thật, không đoán.
+- **Panel Grafana:** browser trong sandbox này không render canvas (0 `<canvas>`, không thấy `/api/ds/query` — thử cả 2 bản Grafana `13.1.0` và `11.4.0`, cùng triệu chứng, nên không phải do version). Cô lập bằng cách gọi thẳng `/api/ds/query` có xác thực (bỏ qua trình duyệt hoàn toàn) — **backend Grafana trả đúng dữ liệu thật cho cả 4 panel, cả 11 service**, xác nhận toàn bộ pipeline datasource+PromQL đúng 100%; phần chưa xác nhận được là canvas render của chính công cụ trình duyệt sandbox, ghi thẳng thắn là giới hạn công cụ chứ không giả vờ đã thấy chart thật.
+- Regression: **81/81**. `docker compose ps` **24 container** khoẻ (21 + jaeger + prometheus + grafana).
 
 ## Nhóm C — Logs tập trung
 

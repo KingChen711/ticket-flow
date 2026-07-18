@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -8,27 +9,27 @@ namespace TicketFlow.Observability;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Trace only — metrics (`.WithMetrics`) are Commit 3's job (Prometheus), not this method's.
-    /// Sync hops: HTTP via ASP.NET Core/HttpClient instrumentation, gRPC via GrpcNetClient
-    /// instrumentation for ordering→reservation (Commit 1). OTLP straight to Jaeger all-in-one
-    /// (gRPC 4317) — no Collector in between, see docs/phase-10-plan.md mục 2 for why a
-    /// single-node local stack doesn't earn one.
+    /// Trace: sync hops via ASP.NET Core/HttpClient/GrpcNetClient instrumentation (Commit 1),
+    /// async hops via `.AddSource("MassTransit")` (Commit 2) — see those commits' doc history in
+    /// docs/phase-10-plan.md for the live-probe findings behind each. OTLP straight to Jaeger
+    /// all-in-one (gRPC 4317) — no Collector in between, see mục 2 for why a single-node local
+    /// stack doesn't earn one.
     ///
-    /// `.AddSource("MassTransit")` (Commit 2) — a live probe against real RabbitMQ
-    /// (docs/phase-10-plan.md Commit 1 write-up) confirmed MassTransit 8.5.10 already propagates
-    /// W3C trace context end-to-end on its own (custom header `MT-Activity-Id`, W3C traceparent
-    /// format, read automatically on the consuming side — no manual header plumbing needed), so
-    /// enabling the source it already emits under is all the saga/RabbitMQ hops need to join the
-    /// same trace as the HTTP request that started them. The Lambda Invoke hop
-    /// (ticketing→RenderTicketPdf, gateway→media Lambdas) needs no separate wiring either — those
-    /// calls go out through AWSSDK's HttpClient, which AddHttpClientInstrumentation already
-    /// covers, and they run inside whatever Activity is ambient at the call site (a MassTransit
-    /// consume Activity for the ticketing case), so the client span nests under it automatically.
+    /// Metrics (Commit 3): `AddAspNetCoreInstrumentation()` alone gives RED for free —
+    /// `http.server.request.duration` is a histogram tagged with route/method/status_code, which
+    /// is Rate+Errors+Duration in one instrument, no custom code needed. `configureMetrics` is
+    /// the one escape hatch a caller needs beyond that — Ordering uses it to register its own
+    /// `ticketflow.tickets.sold` Meter (mục 3) via `.AddMeter("TicketFlow.Ordering")`; every other
+    /// service passes nothing. Exporter is Prometheus (pull, not OTLP push) — mục 3's reasoning:
+    /// pull is idiomatic Prometheus, and this repo already accepted one no-stable-release OTel
+    /// package for gRPC tracing (Commit 1), so a second one for the exporter isn't a new kind of
+    /// risk, see Directory.Packages.props.
     /// </summary>
     public static IServiceCollection AddTicketFlowObservability(
         this IServiceCollection services,
         IConfiguration configuration,
-        string serviceName)
+        string serviceName,
+        Action<MeterProviderBuilder>? configureMetrics = null)
     {
         var otlpEndpoint = configuration["Otlp:Endpoint"]
             ?? throw new InvalidOperationException("Configuration 'Otlp:Endpoint' was not found.");
@@ -43,7 +44,13 @@ public static class ServiceCollectionExtensions
                 // the ordering→reservation gRPC client span, see Directory.Packages.props comment.
                 .AddGrpcClientInstrumentation()
                 .AddSource("MassTransit")
-                .AddOtlpExporter(otlp => otlp.Endpoint = new Uri(otlpEndpoint)));
+                .AddOtlpExporter(otlp => otlp.Endpoint = new Uri(otlpEndpoint)))
+            .WithMetrics(metrics =>
+            {
+                metrics.AddAspNetCoreInstrumentation();
+                configureMetrics?.Invoke(metrics);
+                metrics.AddPrometheusExporter();
+            });
 
         return services;
     }
