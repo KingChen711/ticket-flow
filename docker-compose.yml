@@ -40,7 +40,11 @@ services:
       ASPNETCORE_ENVIRONMENT: Docker
     ports:
       - "8003:8003"
-      - "9003:9003"
+      # Host-side only (container port stays 9003, gRPC clients inside the Docker network still
+      # use reservation:9003 via service DNS — unaffected). Remapped away from a Windows dynamic
+      # TCP port-exclusion range (see MinIO's port comment in docker-compose.infra.yml for the
+      # full story) that was blocking the bind with "forbidden by its access permissions".
+      - "19003:9003"
     depends_on:
       postgres:
         condition: service_healthy

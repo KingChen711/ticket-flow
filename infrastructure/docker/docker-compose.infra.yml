@@ -56,7 +56,11 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports:
-      - "9092:9092"
+      # No host publish for 9092 (PLAINTEXT, container-internal — other containers reach it via
+      # kafka:9092 through the Docker network regardless of host port mapping) — it also happened
+      # to land inside the same Windows port-exclusion range as MinIO/ClickHouse/Keycloak below,
+      # and dropping it is simpler than remapping a port nothing on the host actually needs.
+      # PLAINTEXT_HOST://localhost:29092 is the listener that exists specifically for host access.
       - "29092:29092"
 
   minio:
@@ -67,8 +71,16 @@ services:
       MINIO_ROOT_PASSWORD: ticketflow
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # Host-side only — container ports stay 9000/9001, only where Windows exposes them changes.
+      # Both (and ClickHouse/Keycloak/Elasticsearch's neighboring host ports below) landed inside
+      # a Windows dynamic TCP port-exclusion range (Hyper-V/WSL2 NAT can reserve blocks like this
+      # after a Docker Desktop crash+restart — confirmed via `netsh interface ipv4 show
+      # excludedportrange protocol=tcp` showing 8854-9553 excluded) — `bind: An attempt was made
+      # to access a socket in a way forbidden by its access permissions` is that exclusion, not a
+      # real conflict. Fixing it properly needs `net stop/start winnat` as admin; remapping the
+      # host port is the workaround that doesn't require elevation.
+      - "19000:9000"
+      - "19001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -86,7 +98,9 @@ services:
       xpack.security.enrollment.enabled: "false"
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     ports:
-      - "9200:9200"
+      # Host-side only, same Windows port-exclusion workaround as MinIO's port comment above —
+      # container still listens on 9200 (the healthcheck curl below runs inside the container).
+      - "19200:9200"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
@@ -120,7 +134,8 @@ services:
       CLICKHOUSE_DB: analytics
     ports:
       - "8123:8123"
-      - "9010:9000"
+      # Host-side only, see MinIO's port comment above — same Windows port-exclusion workaround.
+      - "19010:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
@@ -141,8 +156,9 @@ services:
     ports:
       - "8180:8180"
       # 9000 is already MinIO's host port (same conflict class as ClickHouse's native port
-      # earlier) — Keycloak's management/health port maps to host 9020 instead.
-      - "9020:9000"
+      # earlier) — Keycloak's management/health port maps to host 9020 instead. Host-side only,
+      # same Windows port-exclusion workaround as MinIO's port comment above.
+      - "19020:9000"
     volumes:
       - ../keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     healthcheck:
