@@ -1,0 +1,17 @@
+# kind cluster config (Phase 11 Commit 1) — vanilla `kind create cluster` maps NO host ports by
+# default; NodePort services are reachable from inside the node/Docker network only unless
+# `extraPortMappings` is declared here at cluster-creation time (confirmed live — a bare cluster +
+# a NodePort service was unreachable from the host until recreated with this file).
+# 30080 chosen for the gateway NodePort (Commit 2) — inside the default NodePort range
+# 30000-32767, confirmed clear of the current Windows dynamic TCP port-exclusion range via
+# `netsh interface ipv4 show excludedportrange protocol=tcp` at the time this was written (that
+# range shifts across Docker Desktop restarts — recheck if a future `kind create cluster` fails
+# to bind, same class of issue documented across docker-compose.infra.yml).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP

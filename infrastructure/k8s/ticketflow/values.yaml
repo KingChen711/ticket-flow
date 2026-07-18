@@ -1,0 +1,53 @@
+# Phase 11 Commit 1 — infra datastores only. Images/env/versions mirror
+# infrastructure/docker/docker-compose.infra.yml exactly (same pins, same credentials — this is a
+# local learning cluster, not a security exercise). storage sizes are generous-but-arbitrary for
+# a local kind node backed by the default `standard` StorageClass (local-path-provisioner).
+infra:
+  postgres:
+    image: postgres:16
+    user: ticketflow
+    password: ticketflow
+    db: ticketflow
+    storage: 2Gi
+
+  redis:
+    image: redis:7
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    user: ticketflow
+    password: ticketflow
+
+  kafka:
+    image: apache/kafka:3.8.0
+
+  minio:
+    image: minio/minio:latest
+    user: ticketflow
+    password: ticketflow
+    storage: 2Gi
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    # Same 1g heap as compose (Phase 10 Commit 4) — this node also ingests Serilog logs once
+    # Commit 2 wires the 11 API services in.
+    javaOpts: "-Xms1g -Xmx1g"
+    storage: 3Gi
+
+  mongodb:
+    image: mongo:7
+    user: ticketflow
+    password: ticketflow
+    storage: 2Gi
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    user: ticketflow
+    password: ticketflow
+    db: analytics
+    storage: 2Gi
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7
+    adminUser: admin
+    adminPassword: admin

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: ticketflow
+description: >
+  TicketFlow full-stack Helm chart (Phase 11) — infra datastores (this Commit 1) plus, from
+  Commit 2 onward, the 11 .NET services + gateway + monitoring + 3 frontends. One umbrella
+  release (`helm install ticketflow .`) matching the DoD's "helm install lên cluster chạy full
+  stack" — not per-component sub-releases.
+type: application
+version: 0.1.0
+appVersion: "11.1"

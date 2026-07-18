@@ -1,0 +1,254 @@
+{
+  "realm": "ticketflow",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "customer", "description": "Buys tickets" },
+      { "name": "organizer", "description": "Creates/manages events, views revenue" },
+      { "name": "admin", "description": "Platform administrator" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ticketflow-dev",
+      "name": "TicketFlow dev client",
+      "description": "Dev-only: Direct Access Grants so curl/scripts can obtain a token by username+password before Phase 8's real frontend exists (Authorization Code + PKCE). Standard Flow left enabled for that later use.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-api",
+      "name": "TicketFlow API (resource server audience)",
+      "description": "Not used to log in — exists only so tokens can carry aud=ticketflow-api for services to validate against.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "ticketflow-identity-admin",
+      "name": "Identity service Admin API client (server-to-server user provisioning)",
+      "description": "Confidential, client-credentials only. identity-service uses this to create/delete Keycloak users via the Admin REST API when POST /register is called (Phase 7 Commit 3 dual-write) — no human or browser flow ever uses this client.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "identity-admin-dev-secret"
+    },
+    {
+      "clientId": "ticketflow-customer-web",
+      "name": "customer-web (Phase 8)",
+      "description": "Confidential — token lives server-side in the Next.js app's session (Auth.js), browser never holds it. Authorization Code + PKCE, client-per-app per Keycloak's own recommendation.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "customer-web-dev-secret",
+      "redirectUris": ["http://localhost:3000/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3000"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-organizer-dashboard",
+      "name": "organizer-dashboard (Phase 8)",
+      "description": "Same shape as ticketflow-customer-web, separate client so each app's sessions/tokens are independent.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "organizer-dashboard-dev-secret",
+      "redirectUris": ["http://localhost:3001/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3001"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    },
+    {
+      "clientId": "ticketflow-gate-scanner",
+      "name": "gate-scanner (Phase 8)",
+      "description": "Same shape as ticketflow-customer-web, separate client so each app's sessions/tokens are independent.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "gate-scanner-dev-secret",
+      "redirectUris": ["http://localhost:3002/api/auth/callback/keycloak"],
+      "webOrigins": ["http://localhost:3002"],
+      "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "ticketflow-audience",
+      "protocol": "openid-connect",
+      "description": "Adds aud + sub to the access token — this Keycloak version omits both by default.",
+      "protocolMappers": [
+        {
+          "name": "ticketflow-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "ticketflow-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "id",
+            "claim.name": "sub",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "name": "profile",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds the user's name to the token.",
+      "protocolMappers": [
+        {
+          "name": "full name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-full-name-mapper",
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "email",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds the user's email to the token.",
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "email verified",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "jsonType.label": "boolean",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "protocol": "openid-connect",
+      "description": "OpenID Connect built-in scope: adds realm roles to the token so IsInRole()/[Authorize(Roles=...)] can read them.",
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "name": "declarative-user-profile",
+        "providerId": "declarative-user-profile",
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"email\",\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"firstName\",\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}}]}"
+          ]
+        }
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "service-account-ticketflow-identity-admin",
+      "enabled": true,
+      "serviceAccountClientId": "ticketflow-identity-admin",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-realm"]
+      }
+    },
+    {
+      "username": "customer1",
+      "email": "customer1@ticketflow.dev",
+      "firstName": "Customer",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "customer123", "temporary": false }],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "organizer1",
+      "email": "organizer1@ticketflow.dev",
+      "firstName": "Organizer",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],
+      "realmRoles": ["organizer"]
+    },
+    {
+      "username": "admin1",
+      "email": "admin1@ticketflow.dev",
+      "firstName": "Admin",
+      "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "realmRoles": ["admin"]
+    }
+  ]
+}
