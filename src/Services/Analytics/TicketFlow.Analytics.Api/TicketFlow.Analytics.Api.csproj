@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Observability\TicketFlow.Observability.csproj" />
     <ProjectReference Include="..\TicketFlow.Analytics.Application\TicketFlow.Analytics.Application.csproj" />
     <ProjectReference Include="..\TicketFlow.Analytics.Infrastructure\TicketFlow.Analytics.Infrastructure.csproj" />
   </ItemGroup>

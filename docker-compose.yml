@@ -1,5 +1,6 @@
 include:
   - infrastructure/docker/docker-compose.infra.yml
+  - infrastructure/docker/docker-compose.monitoring.yml
 
 services:
   catalog:

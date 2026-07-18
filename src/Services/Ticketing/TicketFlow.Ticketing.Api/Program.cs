@@ -6,11 +6,13 @@ using TicketFlow.Ticketing.Api.Consumers;
 using TicketFlow.Ticketing.Api.Endpoints;
 using TicketFlow.Ticketing.Application;
 using TicketFlow.Ticketing.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "ticketing");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddTicketingApplication();

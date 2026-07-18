@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -38,7 +39,13 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
                 type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
                 title = isExpected ? ex.Message : "An unexpected error occurred.",
                 status = context.Response.StatusCode,
-                traceId = context.TraceIdentifier
+                // Phase 10 Commit 1 — was context.TraceIdentifier (Kestrel's own per-connection
+                // id, e.g. "0HN..."), which has no relationship to the OpenTelemetry trace this
+                // request belongs to. Activity.Current.TraceId is the actual W3C trace id
+                // (AddAspNetCoreInstrumentation starts one per request), so the id a caller sees
+                // in an error response is the same one they can paste into Jaeger. Falls back to
+                // TraceIdentifier only if OTel isn't wired for some reason (Activity.Current null).
+                traceId = Activity.Current?.TraceId.ToString() ?? context.TraceIdentifier
             });
         }
     }

@@ -4,11 +4,13 @@ using TicketFlow.Messaging;
 using TicketFlow.Search.Api.Consumers;
 using TicketFlow.Search.Api.Endpoints;
 using TicketFlow.Search.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "search");
 builder.Services.AddOpenApi();
 builder.Services.AddSearchInfrastructure(builder.Configuration);
 

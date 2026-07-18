@@ -2,11 +2,13 @@ using TicketFlow.Messaging;
 using TicketFlow.Notification.Api.Consumers;
 using TicketFlow.Notification.Application;
 using TicketFlow.Notification.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "notification");
 builder.Services.Configure<ReminderOptions>(builder.Configuration.GetSection("Reminder"));
 builder.Services.AddNotificationInfrastructure(builder.Configuration);
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", busConfigurator =>

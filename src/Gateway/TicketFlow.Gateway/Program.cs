@@ -1,10 +1,18 @@
 using Amazon.Lambda;
 using Amazon.Runtime;
 using TicketFlow.Gateway;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Phase 10 Commit 1 — gateway now goes through the same building block every other service
+// uses (health check + exception middleware + observability). It never did before (gap since
+// Phase 7, gateway wired auth by hand instead) — worth closing now specifically because gateway
+// is the FIRST hop of every trace; leaving the one process at the front of the pipeline
+// uninstrumented would have made "trace xuyên suốt" (this phase's DoD) impossible to satisfy.
+builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "gateway");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
@@ -39,9 +47,14 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// CORS must run before auth (doc comment above AddCors explains why), so it stays ahead of
+// UseTicketFlowWeb() here — the one place gateway's pipeline order differs from every other
+// service's. Trade-off: CORS middleware itself isn't wrapped by ExceptionHandlingMiddleware
+// (which UseTicketFlowWeb registers second, not first, in this one process) — acceptable since
+// CORS middleware doesn't throw in practice; every service downstream still gets the middleware
+// AddTicketFlowWeb was already providing them (health check, exception handling, auth/authz).
 app.UseCors();
-app.UseAuthentication();
-app.UseAuthorization();
+app.UseTicketFlowWeb();
 
 app.MapGet("/", () => Results.Ok(new { message = "TicketFlow API Gateway" }));
 

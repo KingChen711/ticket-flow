@@ -3,11 +3,13 @@ using TicketFlow.Messaging;
 using TicketFlow.Recommendation.Api.Consumers;
 using TicketFlow.Recommendation.Api.Endpoints;
 using TicketFlow.Recommendation.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "recommendation");
 builder.Services.AddOpenApi();
 builder.Services.AddRecommendationInfrastructure(builder.Configuration);
 

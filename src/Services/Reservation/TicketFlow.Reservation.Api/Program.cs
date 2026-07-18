@@ -9,6 +9,7 @@ using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +27,7 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "reservation");
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();

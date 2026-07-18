@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Observability\TicketFlow.Observability.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
   </ItemGroup>
 

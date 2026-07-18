@@ -3,11 +3,13 @@ using Scalar.AspNetCore;
 using TicketFlow.Identity.Api.Endpoints;
 using TicketFlow.Identity.Application;
 using TicketFlow.Identity.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "identity");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddIdentityApplication();
 builder.Services.AddIdentityInfrastructure(builder.Configuration);

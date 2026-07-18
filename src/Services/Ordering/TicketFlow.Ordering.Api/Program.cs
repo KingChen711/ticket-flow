@@ -10,11 +10,13 @@ using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "ordering");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();

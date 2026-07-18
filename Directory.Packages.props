@@ -35,6 +35,21 @@
          FrameworkReference alone). Pinned to match the other ASP.NET Core 10.0.9 packages above. -->
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageVersion Include="Microsoft.OpenApi" Version="2.10.0" />
+    <!--
+      Phase 10 Commit 1 — TicketFlow.Observability, wired into every service's Program.cs
+      (AddTicketFlowObservability). All official OpenTelemetry .NET, Apache-2.0, no license trap.
+      OpenTelemetry.Instrumentation.GrpcNetClient has NO stable release — 1.17.0-beta.1 is the
+      best NuGet has (confirmed via `dotnet add package` refusing the stable resolve and offering
+      only the beta); this instrumentation package has stayed pre-1.0 for its whole life upstream,
+      not a temporary gap specific to this pin. Used only for the ordering→reservation gRPC client
+      span (Commit 1); accepted as the only real option, same spirit as accepting QuestPDF's
+      in-code license split or AWSSDK's Apache-2.0 confirmation elsewhere in this file.
+    -->
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="1.17.0-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.16.11" />
     <PackageVersion Include="StackExchange.Redis" Version="3.0.17" />
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />

@@ -8,6 +8,7 @@ using TicketFlow.Analytics.Api.Messaging;
 using TicketFlow.Analytics.Infrastructure;
 using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 const string saleRecordedTopic = "sale-recorded";
@@ -15,6 +16,7 @@ const string saleRecordedTopic = "sale-recorded";
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "analytics");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddAnalyticsInfrastructure(builder.Configuration);

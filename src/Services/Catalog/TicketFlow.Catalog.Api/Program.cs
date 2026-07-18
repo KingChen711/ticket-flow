@@ -4,11 +4,13 @@ using TicketFlow.Catalog.Api.Endpoints;
 using TicketFlow.Catalog.Application;
 using TicketFlow.Catalog.Infrastructure;
 using TicketFlow.Catalog.Infrastructure.Seeding;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "catalog");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddCatalogApplication();
 // Messaging (bus + EF Core Outbox) wired inside AddCatalogInfrastructure — the outbox has to

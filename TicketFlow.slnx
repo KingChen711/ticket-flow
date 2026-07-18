@@ -4,6 +4,7 @@
     <Project Path="src/BuildingBlocks/TicketFlow.Contracts.Messaging/TicketFlow.Contracts.Messaging.csproj" />
     <Project Path="src/BuildingBlocks/TicketFlow.Domain/TicketFlow.Domain.csproj" />
     <Project Path="src/BuildingBlocks/TicketFlow.Messaging/TicketFlow.Messaging.csproj" />
+    <Project Path="src/BuildingBlocks/TicketFlow.Observability/TicketFlow.Observability.csproj" />
     <Project Path="src/BuildingBlocks/TicketFlow.Web/TicketFlow.Web.csproj" />
   </Folder>
   <Folder Name="/src/Functions/">

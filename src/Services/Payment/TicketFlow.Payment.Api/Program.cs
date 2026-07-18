@@ -5,11 +5,13 @@ using TicketFlow.Messaging;
 using TicketFlow.Payment.Api.Consumers;
 using TicketFlow.Payment.Application;
 using TicketFlow.Payment.Infrastructure;
+using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
+builder.Services.AddTicketFlowObservability(builder.Configuration, "payment");
 builder.Services.AddOpenApi();
 builder.Services.AddPaymentApplication();
 builder.Services.AddPaymentInfrastructure(builder.Configuration);
