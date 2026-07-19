@@ -37,6 +37,11 @@ builder.Services.AddTicketFlowMessaging(
         // so this is a continuation of the existing queue, not a rename.
         rabbitConfigurator.ReceiveEndpoint("ticketing-issue-tickets", e =>
         {
+            // PDF rendering invokes LocalStack's Docker-backed Lambda executor.  On this local
+            // Compose host, parallel cold starts can time out before the function begins; a
+            // single durable consumer lets RabbitMQ absorb a flash-sale fan-out instead of
+            // turning a temporary executor-capacity limit into cancelled orders.
+            e.ConcurrentMessageLimit = 1;
             e.UseEntityFrameworkOutbox<TicketingDbContext>(context);
             e.ConfigureConsumer<IssueTicketsConsumer>(context);
         });

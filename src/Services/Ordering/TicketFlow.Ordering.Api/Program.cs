@@ -48,7 +48,6 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     // OrderSeatsConfirmedConsumer's doc comment for why these aren't folded into PurchaseSaga.
     cfg.AddConsumer<OrderSeatsConfirmedConsumer>();
     cfg.AddConsumer<OrderPaymentAuthorizedConsumer>();
-    cfg.AddConsumer<OrderTicketsIssuedConsumer>();
     cfg.AddConsumer<OrderCompletedConsumer>();
 
     // Compensation milestone consumers (Commit 9).

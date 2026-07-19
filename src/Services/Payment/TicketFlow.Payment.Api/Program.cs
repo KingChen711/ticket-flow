@@ -46,12 +46,17 @@ builder.Services.AddTicketFlowMessaging(
         // continuation of the existing queues, not a rename.
         rabbitConfigurator.ReceiveEndpoint("payment-process-payment", e =>
         {
+            // One Postgres connection is held while the EF inbox/outbox transaction runs.
+            // Keep the burst consumer below Payment's bounded pool so flash-sale messages queue
+            // in RabbitMQ instead of exhausting PostgreSQL or timing out in Npgsql.
+            e.ConcurrentMessageLimit = 8;
             e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
             e.ConfigureConsumer<ProcessPaymentConsumer>(context);
         });
 
         rabbitConfigurator.ReceiveEndpoint("payment-refund-payment", e =>
         {
+            e.ConcurrentMessageLimit = 8;
             e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
             e.ConfigureConsumer<RefundPaymentConsumer>(context);
         });

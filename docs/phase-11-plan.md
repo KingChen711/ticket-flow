@@ -118,9 +118,9 @@ tags: [ticketflow, phase-11, plan, kubernetes, kind, helm, github-actions, ci-cd
 
 ## Nhóm C — Load test (Ch17)
 
-### Commit 4 — `test(load): flash sale — M user giành N ghế qua full stack, chống oversell + số liệu thật`
+### Commit 4 — `test(load): flash sale — M user giành N ghế qua full stack, chống oversell + số liệu thật` ✅ DONE
 - `tests/TicketFlow.FlashSale.LoadTests` (NBomber): kịch bản mục 5, chạy trên compose stack.
-- **Verify thật:** tổng vé bán ≤ N tuyệt đối (query Postgres ordering + ClickHouse analytics đối chiếu); báo cáo NBomber (p95, error rate) + screenshot/số liệu dashboard "vé bán/phút" lúc chạy + 1 trace mẫu request chậm nhất — tất cả ghi vào doc như bằng chứng, không phải "chạy rồi, ổn".
+- **Verify thật:** tổng vé bán ≤ N tuyệt đối (query Postgres ordering + ClickHouse analytics đối chiếu); báo cáo NBomber (p95, error rate) + screenshot/số liệu dashboard "vé bán/phút" lúc chạy + 1 trace mẫu request chậm nhất — tất cả ghi vào doc như bằng chứng, không phải "chạy rồi, ổn". Kết quả chạy thật 2026-07-19: 300 VU, 50/50 order `Confirmed`, 250 response `409` đúng kỳ vọng, p95 1,984.51 ms, PostgreSQL/ClickHouse đều 50 ghế; xem [phase-11-flash-sale-evidence.md](phase-11-flash-sale-evidence.md).
 
 ## Nhóm D — Wrap-up (Ch17, khép dự án)
 

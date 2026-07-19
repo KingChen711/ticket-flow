@@ -7,14 +7,12 @@ using TicketFlow.Ordering.Domain.Orders;
 namespace TicketFlow.Ordering.Api.Consumers;
 
 /// <summary>
-/// Final milestone. Reuses the existing <see cref="OrderConfirmed"/> domain event (Phase 4)
-/// rather than introducing a new "OrderCompleted" domain event — that name is already taken by
-/// the integration event this consumer handles (TicketFlow.Contracts.Messaging.Ordering.
-/// OrderCompleted), and "an order the saga drove all the way through is Confirmed" is exactly
-/// OrderConfirmed's existing meaning. This bypasses Order.Confirm()'s guard on purpose — see that
-/// method's doc comment: the guard is for the admin-override manual path, not this saga-trusted
-/// one, and by the time this runs Status is TicketsIssued, not Pending. Load-first guard: see
-/// OrderSeatsConfirmedConsumer's doc comment.
+/// Final audit milestone. The saga emits <see cref="OrderCompleted"/> only after receiving
+/// <c>TicketsIssued</c>, so this consumer appends both the ticket-issued audit event and the
+/// existing <see cref="OrderConfirmed"/> event in one Marten save. They used to be two separate
+/// consumers on independent RabbitMQ queues; under a flash-sale burst both could load the same
+/// PaymentAuthorized stream and race to append version 4. Keeping the dependent writes atomic
+/// preserves the full event history without assuming cross-queue delivery order.
 ///
 /// Phase 10 Commit 3 — also where the `ticketflow.tickets.sold` counter increments (see
 /// TicketSalesMetrics's doc comment for why here, not the saga or Analytics). Recorded only after
@@ -35,6 +33,27 @@ public sealed class OrderCompletedConsumer(
         {
             logger.LogWarning("OrderCompleted received for unknown OrderId {OrderId} — skipping.", context.Message.OrderId);
             return;
+        }
+
+        if (order.Status == OrderStatus.Confirmed)
+        {
+            logger.LogInformation("OrderCompleted replay for already-confirmed OrderId {OrderId} — skipping.", context.Message.OrderId);
+            return;
+        }
+
+        if (order.Status == OrderStatus.PaymentAuthorized)
+        {
+            store.Append(
+                context.Message.OrderId,
+                new OrderTicketsIssued(context.Message.OrderId, context.Message.TicketPdfUrls, timeProvider.GetUtcNow()));
+        }
+        else if (order.Status != OrderStatus.TicketsIssued)
+        {
+            // The payment milestone should always precede the saga's OrderCompleted publication.
+            // Throwing engages the shared bounded MassTransit retry instead of acknowledging an
+            // out-of-order message and permanently dropping the final confirmation.
+            throw new InvalidOperationException(
+                $"OrderCompleted arrived for {context.Message.OrderId} while the order is {order.Status}, not PaymentAuthorized/TicketsIssued.");
         }
 
         store.Append(context.Message.OrderId, new OrderConfirmed(context.Message.OrderId, timeProvider.GetUtcNow()));
