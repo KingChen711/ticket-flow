@@ -30,7 +30,7 @@ spec:
     spec:
       containers:
         - name: {{ $name }}
-          image: {{ $frontend.image }}
+          image: {{ include "ticketflow.appImage" (dict "root" $root "image" $frontend.image) | quote }}
           imagePullPolicy: IfNotPresent
           env:
             # Next standalone defaults to port 3000 and a loopback bind.  Explicit values make

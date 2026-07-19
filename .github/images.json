@@ -1,0 +1,72 @@
+[
+  {
+    "name": "catalog",
+    "image": "ticket-flow-catalog",
+    "dockerfile": "src/Services/Catalog/TicketFlow.Catalog.Api/Dockerfile"
+  },
+  {
+    "name": "identity",
+    "image": "ticket-flow-identity",
+    "dockerfile": "src/Services/Identity/TicketFlow.Identity.Api/Dockerfile"
+  },
+  {
+    "name": "reservation",
+    "image": "ticket-flow-reservation",
+    "dockerfile": "src/Services/Reservation/TicketFlow.Reservation.Api/Dockerfile"
+  },
+  {
+    "name": "ordering",
+    "image": "ticket-flow-ordering",
+    "dockerfile": "src/Services/Ordering/TicketFlow.Ordering.Api/Dockerfile"
+  },
+  {
+    "name": "notification",
+    "image": "ticket-flow-notification",
+    "dockerfile": "src/Services/Notification/TicketFlow.Notification.Api/Dockerfile"
+  },
+  {
+    "name": "search",
+    "image": "ticket-flow-search",
+    "dockerfile": "src/Services/Search/TicketFlow.Search.Api/Dockerfile"
+  },
+  {
+    "name": "payment",
+    "image": "ticket-flow-payment",
+    "dockerfile": "src/Services/Payment/TicketFlow.Payment.Api/Dockerfile"
+  },
+  {
+    "name": "ticketing",
+    "image": "ticket-flow-ticketing",
+    "dockerfile": "src/Services/Ticketing/TicketFlow.Ticketing.Api/Dockerfile"
+  },
+  {
+    "name": "recommendation",
+    "image": "ticket-flow-recommendation",
+    "dockerfile": "src/Services/Recommendation/TicketFlow.Recommendation.Api/Dockerfile"
+  },
+  {
+    "name": "analytics",
+    "image": "ticket-flow-analytics",
+    "dockerfile": "src/Services/Analytics/TicketFlow.Analytics.Api/Dockerfile"
+  },
+  {
+    "name": "gateway",
+    "image": "ticket-flow-gateway",
+    "dockerfile": "src/Gateway/TicketFlow.Gateway/Dockerfile"
+  },
+  {
+    "name": "customer-web",
+    "image": "ticket-flow-customer-web",
+    "dockerfile": "apps/customer-web/Dockerfile"
+  },
+  {
+    "name": "organizer-dashboard",
+    "image": "ticket-flow-organizer-dashboard",
+    "dockerfile": "apps/organizer-dashboard/Dockerfile"
+  },
+  {
+    "name": "gate-scanner",
+    "image": "ticket-flow-gate-scanner",
+    "dockerfile": "apps/gate-scanner/Dockerfile"
+  }
+]

@@ -55,9 +55,15 @@ infra:
 # Phase 11 Commit 2 — 11 .NET API services + gateway. Image names match exactly what
 # `docker compose build` already produces locally (docker-compose.yml's default project-name
 # tagging: ticket-flow-<service>:latest) — `kind load docker-image` reuses these, no separate
-# K8s-specific build. `Aws__LambdaServiceUrl` only overridden for the 2 services that actually
-# call Lambda (ticketing→RenderTicketPdf, gateway→media Lambdas) — LocalStack lives OUTSIDE the
-# cluster (rủi ro số 2: Kubernetes Executor for Lambda is Enterprise-only, confirmed live via
+# K8s-specific build. Commit 3 overrides these two fields so the workflow deploys the immutable
+# GHCR SHA tags it just built; infrastructure images deliberately remain on their upstream tags.
+appImages:
+  registry: ""
+  tag: latest
+
+# `Aws__LambdaServiceUrl` is only overridden for the 2 services that actually call Lambda
+# (ticketing→RenderTicketPdf, gateway→media Lambdas) — LocalStack lives OUTSIDE the cluster
+# (rủi ro số 2: Kubernetes Executor for Lambda is Enterprise-only, confirmed live via
 # LocalStack's own docs), reached from inside the cluster via `host.docker.internal` — confirmed
 # live (DNS resolves to the Docker Desktop gateway IP, and a real HTTP call from a pod to
 # `host.docker.internal:4566/_localstack/health` succeeded) before this value was ever written.
@@ -69,22 +75,22 @@ kubernetes:
 
 services:
   catalog:
-    image: ticket-flow-catalog:latest
+    image: ticket-flow-catalog
     port: 8002
 
   identity:
-    image: ticket-flow-identity:latest
+    image: ticket-flow-identity
     port: 8001
 
   reservation:
-    image: ticket-flow-reservation:latest
+    image: ticket-flow-reservation
     port: 8003
     extraPorts:
       - name: grpc
         port: 9003
 
   ordering:
-    image: ticket-flow-ordering:latest
+    image: ticket-flow-ordering
     port: 8004
     # Marten manages schemas/streams once connected but (unlike the EF Core services) does not
     # create its target database. The generic service template's init container creates it once
@@ -92,34 +98,34 @@ services:
     bootstrapDatabase: ticketflow_ordering
 
   notification:
-    image: ticket-flow-notification:latest
+    image: ticket-flow-notification
     port: 8005
 
   search:
-    image: ticket-flow-search:latest
+    image: ticket-flow-search
     port: 8006
 
   payment:
-    image: ticket-flow-payment:latest
+    image: ticket-flow-payment
     port: 8007
 
   ticketing:
-    image: ticket-flow-ticketing:latest
+    image: ticket-flow-ticketing
     port: 8008
     env:
       - name: Aws__LambdaServiceUrl
         value: http://host.docker.internal:4566
 
   recommendation:
-    image: ticket-flow-recommendation:latest
+    image: ticket-flow-recommendation
     port: 8009
 
   analytics:
-    image: ticket-flow-analytics:latest
+    image: ticket-flow-analytics
     port: 8010
 
   gateway:
-    image: ticket-flow-gateway:latest
+    image: ticket-flow-gateway
     port: 8080
     # NodePort matches infrastructure/k8s/kind-config.yaml's extraPortMappings (Commit 1) — the
     # one port actually mapped out to the Windows host at cluster-creation time.
@@ -139,7 +145,7 @@ services:
 # plain Deployment environment values.
 frontends:
   customer-web:
-    image: ticket-flow-customer-web:latest
+    image: ticket-flow-customer-web
     port: 3000
     readinessPath: /
     authSecret: phase11-k8s-customer-web-auth-secret-not-for-production
@@ -147,7 +153,7 @@ frontends:
     keycloakClientSecret: customer-web-dev-secret
 
   organizer-dashboard:
-    image: ticket-flow-organizer-dashboard:latest
+    image: ticket-flow-organizer-dashboard
     port: 3001
     # This zone intentionally owns /organizer, not / (the customer shell forwards the prefix).
     readinessPath: /organizer
@@ -156,7 +162,7 @@ frontends:
     keycloakClientSecret: organizer-dashboard-dev-secret
 
   gate-scanner:
-    image: ticket-flow-gate-scanner:latest
+    image: ticket-flow-gate-scanner
     port: 3002
     # Same Multi-Zones contract: a root request is deliberately 404, /scanner is the app route.
     readinessPath: /scanner

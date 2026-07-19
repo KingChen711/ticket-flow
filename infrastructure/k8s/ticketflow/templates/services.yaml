@@ -61,7 +61,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ $name }}
-          image: {{ $svc.image }}
+          image: {{ include "ticketflow.appImage" (dict "root" $root "image" $svc.image) | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: ASPNETCORE_ENVIRONMENT

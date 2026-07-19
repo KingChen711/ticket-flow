@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes an in-flight build/deployment. Keeping the group
+# branch-scoped avoids cancelling a pull-request validation because main was updated.
+concurrency:
+  group: ticketflow-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  image-matrix:
+    name: Read image matrix
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.matrix.outputs.include }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Publish the canonical image matrix
+        id: matrix
+        run: echo "include=$(jq -c . .github/images.json)" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test .NET solution
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # This intentionally runs the integration projects too. GitHub-hosted Linux runners expose
+      # Docker, so Testcontainers verifies the real Postgres/Redis/RabbitMQ dependencies.
+      - name: Restore
+        run: dotnet restore TicketFlow.slnx
+
+      - name: Test
+        run: dotnet test TicketFlow.slnx --configuration Release --no-restore --logger "console;verbosity=normal"
+
+  build-and-push:
+    name: Build ${{ matrix.name }}
+    needs: [image-matrix, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.image-matrix.outputs.include) }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      # GHCR repository segments must be lowercase. The remote owner can contain uppercase
+      # characters, so normalize it once instead of assuming a particular personal account name.
+      - name: Resolve GHCR image prefix
+        id: image-prefix
+        shell: bash
+        run: echo "value=${REGISTRY}/$(tr '[:upper:]' '[:lower:]' <<< '${{ github.repository_owner }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Pull requests build every image but never receive a package-write side effect. Push and
+      # workflow_dispatch runs publish the immutable Git SHA tag used by the subsequent Kind job.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.image-prefix.outputs.value }}/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy-kind:
+    name: Deploy to Kind and smoke test
+    needs: [image-matrix, build-and-push]
+    # A pull request proves test + 14-image builds. Only trusted push/manual events can write
+    # GHCR and then deploy the images that were published with this run's SHA.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: ticketflow
+          config: infrastructure/k8s/kind-config.yaml
+          wait: 90s
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+
+      - name: Resolve GHCR image prefix
+        id: image-prefix
+        shell: bash
+        run: echo "value=${REGISTRY}/$(tr '[:upper:]' '[:lower:]' <<< '${{ github.repository_owner }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Load the SHA-tagged GHCR images into Kind after pulling them from the registry. This keeps
+      # the chart's imagePullPolicy=IfNotPresent correct for private packages and proves the
+      # published artifacts can be pulled before Helm consumes them.
+      - name: Pull and load application images into Kind
+        env:
+          IMAGE_PREFIX: ${{ steps.image-prefix.outputs.value }}
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          while read -r image; do
+            qualified_image="${IMAGE_PREFIX}/${image}:${IMAGE_TAG}"
+            docker pull "$qualified_image"
+            kind load docker-image --name ticketflow "$qualified_image"
+          done < <(jq -r '.[].image' .github/images.json)
+
+      - name: Lint and install chart
+        env:
+          IMAGE_PREFIX: ${{ steps.image-prefix.outputs.value }}
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          helm lint infrastructure/k8s/ticketflow
+          helm install ticketflow infrastructure/k8s/ticketflow \
+            --namespace ticketflow \
+            --create-namespace \
+            --wait \
+            --timeout 15m \
+            --set-string appImages.registry="$IMAGE_PREFIX" \
+            --set-string appImages.tag="$IMAGE_TAG"
+
+      - name: Wait for every deployment
+        run: kubectl rollout status deployment --all --namespace ticketflow --timeout=10m
+
+      - name: Smoke gateway health and catalog route
+        shell: bash
+        run: |
+          curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/health
+          curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/catalog/events
+
+      - name: Collect cluster diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods --namespace ticketflow --output wide || true
+          kubectl get events --namespace ticketflow --sort-by=.lastTimestamp || true
+          kubectl describe pods --namespace ticketflow || true
+          kubectl logs --namespace ticketflow --all-containers --prefix --tail=200 --selector app=gateway || true
