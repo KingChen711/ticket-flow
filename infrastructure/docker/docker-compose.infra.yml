@@ -186,6 +186,17 @@ services:
       # this they land on the default bridge network and can't reach rabbitmq/minio/etc. by
       # service name (needed starting Commit 3/4) — join the same network this whole stack uses.
       LAMBDA_DOCKER_NETWORK: ticketflow-network
+      # Phase 11 Commit 2: keep the Compose-network DNS default for normal Phase 9 development,
+      # but permit the external-LocalStack/Kubernetes fallback to route Lambda PDF rendering back
+      # into kind's MinIO through a temporary host port-forward (host.docker.internal:<port>).
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      # The reminder timer is useful in the Compose stack. A K8s smoke run can override this to
+      # a long cadence so its Lambda does not repeatedly try to reach a Compose-only RabbitMQ.
+      EVENT_REMINDER_SCHEDULE: ${EVENT_REMINDER_SCHEDULE:-rate(1 minute)}
+      # Same opt-out for the Phase 9 HelloTimer probe: the Kubernetes fallback verifies PDF
+      # rendering, not timer throughput, and should not spawn competing Lambda executors while
+      # LocalStack is still publishing all functions on a memory-constrained machine.
+      HELLO_TIMER_SCHEDULE: ${HELLO_TIMER_SCHEDULE:-rate(1 minute)}
       DEBUG: "1"
     ports:
       - "4566:4566"

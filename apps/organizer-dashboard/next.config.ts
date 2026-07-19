@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Phase 11 Commit 2 — Dockerfile copies only the standalone output.
+  output: "standalone",
   // Workspace packages ship raw TS source, no build step (see docs/phase-8-plan.md mục 6) —
   // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
   transpilePackages: ["@ticketflow/types", "@ticketflow/ui"],

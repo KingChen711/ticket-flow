@@ -1,0 +1,18 @@
+# Phase 11 Commit 2 — audit item from mục 1 of docs/phase-11-plan.md (the 11 .NET Dockerfiles
+# were already multi-stage from earlier phases and never needed this since `dotnet restore`/
+# `publish` only touch what's COPYed explicitly; the 3 new Next.js Dockerfiles COPY the whole
+# repo into the build stage, so node_modules/.git bloating the build context is a real cost here).
+node_modules
+**/node_modules
+**/.next
+.git
+**/bin
+**/obj
+# Local development credentials and host URLs must never enter a Docker build context.  Besides
+# avoiding accidental secret inclusion, this keeps Next from baking the host-only .env.local
+# values into its standalone production output; the Dockerfile supplies its deliberate K8s build
+# values instead and the Deployment supplies server-only runtime configuration.
+.env
+.env.*
+**/.env
+**/.env.*

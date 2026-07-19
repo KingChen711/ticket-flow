@@ -12,6 +12,18 @@ set -uo pipefail
 
 ZIP_PATH="/functions/TicketFlow.Functions/function.zip"
 ROLE_ARN="arn:aws:iam::000000000000:role/ticketflow-lambda-role"
+# Compose uses its Docker-network MinIO DNS name. Phase 11's external LocalStack fallback
+# overrides this with host.docker.internal:<port>, where a temporary kubectl port-forward exposes
+# the in-kind MinIO Service to the sibling Lambda executor container.
+MINIO_ENDPOINT="${MINIO_ENDPOINT:-minio:9000}"
+
+# See 01-deploy-functions.sh for the LocalStack dotnet10 waiter compatibility detail.
+wait_for_function() {
+  local function_name="$1"
+  until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do
+    sleep 2
+  done
+}
 
 if [ ! -f "$ZIP_PATH" ]; then
   echo "[ticketing] $ZIP_PATH not found — run 'dotnet lambda package' in src/Functions/TicketFlow.Functions on the host first. Skipping ticketing deploy."
@@ -25,8 +37,9 @@ echo "[ticketing] deploying RenderTicketPdfFunction..."
 # docs/phase-9-plan.md mục 3 for why the stack has two object stores). LocalStack doesn't inject
 # MinIO credentials the way it auto-injects AWS ones for S3Client, so these come in explicitly as
 # plain Lambda environment variables — same values Ticketing.Api's own appsettings.json use.
-# "minio" resolves here because LAMBDA_DOCKER_NETWORK joins the executor container onto
-# ticketflow-network (confirmed reachable in Commit 1's risk #1 verification: nc -zv minio 9000).
+# With the default MINIO_ENDPOINT, "minio" resolves because LAMBDA_DOCKER_NETWORK joins the
+# executor container onto ticketflow-network. In Phase 11's K8s fallback, that executor lives
+# outside the cluster and instead uses the explicit host-gateway endpoint above.
 awslocal lambda create-function \
   --function-name RenderTicketPdfFunction \
   --runtime dotnet10 \
@@ -35,9 +48,9 @@ awslocal lambda create-function \
   --role "$ROLE_ARN" \
   --timeout 30 \
   --memory-size 512 \
-  --environment "Variables={MINIO_ENDPOINT=minio:9000,MINIO_ACCESS_KEY=ticketflow,MINIO_SECRET_KEY=ticketflow,MINIO_BUCKET_NAME=tickets}" \
+  --environment "Variables={MINIO_ENDPOINT=${MINIO_ENDPOINT},MINIO_ACCESS_KEY=ticketflow,MINIO_SECRET_KEY=ticketflow,MINIO_BUCKET_NAME=tickets}" \
   >/dev/null 2>&1 || echo "[ticketing] RenderTicketPdfFunction already exists, continuing"
 
-awslocal lambda wait function-active-v2 --function-name RenderTicketPdfFunction
+wait_for_function RenderTicketPdfFunction
 
 echo "[ticketing] done — ticketing's IssueTicketsConsumer invokes RenderTicketPdfFunction by name via LambdaTicketRenderClient."

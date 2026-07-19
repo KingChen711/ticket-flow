@@ -1,0 +1,13 @@
+# Points Grafana at the dashboard JSON files mounted alongside this file — same
+# provisioning-as-code discipline as the datasource in ../datasources/prometheus.yml.
+apiVersion: 1
+
+providers:
+  - name: TicketFlow
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/files

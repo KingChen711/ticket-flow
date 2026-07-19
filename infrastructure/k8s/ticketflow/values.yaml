@@ -51,3 +51,115 @@ infra:
     image: quay.io/keycloak/keycloak:26.7
     adminUser: admin
     adminPassword: admin
+
+# Phase 11 Commit 2 — 11 .NET API services + gateway. Image names match exactly what
+# `docker compose build` already produces locally (docker-compose.yml's default project-name
+# tagging: ticket-flow-<service>:latest) — `kind load docker-image` reuses these, no separate
+# K8s-specific build. `Aws__LambdaServiceUrl` only overridden for the 2 services that actually
+# call Lambda (ticketing→RenderTicketPdf, gateway→media Lambdas) — LocalStack lives OUTSIDE the
+# cluster (rủi ro số 2: Kubernetes Executor for Lambda is Enterprise-only, confirmed live via
+# LocalStack's own docs), reached from inside the cluster via `host.docker.internal` — confirmed
+# live (DNS resolves to the Docker Desktop gateway IP, and a real HTTP call from a pod to
+# `host.docker.internal:4566/_localstack/health` succeeded) before this value was ever written.
+kubernetes:
+  # Keycloak remains reachable inside the cluster at keycloak:8180 for JWKS discovery.  Host
+  # browser logins use a Keycloak port-forward on the Docker Desktop gateway, so their JWTs carry
+  # this issuer instead; services receive it as Keycloak__ValidIssuers__2 below.
+  keycloakBrowserIssuer: http://host.docker.internal:8180/realms/ticketflow
+
+services:
+  catalog:
+    image: ticket-flow-catalog:latest
+    port: 8002
+
+  identity:
+    image: ticket-flow-identity:latest
+    port: 8001
+
+  reservation:
+    image: ticket-flow-reservation:latest
+    port: 8003
+    extraPorts:
+      - name: grpc
+        port: 9003
+
+  ordering:
+    image: ticket-flow-ordering:latest
+    port: 8004
+    # Marten manages schemas/streams once connected but (unlike the EF Core services) does not
+    # create its target database. The generic service template's init container creates it once
+    # before Ordering starts, including on a completely fresh Helm install.
+    bootstrapDatabase: ticketflow_ordering
+
+  notification:
+    image: ticket-flow-notification:latest
+    port: 8005
+
+  search:
+    image: ticket-flow-search:latest
+    port: 8006
+
+  payment:
+    image: ticket-flow-payment:latest
+    port: 8007
+
+  ticketing:
+    image: ticket-flow-ticketing:latest
+    port: 8008
+    env:
+      - name: Aws__LambdaServiceUrl
+        value: http://host.docker.internal:4566
+
+  recommendation:
+    image: ticket-flow-recommendation:latest
+    port: 8009
+
+  analytics:
+    image: ticket-flow-analytics:latest
+    port: 8010
+
+  gateway:
+    image: ticket-flow-gateway:latest
+    port: 8080
+    # NodePort matches infrastructure/k8s/kind-config.yaml's extraPortMappings (Commit 1) — the
+    # one port actually mapped out to the Windows host at cluster-creation time.
+    nodePort: 30080
+    env:
+      - name: Aws__LambdaServiceUrl
+        value: http://host.docker.internal:4566
+
+# The browser reaches the 3 UI pods with `kubectl port-forward` (3000/3001/3002) and the API
+# gateway through kind's single mapped NodePort (localhost:30080).  Their server-side calls use
+# Kubernetes Service DNS instead.  `NEXT_PUBLIC_GATEWAY_URL` is deliberately absent here: it is
+# compiled into customer-web by its Dockerfile, because Next exposes NEXT_PUBLIC_* vars to the
+# browser at build time rather than reading them from a running pod.
+#
+# These are local-learning credentials, on the same footing as the existing database/Keycloak
+# credentials above. They are materialized as K8s Secrets by templates/frontends.yaml, not as
+# plain Deployment environment values.
+frontends:
+  customer-web:
+    image: ticket-flow-customer-web:latest
+    port: 3000
+    readinessPath: /
+    authSecret: phase11-k8s-customer-web-auth-secret-not-for-production
+    keycloakClientId: ticketflow-customer-web
+    keycloakClientSecret: customer-web-dev-secret
+
+  organizer-dashboard:
+    image: ticket-flow-organizer-dashboard:latest
+    port: 3001
+    # This zone intentionally owns /organizer, not / (the customer shell forwards the prefix).
+    readinessPath: /organizer
+    authSecret: phase11-k8s-organizer-dashboard-auth-secret-not-for-production
+    keycloakClientId: ticketflow-organizer-dashboard
+    keycloakClientSecret: organizer-dashboard-dev-secret
+
+  gate-scanner:
+    image: ticket-flow-gate-scanner:latest
+    port: 3002
+    # Same Multi-Zones contract: a root request is deliberately 404, /scanner is the app route.
+    readinessPath: /scanner
+    authSecret: phase11-k8s-gate-scanner-auth-secret-not-for-production
+    keycloakClientId: ticketflow-gate-scanner
+    keycloakClientSecret: gate-scanner-dev-secret

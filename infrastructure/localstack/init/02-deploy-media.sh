@@ -15,6 +15,15 @@ ZIP_PATH="/functions/TicketFlow.Functions/function.zip"
 ROLE_ARN="arn:aws:iam::000000000000:role/ticketflow-lambda-role"
 BUCKET_NAME="posters"
 
+# See 01-deploy-functions.sh: LocalStack's dotnet10 Function.State is absent in the version
+# currently pinned by the floating local image, so `function-active-v2` is not a usable waiter.
+wait_for_function() {
+  local function_name="$1"
+  until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do
+    sleep 2
+  done
+}
+
 if [ ! -f "$ZIP_PATH" ]; then
   echo "[media] $ZIP_PATH not found — run 'dotnet lambda package' in src/Functions/TicketFlow.Functions on the host first. Skipping media deploy."
   exit 0
@@ -39,9 +48,9 @@ for fn in UploadPosterFunction GetPosterFunction ThumbnailPosterFunction; do
     >/dev/null 2>&1 || echo "[media] $fn already exists, continuing"
 done
 
-awslocal lambda wait function-active-v2 --function-name UploadPosterFunction
-awslocal lambda wait function-active-v2 --function-name GetPosterFunction
-awslocal lambda wait function-active-v2 --function-name ThumbnailPosterFunction
+wait_for_function UploadPosterFunction
+wait_for_function GetPosterFunction
+wait_for_function ThumbnailPosterFunction
 
 awslocal s3 mb "s3://${BUCKET_NAME}" >/dev/null 2>&1 || echo "[media] bucket $BUCKET_NAME already exists, continuing"
 

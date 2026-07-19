@@ -17,6 +17,20 @@ ZIP_PATH="/functions/TicketFlow.Functions/function.zip"
 ROLE_NAME="ticketflow-lambda-role"
 ROLE_ARN="arn:aws:iam::000000000000:role/${ROLE_NAME}"
 RULE_NAME="ticketflow-hello-timer-rule"
+# Compose keeps the short Phase 9 probe cadence. Phase 11's external LocalStack fallback can
+# defer it while the full kind stack is using the same Docker Desktop memory budget.
+SCHEDULE_EXPRESSION="${HELLO_TIMER_SCHEDULE:-rate(1 minute)}"
+
+# LocalStack 2026.6.3 returns no Lambda Configuration.State for this dotnet10 executor, so the
+# AWS CLI `function-active-v2` waiter loops forever even after CreateFunction succeeds. Polling
+# GetFunction is portable across the LocalStack versions used by this project; the later manual
+# invoke/PDF smoke test is the meaningful runtime-readiness assertion.
+wait_for_function() {
+  local function_name="$1"
+  until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do
+    sleep 2
+  done
+}
 
 if [ ! -f "$ZIP_PATH" ]; then
   echo "[functions] $ZIP_PATH not found — run 'dotnet lambda package' in src/Functions/TicketFlow.Functions on the host first. Skipping function deploy."
@@ -62,13 +76,13 @@ awslocal lambda create-function \
   --timeout 30 \
   >/dev/null 2>&1 || echo "[functions] HelloTimerFunction already exists, continuing"
 
-awslocal lambda wait function-active-v2 --function-name HelloFunction
-awslocal lambda wait function-active-v2 --function-name HelloTimerFunction
+wait_for_function HelloFunction
+wait_for_function HelloTimerFunction
 
-echo "[functions] wiring EventBridge rule for HelloTimerFunction (rate: 1 minute, dev probe cadence)..."
+echo "[functions] wiring EventBridge rule for HelloTimerFunction (${SCHEDULE_EXPRESSION})..."
 awslocal events put-rule \
   --name "$RULE_NAME" \
-  --schedule-expression "rate(1 minute)" \
+  --schedule-expression "$SCHEDULE_EXPRESSION" \
   >/dev/null
 
 awslocal events put-targets \

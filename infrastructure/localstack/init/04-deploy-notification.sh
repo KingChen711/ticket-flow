@@ -21,6 +21,14 @@ RULE_NAME="ticketflow-event-reminder-rule"
 # EVENT_REMINDER_SCHEDULE="rate(24 hours)".
 SCHEDULE_EXPRESSION="${EVENT_REMINDER_SCHEDULE:-rate(1 minute)}"
 
+# See 01-deploy-functions.sh for the LocalStack dotnet10 waiter compatibility detail.
+wait_for_function() {
+  local function_name="$1"
+  until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do
+    sleep 2
+  done
+}
+
 if [ ! -f "$ZIP_PATH" ]; then
   echo "[notification] $ZIP_PATH not found — run 'dotnet lambda package' in src/Functions/TicketFlow.Functions on the host first. Skipping notification deploy."
   exit 0
@@ -45,7 +53,7 @@ awslocal lambda create-function \
   --environment "Variables={RabbitMq__Host=rabbitmq,RabbitMq__Username=ticketflow,RabbitMq__Password=ticketflow}" \
   >/dev/null 2>&1 || echo "[notification] EventReminderTimerFunction already exists, continuing"
 
-awslocal lambda wait function-active-v2 --function-name EventReminderTimerFunction
+wait_for_function EventReminderTimerFunction
 
 echo "[notification] wiring EventBridge rule for EventReminderTimerFunction (schedule: ${SCHEDULE_EXPRESSION})..."
 awslocal events put-rule \
