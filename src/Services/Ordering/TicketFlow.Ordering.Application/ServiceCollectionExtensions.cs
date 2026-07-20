@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
         // inject the specific handler directly (no generic resolve-by-type dispatch, see
         // ICommandHandler's doc comment).
         services.AddScoped<PlaceOrderCommandHandler>();
+        services.AddScoped<PlaceOrderV2CommandHandler>();
         services.AddScoped<ConfirmOrderCommandHandler>();
         services.AddScoped<CancelOrderCommandHandler>();
         services.AddScoped<GetOrderByIdQueryHandler>();

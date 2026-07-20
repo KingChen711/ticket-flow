@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using TicketFlow.Contracts.Messaging;
+using TicketFlow.Contracts.Messaging.Checkout;
 using TicketFlow.Ordering.Application.Orders;
 
 namespace TicketFlow.Ordering.Api.Endpoints;
@@ -21,19 +23,49 @@ public static class OrderEndpoints
     {
         var group = app.MapGroup("/orders").WithTags("Orders").RequireAuthorization("RequireAuthenticated");
 
-        group.MapPost("/", async (PlaceOrderRequest request, ClaimsPrincipal user, PlaceOrderCommandHandler handler, CancellationToken ct) =>
+        group.MapPost("/", async (
+            CheckoutIntentV2 request,
+            ClaimsPrincipal user,
+            PlaceOrderV2CommandHandler handler,
+            CancellationToken ct) =>
         {
             var customerId = Guid.Parse(user.FindFirstValue("sub")!);
             var customerName = user.FindFirstValue("name") ?? "";
             var customerEmail = user.FindFirstValue("email") ?? "";
 
-            var command = new PlaceOrderCommand(
-                customerId, request.CatalogEventId, request.SeatIds, request.TotalAmount, request.Currency,
-                request.HoldId, request.PaymentMethod, customerName, customerEmail);
+            var command = new PlaceOrderV2Command(
+                customerId,
+                request.HoldId,
+                request.PaymentMethod,
+                request.IdempotencyKey,
+                customerName,
+                customerEmail);
 
             var order = await handler.HandleAsync(command, ct);
             return Results.Created($"/orders/{order.OrderId}", order);
         });
+
+        if (app.Environment.IsDevelopment())
+        {
+            group.MapPost("/legacy", async (
+                PlaceOrderRequest request,
+                ClaimsPrincipal user,
+                PlaceOrderCommandHandler handler,
+                CancellationToken ct) =>
+            {
+                ContractVersionMetrics.RecordInbound("ordering.checkout.http", 0);
+                var customerId = Guid.Parse(user.FindFirstValue("sub")!);
+                var customerName = user.FindFirstValue("name") ?? "";
+                var customerEmail = user.FindFirstValue("email") ?? "";
+
+                var command = new PlaceOrderCommand(
+                    customerId, request.CatalogEventId, request.SeatIds, request.TotalAmount, request.Currency,
+                    request.HoldId, request.PaymentMethod, customerName, customerEmail);
+
+                var order = await handler.HandleAsync(command, ct);
+                return Results.Created($"/orders/{order.OrderId}", order);
+            });
+        }
 
         // Admin-override only as of Commit 5 (Phase 5) — the customer-facing purchase flow now
         // goes through PurchaseSaga (POST / -> PlaceOrder -> OrderSubmitted starts the saga),

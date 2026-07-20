@@ -27,6 +27,8 @@ public static class ServiceCollectionExtensions
             options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
 
         services.AddScoped<ISeatRepository, SeatRepository>();
+        services.AddScoped<IEventSalePolicyRepository, EventSalePolicyRepository>();
+        services.AddScoped<IHoldQuoteRepository, HoldQuoteRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 
         var redisConnectionString = configuration["Redis:ConnectionString"]

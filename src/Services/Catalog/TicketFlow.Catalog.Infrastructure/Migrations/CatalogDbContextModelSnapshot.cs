@@ -247,6 +247,12 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<long>("AggregateVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("aggregate_version");
+
                     b.Property<string>("Artist")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -262,6 +268,12 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                     b.Property<Guid?>("OrganizerId")
                         .HasColumnType("uuid")
                         .HasColumnName("organizer_id");
+
+                    b.Property<long>("PriceSnapshotVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("price_snapshot_version");
 
                     b.Property<string>("Status")
                         .IsRequired()

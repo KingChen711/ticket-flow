@@ -14,5 +14,6 @@ public sealed record SaleRecorded(
     decimal Amount,
     DateTimeOffset CompletedAt,
     string Currency = "VND",
+    long PriceSnapshotVersion = 0,
     long AggregateVersion = 0,
     DateTimeOffset? OccurredAt = null);

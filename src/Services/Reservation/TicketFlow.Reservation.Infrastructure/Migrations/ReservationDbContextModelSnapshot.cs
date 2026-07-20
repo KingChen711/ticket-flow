@@ -150,6 +150,93 @@ namespace TicketFlow.Reservation.Infrastructure.Migrations
                     b.ToTable("seat_allocations", "reservation");
                 });
 
+            modelBuilder.Entity("TicketFlow.Reservation.Domain.Holds.HoldQuote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("OwnerUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_user_id");
+
+                    b.Property<long>("PriceSnapshotVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("price_snapshot_version");
+
+                    b.PrimitiveCollection<Guid[]>("SeatIds")
+                        .IsRequired()
+                        .HasColumnType("uuid[]")
+                        .HasColumnName("seat_ids");
+
+                    b.HasKey("Id")
+                        .HasName("pk_hold_quotes");
+
+                    b.HasIndex("EventId")
+                        .HasDatabaseName("ix_hold_quotes_event_id");
+
+                    b.HasIndex("OwnerUserId")
+                        .HasDatabaseName("ix_hold_quotes_owner_user_id");
+
+                    b.ToTable("hold_quotes", "reservation");
+                });
+
+            modelBuilder.Entity("TicketFlow.Reservation.Domain.SalePolicies.EventSalePolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<long>("PriceSnapshotVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("price_snapshot_version");
+
+                    b.Property<DateTimeOffset>("SaleEndsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sale_ends_at");
+
+                    b.Property<DateTimeOffset>("SaleStartsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sale_starts_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id")
+                        .HasName("pk_event_sale_policies");
+
+                    b.ToTable("event_sale_policies", "reservation");
+                });
+
             modelBuilder.Entity("TicketFlow.Reservation.Domain.Seats.Seat", b =>
                 {
                     b.Property<Guid>("Id")
@@ -187,6 +274,49 @@ namespace TicketFlow.Reservation.Infrastructure.Migrations
                         .HasDatabaseName("ix_seats_event_id_section_id");
 
                     b.ToTable("seats", "reservation");
+                });
+
+            modelBuilder.Entity("TicketFlow.Reservation.Domain.SalePolicies.EventSalePolicy", b =>
+                {
+                    b.OwnsMany("TicketFlow.Reservation.Domain.SalePolicies.EventSalePriceTier", "PriceTiers", b1 =>
+                        {
+                            b1.Property<Guid>("Id")
+                                .HasColumnType("uuid")
+                                .HasColumnName("id");
+
+                            b1.Property<decimal>("Amount")
+                                .HasColumnType("numeric(12,2)")
+                                .HasColumnName("amount");
+
+                            b1.Property<string>("Currency")
+                                .IsRequired()
+                                .HasMaxLength(3)
+                                .HasColumnType("character varying(3)")
+                                .HasColumnName("currency");
+
+                            b1.Property<Guid>("EventId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("event_id");
+
+                            b1.Property<Guid>("SectionId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("section_id");
+
+                            b1.HasKey("Id")
+                                .HasName("pk_event_sale_price_tiers");
+
+                            b1.HasIndex("EventId", "SectionId")
+                                .IsUnique()
+                                .HasDatabaseName("ix_event_sale_price_tiers_event_id_section_id");
+
+                            b1.ToTable("event_sale_price_tiers", "reservation");
+
+                            b1.WithOwner()
+                                .HasForeignKey("EventId")
+                                .HasConstraintName("fk_event_sale_price_tiers_event_sale_policies_event_id");
+                        });
+
+                    b.Navigation("PriceTiers");
                 });
 #pragma warning restore 612, 618
         }

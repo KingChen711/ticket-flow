@@ -8,19 +8,30 @@ public sealed record SeatDto(Guid Id, Guid SectionId, string Label, string Statu
 
 public sealed record EventAvailabilityResponse(Guid EventId, IReadOnlyList<SeatDto> Seats);
 
-// Hold ownership in Phase 2 is by possession of the returned HoldId (a bearer capability),
-// not by a user id — associating holds to authenticated users is Phase 5/7. So the request
-// carries no HolderId (would be dead code now — see docs/phase-2-plan.md).
-public sealed record HoldSeatsRequest(Guid EventId, IReadOnlyList<Guid> SeatIds);
+public sealed record HoldSeatsRequest(Guid EventId, IReadOnlyList<Guid> SeatIds, Guid OwnerUserId);
+
+public sealed record HoldQuoteResponse(
+    Guid HoldId,
+    Guid EventId,
+    Guid OwnerUserId,
+    IReadOnlyList<Guid> SeatIds,
+    decimal Amount,
+    string Currency,
+    long PriceSnapshotVersion,
+    DateTimeOffset ExpiresAt);
 
 public sealed record HoldSeatsResult(
     bool Success,
     Guid? HoldId,
     DateTimeOffset? ExpiresAt,
-    IReadOnlyList<Guid> UnavailableSeatIds)
+    IReadOnlyList<Guid> UnavailableSeatIds,
+    HoldQuoteResponse? Quote)
 {
-    public static HoldSeatsResult Succeeded(Guid holdId, DateTimeOffset expiresAt) => new(true, holdId, expiresAt, []);
-    public static HoldSeatsResult Unavailable(IReadOnlyList<Guid> seatIds) => new(false, null, null, seatIds);
+    public static HoldSeatsResult Succeeded(HoldQuoteResponse quote) =>
+        new(true, quote.HoldId, quote.ExpiresAt, [], quote);
+
+    public static HoldSeatsResult Unavailable(IReadOnlyList<Guid> seatIds) =>
+        new(false, null, null, seatIds, null);
 }
 
 /// <summary>

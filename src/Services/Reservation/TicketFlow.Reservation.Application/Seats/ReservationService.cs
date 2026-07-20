@@ -1,4 +1,5 @@
 using TicketFlow.Reservation.Application.Abstractions;
+using TicketFlow.Reservation.Domain.Holds;
 using TicketFlow.Reservation.Domain.Seats;
 
 namespace TicketFlow.Reservation.Application.Seats;
@@ -6,6 +7,8 @@ namespace TicketFlow.Reservation.Application.Seats;
 public sealed class ReservationService(
     ISeatRepository seatRepository,
     ISeatHoldStore holdStore,
+    IEventSalePolicyRepository salePolicyRepository,
+    IHoldQuoteRepository holdQuoteRepository,
     IUnitOfWork unitOfWork,
     ISeatMapNotifier notifier,
     TimeProvider timeProvider,
@@ -18,18 +21,98 @@ public sealed class ReservationService(
         if (request.SeatIds.Count == 0)
             throw new ArgumentException("At least one seat id is required.", nameof(request));
 
+        if (request.OwnerUserId == Guid.Empty)
+            throw new ArgumentException("Hold owner is required.", nameof(request));
+
+        if (request.SeatIds.Count > 20)
+            throw new ArgumentException("A hold cannot contain more than 20 seats.", nameof(request));
+
+        if (request.SeatIds.Distinct().Count() != request.SeatIds.Count)
+            throw new ArgumentException("Seat ids must be unique.", nameof(request));
+
+        var now = timeProvider.GetUtcNow();
+        var policy = await salePolicyRepository.GetAsync(request.EventId, cancellationToken)
+            ?? throw new InvalidOperationException($"Event '{request.EventId}' has no sale policy snapshot.");
+
+        if (!policy.IsSaleableAt(now))
+            throw new InvalidOperationException($"Event '{request.EventId}' is not currently saleable.");
+
+        var seats = await seatRepository.GetByIdsAsync(request.EventId, request.SeatIds, cancellationToken);
+        if (seats.Count != request.SeatIds.Count)
+            throw new InvalidOperationException("One or more seats do not belong to this event.");
+
+        var pricesBySection = policy.PriceTiers.ToDictionary(tier => tier.SectionId);
+        var prices = seats.Select(seat => pricesBySection.TryGetValue(seat.SectionId, out var price)
+                ? price
+                : throw new InvalidOperationException($"Section '{seat.SectionId}' has no price in snapshot {policy.PriceSnapshotVersion}."))
+            .ToList();
+
+        var currencies = prices.Select(price => price.Currency).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (currencies.Count != 1)
+            throw new InvalidOperationException("A hold cannot span price tiers with different currencies.");
+
+        var expiresAt = now.Add(_holdTtl) < policy.SaleEndsAt ? now.Add(_holdTtl) : policy.SaleEndsAt;
+        var ttl = expiresAt - now;
+        if (ttl <= TimeSpan.Zero)
+            throw new InvalidOperationException($"Event '{request.EventId}' is no longer saleable.");
+
         var holdId = Guid.NewGuid();
-        var unavailable = await holdStore.TryHoldAsync(request.EventId, request.SeatIds, holdId, _holdTtl, cancellationToken);
+        var unavailable = await holdStore.TryHoldAsync(request.EventId, request.SeatIds, holdId, ttl, cancellationToken);
 
         if (unavailable.Count > 0)
             return HoldSeatsResult.Unavailable(unavailable);
 
-        // Best-effort broadcast — a dropped SignalR message just means a live viewer's seat map
-        // goes stale until their next refetch, never a source-of-truth issue (Redis already
-        // holds the real state). Not awaited-with-retry, not part of any transaction.
+        var quote = HoldQuote.Create(
+            holdId,
+            request.EventId,
+            request.OwnerUserId,
+            request.SeatIds,
+            prices.Sum(price => price.Amount),
+            currencies[0],
+            policy.PriceSnapshotVersion,
+            now,
+            expiresAt);
+
+        holdQuoteRepository.Add(quote);
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch
+        {
+            await holdStore.ReleaseAsync(request.EventId, holdId, CancellationToken.None);
+            throw;
+        }
+
         await notifier.SeatsUpdatedAsync(request.EventId, request.SeatIds, "Held", cancellationToken);
-        return HoldSeatsResult.Succeeded(holdId, timeProvider.GetUtcNow().Add(_holdTtl));
+        return HoldSeatsResult.Succeeded(MapQuote(quote));
     }
+
+    public async Task<HoldQuoteResponse?> GetQuoteAsync(
+        Guid holdId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var quote = await holdQuoteRepository.GetAsync(holdId, cancellationToken);
+        if (quote is null || !quote.IsUsableBy(ownerUserId, timeProvider.GetUtcNow()))
+            return null;
+
+        var policy = await salePolicyRepository.GetAsync(quote.EventId, cancellationToken);
+        if (policy is null || !string.Equals(policy.Status, "Published", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return MapQuote(quote);
+    }
+
+    private static HoldQuoteResponse MapQuote(HoldQuote quote) => new(
+        quote.Id,
+        quote.EventId,
+        quote.OwnerUserId,
+        quote.SeatIds,
+        quote.Amount,
+        quote.Currency,
+        quote.PriceSnapshotVersion,
+        quote.ExpiresAt);
 
     public async Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
     {

@@ -138,13 +138,21 @@ Schema chỉ expand: Reservation có `seat_allocations` (owner nullable, generat
 
 ## Nhóm B — Khép tiền + ghế trước khi sửa phần còn lại
 
-### Commit 3 — `feat(checkout): server-authoritative hold quote, sale policy, price & currency` ⭐
+### Commit 3 — `feat(checkout): server-authoritative hold quote, sale policy, price & currency` ⭐ ✅ DONE
 - Catalog publish sale-policy/price snapshot có revision; Reservation consume idempotent và dùng snapshot để tạo immutable hold quote.
 - API Ordering v2 chỉ nhận `HoldId + PaymentMethod + IdempotencyKey`; identity lấy từ claims; handler load/validate quote owner, event, expiry và exact seats từ server.
 - Bỏ client amount/currency/seat IDs khỏi authority path. Trong compatibility window có thể parse field cũ nhưng **không sử dụng**; metric/log phát hiện client cũ.
 - Analytics schema/query tách currency; nếu business chốt chỉ VND thì validate cứng ở Catalog/Reservation thay vì silently default.
 - Event cancel đóng sale ngay; public Catalog chỉ trả event publish/saleable theo endpoint semantics.
 - **Verify:** test tamper amount/currency/seat/event/owner đều fail trước side effect; mixed price tier tính đúng; stale price revision có policy rõ; Draft/Cancelled/past event không hold/order được.
+
+**Kết quả thực tế (2026-07-20):** Catalog phát `CatalogSalePolicyChanged` versioned qua transactional outbox khi Publish/Reschedule/Cancel, gồm toàn bộ section price snapshot và trạng thái/tombstone. Reservation consume theo `PriceSnapshotVersion` (snapshot cũ/duplicate không được lùi state), chỉ tạo hold cho event `Published`, trong sale window, ghế thật thuộc đúng event và có price tier; amount/currency được tính hoàn toàn phía server. Hold quote immutable được persist với exact seats, owner từ JWT `sub`, snapshot version và expiry; cancel event vô hiệu quote ngay, còn snapshot giá mới không đổi giá hold đã tạo trước đó.
+
+Ordering production `POST /orders` chỉ nhận `HoldId + PaymentMethod + IdempotencyKey`, lấy owner-scoped quote qua gRPC và phát `OrderSubmitted` bằng event/seats/amount/currency từ quote. Legacy request chuyển sang `/orders/legacy`, chỉ map trong `Development` và đếm metric v1. Saga giữ và truyền currency/snapshot/operation key qua confirm, payment, ticketing, refund/release và analytics. ClickHouse lưu `currency` + `price_snapshot_version`; revenue group/filter theo currency và không cộng các currency khác nhau thành một total giả.
+
+**Điều chỉnh plan có chủ đích:** dùng bảng `hold_quotes` riêng thay vì bắt đầu ghi `seat_allocations`, để Commit 3 khóa quote authority nhưng không kích hoạt sớm Postgres allocation/source-of-truth trước transaction/reconcile của Commit 4. Domain hiện chưa có sale-window riêng; `Event.Schedule.StartsAt` là mốc đóng sale, còn thời điểm publish là mốc mở. Đây là reuse semantics hiện hữu, không tự thêm product policy mới.
+
+**Gate đã chạy:** hardening harness xanh **22/22** trên Postgres/Redis/RabbitMQ thật, gồm migration database trắng/upgrade lên head, raw JSON tamper seat/amount/currency, owner scope, mixed tier, Draft/Cancelled/past event và stale-price hold. Category expected-failure còn **18 đỏ / 3 control xanh** cho các blocker thuộc Commit 4+; regression `TicketFlow.slnx` xanh **81/81**. Hai migration `Phase12AuthoritativeCheckout` chỉ add version columns và các bảng/index sale-policy/hold-quote.
 
 ### Commit 4 — `feat(reservation): durable SeatAllocation + idempotent confirm receipt + Redis rebuild` ⭐
 - Persist allocation/receipt trước hoặc cùng logical operation; confirm redelivery trả lại exact confirmed seat IDs của lần đầu.
@@ -159,7 +167,8 @@ Schema chỉ expand: Reservation có `seat_allocations` (owner nullable, generat
 - Stale/duplicate compensation trở thành no-op có metric, không chuyển seat của owner mới về Available.
 - `EnsureInventory` idempotent: nếu Postgres đã có nhưng Redis thiếu thì reload/reconcile; concurrent provisioning dùng unique constraint và cùng result, không check-then-insert.
 - Validate organizer/event/section/capacity trước allocate list; đặt hard limit request/seat count.
-- **Verify:** delayed release sau resale, DB failure sau Redis mutation, concurrent provision và Redis-missing retry đều xanh; invariant `mỗi seat tối đa một active owner` được query/assert trực tiếp.
+- **[Delta review 2026-07-20]** `UnsellAsync` hiện không broadcast SignalR (`ReservationService.cs`: `ReleaseAsync` notify "Available" nhưng `UnsellAsync` thì không) — ghế được compensation trả lại không bao giờ hiện "Available" trên seat map live cho tới khi client tự refetch. Khi SignalR chuyển sang publish-from-outbox (Commit 4), thêm notify cho đường unsell/compensation cùng lúc, cùng cơ chế.
+- **Verify:** delayed release sau resale, DB failure sau Redis mutation, concurrent provision và Redis-missing retry đều xanh; invariant `mỗi seat tối đa một active owner` được query/assert trực tiếp; seat map live thấy "Available" sau compensation.
 
 ### Commit 6 — `feat(payment): idempotent charge/refund state machine + unknown reconciliation` ⭐
 - Atomically insert/claim `PaymentAttempt` unique `OrderId` trước external call; partition/lock cùng order để hai consumer không charge song song.
@@ -184,13 +193,16 @@ Schema chỉ expand: Reservation có `seat_allocations` (owner nullable, generat
 - Append dùng expected version/fetch-for-writing; conflict reload + re-decide, không blind append. Domain transition table từ chối regression và late terminal event.
 - Xóa/disable các independent audit consumer chỉ append milestone sau compatibility drain; projection guard vẫn giữ defense-in-depth nhưng không còn che write-model sai.
 - Admin cancel ở từng state phát compensation đúng; force-confirm không bypass paid/seat/ticket invariant.
-- **Verify:** chạy toàn bộ permutation/duplicate/fan-in song song trên RabbitMQ + Marten thật; stream luôn monotonic, projection rebuild ra cùng kết quả.
+- **[Delta review 2026-07-20]** Inbox/single-writer ở đây khép luôn 2 lỗi nhỏ đã xác minh trong code: (a) `OrderCompletedConsumer` tăng metric `ticketflow.tickets.sold` NGOÀI transaction — redelivery đếm trùng "vé bán/phút" (sai metric, không sai tiền); (b) milestone append trùng làm bẩn audit stream (Marten không có inbox, chỉ có monotonic guard cứu display). Cả hai cần test case gọi tên riêng trong permutation suite.
+- **[Delta review 2026-07-20]** `MyOrdersProjection.Apply(OrderTicketsIssued)` đang bỏ qua `TicketPdfUrls` (backlog Phase 9 chưa vào matrix) — khi rebuild projection theo canonical state ở commit này, thêm PDF object keys vào `MyOrderView` để "vé của tôi" không phải gọi Ticketing chỉ để lấy link PDF.
+- **Verify:** chạy toàn bộ permutation/duplicate/fan-in song song trên RabbitMQ + Marten thật; stream luôn monotonic, projection rebuild ra cùng kết quả (gồm PDF keys); metric vé bán không đếm trùng dưới redelivery.
 
 ### Commit 9 — `feat(ordering): saga deadlines, canonical completion, transport relays & recovery tooling` ⭐
 - Mỗi state `Awaiting*`/`Compensating*` có scheduled deadline và explicit transition: retry safely, compensate, `Unknown`, hoặc `ManualReview`; không state vô hạn im lặng.
 - Đảm bảo saga/process state + outgoing command outbox commit trước broker send; missing-instance response được scheduled redelivery thay vì drop.
 - Persist canonical `OrderCompleted` + stable `CompletedAt` trước; RabbitMQ notification và Kafka analytics relay độc lập với checkpoint/dedup.
 - Thêm operator query/CLI/API tối thiểu để list stuck/unknown, inspect operation history, retry relay/reconcile an toàn; DLQ có alert và runbook redrive.
+- **[Delta review 2026-07-20]** Thay retry policy toàn cục 3×2s (`TicketFlow.Messaging` áp cho MỌI consumer) bằng policy phân theo loại lỗi: transient infra (backoff dài hơn), out-of-order guard throw (redelivery phải giãn đủ để milestone trước kịp đến — 3×2s hiện tại gần như chắc chắn đẩy `OrderCompletedConsumer` vào `_error` queue phải redrive tay), permanent (DLQ ngay). Partition theo `OrderId` ở Commit 8 xóa phần lớn out-of-order, nhưng policy vẫn phải đúng cho phần còn lại.
 - **Verify:** participant silence, Rabbit/Kafka outage, process restart và duplicate timeout đều hội tụ; Kafka down không ngăn paid+ticketed order thành `Confirmed`; không phát analytics sale hai lần.
 
 ---
@@ -270,6 +282,7 @@ Schema chỉ expand: Reservation có `seat_allocations` (owner nullable, generat
 - Full-stack E2E: login → publish saleable event → hold → idempotent order → payment → ticket → PDF → one-time check-in; thêm cancel/refund và dependency outage path.
 - Chạy flash-sale lại với invariant mới: sold allocation, confirmed order, authorized payment, issued ticket và analytics phải đối chiếu cùng business IDs, không chỉ đếm tổng `≤ capacity`.
 - Viết `docs/phase-12-hardening-evidence.md`, cập nhật architecture/ADR/runbook và scope reconcile. Chỉ đánh dấu Phase 12 hoàn tất khi DoD matrix dưới có bằng chứng/link run thật.
+- **[Delta review 2026-07-20]** CI thêm check đồng bộ 2 bản `realm-export.json` (`infrastructure/keycloak/` và `infrastructure/k8s/ticketflow/files/` — bản copy có chủ đích từ Phase 11 vì Helm chart phải tự chứa): diff phải bằng 0 hoặc job fail. Drift realm giữa compose và K8s là lỗi cấu hình gần như không thể thấy bằng mắt cho tới khi auth vỡ ở đúng một môi trường.
 - **Verify:** pipeline `main` xanh từ clean checkout; kill/retry/duplicate suite xanh lặp lại; working dashboards/alerts thấy stuck/unknown/reconcile backlog.
 
 ---
@@ -333,6 +346,7 @@ flowchart LR
 | Scanner multi-zone/camera/event-gate context | 10, 14, 16 | Shell production build + gate auth + lifecycle test |
 | Ephemeral Redis/Rabbit/Kafka/Keycloak; Kafka topic startup race; migration/readiness/secrets | 17 | Clean-cluster topic provisioning + broker-delay retry + pod-delete recovery + Helm security/readiness checks |
 | CI sai nhánh, thiếu frontend/E2E/fault tests | 1, 18 | Clean `main` pipeline + chaos artifacts |
+| **Delta review 2026-07-20** (review độc lập lần 2, xác minh code thật): SignalR unsell không notify; `MyOrderView` thiếu PDF keys; metric vé bán đếm trùng redelivery; retry policy toàn cục 3×2s không phân loại lỗi; `realm-export.json` 2 bản drift | 5, 8, 9, 18 | Test case gọi tên riêng trong permutation/E2E suite + CI diff check realm |
 
 ---
 

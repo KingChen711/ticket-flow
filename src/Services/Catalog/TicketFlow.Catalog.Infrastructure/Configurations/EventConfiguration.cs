@@ -16,6 +16,8 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.Property(e => e.Artist).IsRequired().HasMaxLength(200);
         builder.Property(e => e.VenueId).IsRequired();
         builder.HasIndex(e => e.OrganizerId);
+        builder.Property(e => e.AggregateVersion).HasDefaultValue(0L).IsRequired();
+        builder.Property(e => e.PriceSnapshotVersion).HasDefaultValue(0L).IsRequired();
         builder.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
         // PostgreSQL's system xmin supplies optimistic concurrency without an application column.
         builder.Property<uint>("xmin").HasColumnName("xmin").IsRowVersion();

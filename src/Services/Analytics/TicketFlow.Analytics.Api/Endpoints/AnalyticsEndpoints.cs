@@ -14,10 +14,14 @@ public static class AnalyticsEndpoints
             Guid? eventId,
             DateTimeOffset? from,
             DateTimeOffset? to,
+            string? currency,
             ISalesStore salesStore,
             CancellationToken ct) =>
         {
-            var result = await salesStore.GetRevenueAsync(new RevenueQuery(eventId, from, to), ct);
+            if (currency is not null && (currency.Length != 3 || currency.Any(character => !char.IsLetter(character))))
+                return Results.BadRequest(new { error = "Currency must be a three-letter ISO code." });
+
+            var result = await salesStore.GetRevenueAsync(new RevenueQuery(eventId, from, to, currency), ct);
             return Results.Ok(result);
         }).WithTags("Analytics").RequireAuthorization("RequireOrganizer");
     }

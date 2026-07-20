@@ -1,3 +1,6 @@
+using System.Text.Json;
+using TicketFlow.Contracts.Messaging.Checkout;
+using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Orders;
 using TicketFlow.Ordering.Domain.Orders;
@@ -5,29 +8,24 @@ using TicketFlow.Ordering.Domain.Orders;
 namespace TicketFlow.Phase12.HardeningTests.Checkout;
 
 /// <summary>
-/// Desired server-authoritative checkout invariants. These tests are intentionally red in
-/// Commit 1: PlaceOrderCommand still carries client-owned seats, amount, currency and event id,
-/// and the handler has no hold-quote/sale-policy dependency with which to validate them.
+/// Server-authoritative checkout invariants promoted by Commit 3. The one remaining expected
+/// failure in this file is the durable order/outbox retry boundary owned by Commit 7.
 /// </summary>
 public sealed class CheckoutAuthorityTests
 {
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
-    public async Task Hold_for_seat_A_must_not_create_an_order_or_ticket_intent_for_client_seat_B()
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Hold_for_seat_A_creates_order_intent_only_for_server_quote_seat_A()
     {
         var heldSeatA = Guid.NewGuid();
-        var tamperedSeatB = Guid.NewGuid();
-        var (handler, store, publisher) = CreateHandler();
+        var quote = Quote(seatIds: [heldSeatA]);
+        var (handler, store, publisher) = CreateV2Handler(quote);
 
-        // Invariant: the server must derive [heldSeatA] from HoldId. The current handler never
-        // loads that quote and accepts [tamperedSeatB] directly from the request.
-        var error = await Record.ExceptionAsync(() => handler.HandleAsync(
-            Command(seatIds: [tamperedSeatB], holdId: Guid.NewGuid())));
+        await handler.HandleAsync(V2Command(quote));
 
-        Assert.NotNull(error);
-        Assert.Equal(0, store.StreamCount);
-        Assert.Empty(publisher.Published);
-        Assert.NotEqual(heldSeatA, tamperedSeatB); // Documents that this is not a duplicate-id case.
+        var submitted = Assert.IsType<OrderSubmitted>(Assert.Single(publisher.Published));
+        Assert.Equal([heldSeatA], submitted.SeatIds);
+        Assert.Equal(1, store.StreamCount);
     }
 
     public static TheoryData<decimal, string> InvalidMoney => new()
@@ -39,31 +37,49 @@ public sealed class CheckoutAuthorityTests
 
     [Theory]
     [MemberData(nameof(InvalidMoney))]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
-    public async Task Client_amount_or_currency_tampering_must_fail_before_any_side_effect(
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Client_amount_or_currency_fields_are_ignored_and_cannot_change_server_quote(
         decimal clientAmount,
         string clientCurrency)
     {
-        var (handler, store, publisher) = CreateHandler();
+        var quote = Quote(amount: 500_000m, currency: "VND");
+        var (handler, store, publisher) = CreateV2Handler(quote);
+        var maliciousJson = $$"""
+            {
+              "holdId":"{{quote.HoldId}}",
+              "paymentMethod":"CreditCard",
+              "idempotencyKey":"checkout-1",
+              "totalAmount":{{clientAmount}},
+              "currency":"{{clientCurrency}}",
+              "seatIds":["{{Guid.NewGuid()}}"],
+              "eventId":"{{Guid.NewGuid()}}"
+            }
+            """;
+        var intent = JsonSerializer.Deserialize<CheckoutIntentV2>(maliciousJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
 
-        var error = await Record.ExceptionAsync(() => handler.HandleAsync(
-            Command(totalAmount: clientAmount, currency: clientCurrency)));
+        await handler.HandleAsync(new PlaceOrderV2Command(
+            quote.OwnerUserId, intent.HoldId, intent.PaymentMethod, intent.IdempotencyKey, "Buyer", "buyer@example.com"));
 
-        Assert.NotNull(error);
-        Assert.Equal(0, store.StreamCount);
-        Assert.Empty(publisher.Published);
+        var submitted = Assert.IsType<OrderSubmitted>(Assert.Single(publisher.Published));
+        Assert.Equal(500_000m, submitted.Amount);
+        Assert.Equal("VND", submitted.Currency);
+        Assert.Equal(1, store.StreamCount);
     }
 
     [Theory]
     [InlineData("Draft")]
     [InlineData("Cancelled")]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Draft_or_cancelled_event_must_be_rejected_before_order_persistence(string nonSaleableStatus)
     {
-        _ = nonSaleableStatus; // Status exists in Catalog, but the current Ordering contract cannot carry/verify it.
-        var (handler, store, publisher) = CreateHandler();
+        _ = nonSaleableStatus;
+        var store = new RecordingOrderStore();
+        var publisher = new RecordingIntegrationEventPublisher();
+        var handler = new PlaceOrderV2CommandHandler(
+            store, publisher, new RecordingHoldQuoteProvider(null), TimeProvider.System);
+        var quote = Quote();
 
-        var error = await Record.ExceptionAsync(() => handler.HandleAsync(Command()));
+        var error = await Record.ExceptionAsync(() => handler.HandleAsync(V2Command(quote)));
 
         Assert.NotNull(error);
         Assert.Equal(0, store.StreamCount);
@@ -89,13 +105,37 @@ public sealed class CheckoutAuthorityTests
         Assert.Single(publisher.Published);
     }
 
-    private static (PlaceOrderCommandHandler Handler, RecordingOrderStore Store, RecordingIntegrationEventPublisher Publisher)
-        CreateHandler()
+    private static (PlaceOrderV2CommandHandler Handler, RecordingOrderStore Store, RecordingIntegrationEventPublisher Publisher)
+        CreateV2Handler(AuthoritativeHoldQuote quote)
     {
         var store = new RecordingOrderStore();
         var publisher = new RecordingIntegrationEventPublisher();
-        return (new PlaceOrderCommandHandler(store, publisher, TimeProvider.System), store, publisher);
+        return (
+            new PlaceOrderV2CommandHandler(store, publisher, new RecordingHoldQuoteProvider(quote), TimeProvider.System),
+            store,
+            publisher);
     }
+
+    private static AuthoritativeHoldQuote Quote(
+        IReadOnlyList<Guid>? seatIds = null,
+        decimal amount = 500_000m,
+        string currency = "VND") => new(
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        seatIds ?? [Guid.NewGuid()],
+        amount,
+        currency,
+        7,
+        DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private static PlaceOrderV2Command V2Command(AuthoritativeHoldQuote quote) => new(
+        quote.OwnerUserId,
+        quote.HoldId,
+        "CreditCard",
+        "checkout-1",
+        "Buyer",
+        "buyer@example.com");
 
     private static PlaceOrderCommand Command(
         IReadOnlyList<Guid>? seatIds = null,
@@ -112,6 +152,15 @@ public sealed class CheckoutAuthorityTests
             "CreditCard",
             "Buyer",
             "buyer@example.com");
+}
+
+internal sealed class RecordingHoldQuoteProvider(AuthoritativeHoldQuote? quote) : IHoldQuoteProvider
+{
+    public Task<AuthoritativeHoldQuote?> GetAsync(
+        Guid holdId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(quote is not null && quote.HoldId == holdId && quote.OwnerUserId == ownerUserId ? quote : null);
 }
 
 internal sealed class RecordingOrderStore : IOrderStore

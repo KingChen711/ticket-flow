@@ -21,10 +21,18 @@ public static class ClickHouseTableSetup
                 event_id UUID,
                 seat_count UInt32,
                 amount Decimal(18,2),
+                currency FixedString(3) DEFAULT 'VND',
+                price_snapshot_version UInt64 DEFAULT 0,
                 completed_at DateTime64(3)
             ) ENGINE = ReplacingMergeTree(completed_at)
             ORDER BY order_id
             """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        // CREATE IF NOT EXISTS does not expand a Phase 11 table already on disk.
+        command.CommandText = "ALTER TABLE sales ADD COLUMN IF NOT EXISTS currency FixedString(3) DEFAULT 'VND' AFTER amount";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        command.CommandText = "ALTER TABLE sales ADD COLUMN IF NOT EXISTS price_snapshot_version UInt64 DEFAULT 0 AFTER currency";
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

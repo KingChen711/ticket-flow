@@ -22,6 +22,9 @@ public sealed class PurchaseState : SagaStateMachineInstance
     public Guid HoldId { get; set; }
     public List<Guid> SeatIds { get; set; } = [];
     public decimal Amount { get; set; }
+    public string Currency { get; set; } = null!;
+    public long PriceSnapshotVersion { get; set; }
+    public string IdempotencyKey { get; set; } = null!;
     public string PaymentMethod { get; set; } = null!;
     public string CustomerName { get; set; } = null!;
     public string CustomerEmail { get; set; } = null!;

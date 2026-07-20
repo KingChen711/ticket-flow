@@ -1,5 +1,7 @@
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Application.Seats;
+using TicketFlow.Reservation.Domain.Holds;
+using TicketFlow.Reservation.Domain.SalePolicies;
 using TicketFlow.Reservation.Domain.Seats;
 
 namespace TicketFlow.Phase12.HardeningTests.Reservation;
@@ -96,7 +98,37 @@ public sealed class ReservationFailureBoundaryTests
         ISeatHoldStore holds,
         IUnitOfWork unitOfWork,
         ISeatMapNotifier notifier) =>
-        new(repository, holds, unitOfWork, notifier, TimeProvider.System, new ReservationOptions());
+        new(
+            repository,
+            holds,
+            new FakeEventSalePolicyRepository(),
+            new FakeHoldQuoteRepository(),
+            unitOfWork,
+            notifier,
+            TimeProvider.System,
+            new ReservationOptions());
+}
+
+internal sealed class FakeEventSalePolicyRepository(EventSalePolicy? policy = null) : IEventSalePolicyRepository
+{
+    public EventSalePolicy? Policy { get; private set; } = policy;
+
+    public Task<EventSalePolicy?> GetAsync(Guid eventId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Policy?.Id == eventId ? Policy : null);
+
+    public void Add(EventSalePolicy value) => Policy = value;
+}
+
+internal sealed class FakeHoldQuoteRepository : IHoldQuoteRepository
+{
+    private readonly Dictionary<Guid, HoldQuote> _quotes = [];
+
+    public IReadOnlyCollection<HoldQuote> Quotes => _quotes.Values;
+
+    public Task<HoldQuote?> GetAsync(Guid holdId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_quotes.GetValueOrDefault(holdId));
+
+    public void Add(HoldQuote quote) => _quotes.Add(quote.Id, quote);
 }
 
 internal sealed class FakeSeatRepository(IEnumerable<Seat>? initial = null) : ISeatRepository

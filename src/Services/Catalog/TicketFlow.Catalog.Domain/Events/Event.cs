@@ -11,6 +11,8 @@ public sealed class Event : AggregateRoot<Guid>
     public string Artist { get; private set; } = null!;
     public Guid VenueId { get; private set; }
     public Guid? OrganizerId { get; private set; }
+    public long AggregateVersion { get; private set; }
+    public long PriceSnapshotVersion { get; private set; }
     public EventSchedule Schedule { get; private set; } = null!;
     public EventStatus Status { get; private set; }
     public IReadOnlyList<PriceTier> PriceTiers => _priceTiers.AsReadOnly();
@@ -29,6 +31,7 @@ public sealed class Event : AggregateRoot<Guid>
         VenueId = venueId;
         Schedule = schedule;
         Status = EventStatus.Draft;
+        AggregateVersion = 1;
     }
 
     public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule)
@@ -60,6 +63,8 @@ public sealed class Event : AggregateRoot<Guid>
             throw new InvalidOperationException($"A price tier for section '{sectionId}' already exists.");
 
         _priceTiers.Add(PriceTier.Create(sectionId, price));
+        AggregateVersion++;
+        PriceSnapshotVersion++;
     }
 
     public void Publish(DateTimeOffset now)
@@ -73,7 +78,12 @@ public sealed class Event : AggregateRoot<Guid>
         if (Schedule.IsInPast(now))
             throw new InvalidOperationException("Cannot publish an event scheduled in the past.");
 
+        if (_priceTiers.Select(tier => tier.Price.Currency).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 1)
+            throw new InvalidOperationException("All price tiers for an event must use one currency.");
+
         Status = EventStatus.Published;
+        AggregateVersion++;
+        PriceSnapshotVersion++;
         Raise(new EventPublished(Id));
     }
 
@@ -89,6 +99,8 @@ public sealed class Event : AggregateRoot<Guid>
             throw new InvalidOperationException("Cannot reschedule an event to a time in the past.");
 
         Schedule = schedule;
+        AggregateVersion++;
+        PriceSnapshotVersion++;
         Raise(new EventRescheduled(Id, Schedule.StartsAt, Schedule.EndsAt));
     }
 
@@ -98,6 +110,8 @@ public sealed class Event : AggregateRoot<Guid>
             throw new InvalidOperationException("Event is already cancelled.");
 
         Status = EventStatus.Cancelled;
+        AggregateVersion++;
+        PriceSnapshotVersion++;
         Raise(new EventCancelled(Id));
     }
 }

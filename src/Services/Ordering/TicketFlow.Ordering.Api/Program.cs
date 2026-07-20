@@ -9,6 +9,7 @@ using TicketFlow.Ordering.Api.Consumers;
 using TicketFlow.Ordering.Api.Endpoints;
 using TicketFlow.Ordering.Api.Messaging;
 using TicketFlow.Ordering.Api.Metrics;
+using TicketFlow.Ordering.Api.Services;
 using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
@@ -27,6 +28,7 @@ builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
 builder.Services.AddOrderingInfrastructure(builder.Configuration);
+builder.Services.AddScoped<IHoldQuoteProvider, GrpcHoldQuoteProvider>();
 builder.Services.AddScoped<ISaleRecordedPublisher, KafkaSaleRecordedPublisher>();
 
 builder.Services.AddGrpcClient<ReservationService.ReservationServiceClient>(options =>

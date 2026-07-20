@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
@@ -32,6 +33,7 @@ builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "reservation",
     configureMetrics: m => m.AddMeter(ContractVersionMetrics.MeterName));
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();
@@ -47,6 +49,15 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cf
 {
     cfg.AddConsumer<ConfirmSeatsConsumer>();
     cfg.AddConsumer<ReleaseSeatsConsumer>();
+    cfg.AddConsumer<CatalogSalePolicyChangedConsumer>();
+}, configureRabbitMq: (context, rabbit) =>
+{
+    rabbit.ReceiveEndpoint("reservation-catalog-sale-policy-changed", endpoint =>
+    {
+        // Serialize snapshots so two first deliveries cannot race the EventId primary key.
+        endpoint.ConcurrentMessageLimit = 1;
+        endpoint.ConfigureConsumer<CatalogSalePolicyChangedConsumer>(context);
+    });
 });
 
 var app = builder.Build();

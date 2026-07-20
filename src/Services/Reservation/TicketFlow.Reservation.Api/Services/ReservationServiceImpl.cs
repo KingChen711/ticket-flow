@@ -37,4 +37,32 @@ public sealed class ReservationServiceImpl(ApplicationReservationService reserva
 
         return response;
     }
+
+    public override async Task<GetHoldQuoteResponse> GetHoldQuote(
+        GetHoldQuoteRequest request,
+        ServerCallContext context)
+    {
+        if (!Guid.TryParse(request.HoldId, out var holdId))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"'{request.HoldId}' is not a valid hold id."));
+
+        if (!Guid.TryParse(request.OwnerUserId, out var ownerUserId))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"'{request.OwnerUserId}' is not a valid user id."));
+
+        var quote = await reservationService.GetQuoteAsync(holdId, ownerUserId, context.CancellationToken);
+        if (quote is null)
+            throw new RpcException(new Status(StatusCode.NotFound, "Hold quote was not found, is expired, cancelled, or belongs to another user."));
+
+        var response = new GetHoldQuoteResponse
+        {
+            HoldId = quote.HoldId.ToString(),
+            EventId = quote.EventId.ToString(),
+            OwnerUserId = quote.OwnerUserId.ToString(),
+            Amount = quote.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Currency = quote.Currency,
+            PriceSnapshotVersion = quote.PriceSnapshotVersion,
+            ExpiresAt = quote.ExpiresAt.ToString("O"),
+        };
+        response.SeatIds.AddRange(quote.SeatIds.Select(id => id.ToString()));
+        return response;
+    }
 }

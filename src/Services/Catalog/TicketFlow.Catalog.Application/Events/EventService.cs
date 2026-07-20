@@ -50,8 +50,13 @@ public sealed class EventService(
         // it must publish BEFORE SaveChangesAsync so the Outbox interceptor captures it in the
         // same transaction as the reschedule write.
         await integrationEventPublisher.PublishAsync(
-            new CatalogEventRescheduled(@event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt),
+            new CatalogEventRescheduled(
+                @event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt,
+                @event.AggregateVersion, timeProvider.GetUtcNow()),
             cancellationToken);
+
+        if (@event.Status == EventStatus.Published)
+            await PublishSalePolicyAsync(@event, timeProvider.GetUtcNow(), cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -103,8 +108,11 @@ public sealed class EventService(
         await integrationEventPublisher.PublishAsync(
             new CatalogEventPublished(
                 @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
-                @event.Artist, venue.Name, venue.Address.City),
+                @event.Artist, venue.Name, venue.Address.City,
+                @event.AggregateVersion, now),
             cancellationToken);
+
+        await PublishSalePolicyAsync(@event, now, cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -118,7 +126,11 @@ public sealed class EventService(
         @event.Cancel();
 
         // Same reasoning as RescheduleAsync/PublishAsync above.
-        await integrationEventPublisher.PublishAsync(new CatalogEventCancelled(@event.Id), cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        await integrationEventPublisher.PublishAsync(
+            new CatalogEventCancelled(@event.Id, @event.AggregateVersion, now),
+            cancellationToken);
+        await PublishSalePolicyAsync(@event, now, cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -128,6 +140,21 @@ public sealed class EventService(
     private async Task<Event> GetRequiredAsync(Guid id, CancellationToken cancellationToken) =>
         await eventRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException($"Event '{id}' was not found.");
+
+    private Task PublishSalePolicyAsync(Event @event, DateTimeOffset now, CancellationToken cancellationToken) =>
+        integrationEventPublisher.PublishAsync(
+            new CatalogSalePolicyChanged(
+                @event.Id,
+                @event.Status.ToString(),
+                now,
+                @event.Schedule.StartsAt,
+                @event.PriceTiers
+                    .Select(tier => new PriceTierSnapshotV2(
+                        tier.SectionId, tier.Price.Amount, tier.Price.Currency))
+                    .ToList(),
+                @event.PriceSnapshotVersion,
+                now),
+            cancellationToken);
 
     private static EventResponse Map(Event @event) => new(
         @event.Id,

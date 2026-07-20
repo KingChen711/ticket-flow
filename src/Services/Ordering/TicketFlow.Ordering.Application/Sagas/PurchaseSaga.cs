@@ -72,6 +72,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.HoldId = message.HoldId;
                     context.Saga.SeatIds = [.. message.SeatIds];
                     context.Saga.Amount = message.Amount;
+                    context.Saga.Currency = message.Currency;
+                    context.Saga.PriceSnapshotVersion = message.PriceSnapshotVersion;
+                    context.Saga.IdempotencyKey = message.IdempotencyKey ?? $"legacy:{message.OrderId}";
                     context.Saga.PaymentMethod = message.PaymentMethod;
                     context.Saga.CustomerName = message.CustomerName;
                     context.Saga.CustomerEmail = message.CustomerEmail;
@@ -81,7 +84,12 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CorrelationId,
                     context.Saga.CatalogEventId,
                     context.Saga.HoldId,
-                    context.Saga.SeatIds))
+                    context.Saga.SeatIds,
+                    $"{context.Saga.IdempotencyKey}:confirm-seats",
+                    context.Saga.PriceSnapshotVersion,
+                    context.Saga.Amount,
+                    context.Saga.Currency,
+                    context.Saga.UserId))
                 .TransitionTo(AwaitingSeats));
 
         During(AwaitingSeats,
@@ -90,7 +98,10 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CorrelationId,
                     context.Saga.UserId,
                     context.Saga.Amount,
-                    context.Saga.PaymentMethod))
+                    context.Saga.PaymentMethod,
+                    context.Saga.Currency,
+                    $"{context.Saga.IdempotencyKey}:charge",
+                    context.Saga.PriceSnapshotVersion))
                 .TransitionTo(AwaitingPayment),
             // Hold expired/missing before checkout completed — nothing charged, nothing to
             // release. Straight to Cancelled, no compensation commands needed (DoD scenario 3).
@@ -109,7 +120,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CatalogEventId,
                     context.Saga.SeatIds,
                     context.Saga.CustomerName,
-                    context.Saga.CustomerEmail))
+                    context.Saga.CustomerEmail,
+                    $"{context.Saga.IdempotencyKey}:issue",
+                    context.Saga.PriceSnapshotVersion))
                 .TransitionTo(AwaitingTickets),
             // Nothing charged — release the hold directly (DoD scenario 1).
             When(PaymentFailedEvent)
@@ -118,7 +131,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CorrelationId,
                     context.Saga.CatalogEventId,
                     context.Saga.HoldId,
-                    context.Saga.SeatIds))
+                    context.Saga.SeatIds,
+                    $"{context.Saga.IdempotencyKey}:release"))
                 .TransitionTo(CompensatingSeats));
 
         During(AwaitingTickets,
@@ -151,7 +165,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                             context.Saga.CatalogEventId,
                             context.Saga.SeatIds.Count,
                             context.Saga.Amount,
-                            DateTimeOffset.UtcNow),
+                            DateTimeOffset.UtcNow,
+                            context.Saga.Currency,
+                            context.Saga.PriceSnapshotVersion),
                         context.CancellationToken);
                 })
                 .Publish(context => new OrderCompleted(
@@ -175,7 +191,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                 .Publish(context => new RefundPayment(
                     context.Saga.CorrelationId,
                     context.Saga.PaymentId!.Value,
-                    context.Saga.Amount))
+                    context.Saga.Amount,
+                    context.Saga.Currency,
+                    $"{context.Saga.IdempotencyKey}:refund"))
                 .TransitionTo(CompensatingRefund));
 
         During(CompensatingRefund,
@@ -184,7 +202,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CorrelationId,
                     context.Saga.CatalogEventId,
                     context.Saga.HoldId,
-                    context.Saga.SeatIds))
+                    context.Saga.SeatIds,
+                    $"{context.Saga.IdempotencyKey}:release"))
                 .TransitionTo(CompensatingSeats));
 
         // Both compensation paths (PaymentFailed direct, TicketingFailed via CompensatingRefund)
