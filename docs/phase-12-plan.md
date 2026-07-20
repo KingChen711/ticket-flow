@@ -12,13 +12,14 @@ tags: [ticketflow, phase-12, plan, hardening, dual-write, concurrency, idempoten
 >
 > **DoD:** không thể đổi ghế/giá/tiền tệ từ client; cùng một business operation chỉ charge/confirm/issue/refund một lần dù message trùng hoặc process chết; compensation không thể đụng allocation của đơn khác; saga tự hồi phục hoặc đi tới trạng thái cần can thiệp có quan sát được; ticket và organizer resource được kiểm tra ownership; Redis/RabbitMQ/Kafka/Keycloak restart không làm mất correctness; CI chạy trên `main` và có test failure-boundary/concurrency/E2E thật.
 
-> ⚠️ **Viết TRƯỚC khi code.** Sáu sự thật phải giữ xuyên suốt Phase 12:
+> ⚠️ **Viết TRƯỚC khi code.** Bảy sự thật phải giữ xuyên suốt Phase 12:
 > 1. **Đây là remediation phase, không phải feature phase.** Không thêm tính năng sản phẩm mới trước khi các invariant tiền/ghế/ownership ở Nhóm A-C khép.
 > 2. **Không có “exactly once delivery” xuyên HTTP + Postgres + Redis + RabbitMQ + Kafka + payment provider.** Mục tiêu đúng là *effectively-once business outcome*: stable operation key, local transaction, inbox/outbox, conditional state transition và reconciliation.
 > 3. **Redis không còn là source of truth cho ghế đã bán.** Redis chỉ tăng tốc hold/availability; allocation bền vững có owner + generation trong Postgres mới quyết định confirm/release/rebuild.
 > 4. **Retry một external write không có idempotency key là bug.** Charge, refund, upload PDF, gửi email và publish sang transport khác đều phải có operation key + trạng thái `Pending/Unknown/Completed` + reconcile.
 > 5. **Schema/message contract sẽ đổi theo kiểu expand → migrate → contract, không big-bang.** Consumer đọc được cả v1/v2 phải deploy trước producer v2; chỉ xóa field/behavior cũ sau khi backfill và kiểm chứng không còn message cũ.
 > 6. **81 test .NET + frontend lint/build đang xanh nhưng chưa chứng minh các boundary này.** Không đánh dấu commit `DONE` nếu chỉ unit test xanh; mỗi commit dưới đây có failure/concurrency gate riêng.
+> 7. **Plan là giả thuyết có thể bị phản biện, không phải mệnh lệnh thi công máy móc.** Người thực hiện có quyền và trách nhiệm chỉ ra giả định sai, thử probe và chọn cách làm khác khi code thật, tài liệu hoặc bằng chứng cho thấy phương án an toàn/tốt hơn. Khi lệch plan phải ghi lại bằng chứng, trade-off, invariant/DoD bị ảnh hưởng và cập nhật plan/ADR ngay trong commit liên quan; quyền phản biện không được dùng để hạ tiêu chuẩn correctness, bỏ gate kiểm chứng hoặc tự ý mở rộng scope.
 
 ---
 
@@ -97,7 +98,7 @@ tags: [ticketflow, phase-12, plan, hardening, dual-write, concurrency, idempoten
 
 ## Nhóm A — Khóa invariant bằng test + schema/contract nền
 
-### Commit 1 — `test(hardening): failure-boundary harness + regression cases cho tiền/ghế/message order` ⭐
+### Commit 1 — `test(hardening): failure-boundary harness + regression cases cho tiền/ghế/message order` ⭐ ✅ DONE
 - Thêm test fixture dùng Postgres + Redis + RabbitMQ/Marten thật; payment/object/email dùng counting fake có điều khiển barrier, timeout và “side effect thành công nhưng mất response”.
 - Viết test đang **đỏ có chủ đích** cho các exploit/race đã tìm thấy:
   - hold seat A nhưng order/ticket seat B; payment failure không được release B;
@@ -110,6 +111,8 @@ tags: [ticketflow, phase-12, plan, hardening, dual-write, concurrency, idempoten
   - Published/Rescheduled/Cancelled tới sai thứ tự không resurrect event.
 - Test failure-boundary phải có tên theo invariant và comment đúng failpoint; tránh test bám chi tiết implementation khiến refactor vô nghĩa.
 - **Gate:** lưu kết quả baseline đỏ/expected-failure trong doc/test category riêng; regression suite cũ vẫn 81/81 xanh. Từ Commit 3 trở đi từng test được chuyển sang pass, không `Skip` vĩnh viễn.
+
+**Kết quả thực tế (2026-07-20):** thêm project explicit gate `tests/TicketFlow.Phase12.HardeningTests` (cố ý chưa đưa vào `TicketFlow.slnx`), không có test `Skip`. Trait `Phase12Harness` xanh **5/5** với Postgres 16 + Marten, Redis 7 và RabbitMQ 3 thật; trait `Phase12ExpectedFailure` chạy **27 case: 23 đỏ đúng blocker, 4 xanh là control case của các permutation hợp lệ**. Bảy test project regression cũ vẫn **81/81 xanh**. Counting fake dùng chung đã chứng minh barrier, timeout và trạng thái "side effect thành công nhưng mất response" cho payment/object/email. Danh sách case, lệnh chạy và promotion rule nằm tại [`docs/phase-12-hardening-baseline.md`](phase-12-hardening-baseline.md).
 
 ### Commit 2 — `feat(contracts,data): expand schema v2 — operation keys, ownership, revisions, currency`
 - Thêm message/request v2 và schema nullable/index trước, chưa cutover behavior:

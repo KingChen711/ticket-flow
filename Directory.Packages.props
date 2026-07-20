@@ -89,6 +89,10 @@
     <!-- Real Redis in a container (Commit 10, docs/phase-2-plan.md) — no mocking the
          concurrency primitive that's the actual thing under test. -->
     <PackageVersion Include="Testcontainers.Redis" Version="4.13.0" />
+    <!-- Phase 12 Commit 1 — real failure-boundary harness. Keep every Testcontainers module on
+         the same release so the shared core/reaper behavior cannot drift between dependencies. -->
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.13.0" />
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.13.0" />
     <!-- Throughput/load measurement (Commit 11) — companion to Commit 10's correctness proof,
          not a replacement for it. -->
     <PackageVersion Include="NBomber" Version="6.5.0" />
