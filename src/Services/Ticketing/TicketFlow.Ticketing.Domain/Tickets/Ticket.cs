@@ -16,10 +16,15 @@ public sealed class Ticket : Entity<Guid>
 {
     public Guid OrderId { get; private set; }
     public Guid SeatId { get; private set; }
+    public Guid? CustomerId { get; private set; }
+    public Guid? EventId { get; private set; }
+    public TicketIssuanceState? IssuanceState { get; private set; }
     public string QrPayload { get; private set; } = null!;
     public string PdfObjectKey { get; private set; } = null!;
     public DateTimeOffset IssuedAt { get; private set; }
     public DateTimeOffset? CheckedInAt { get; private set; }
+    public DateTimeOffset? RevokedAt { get; private set; }
+    public string? RevocationReason { get; private set; }
 
     // Required by EF Core.
     private Ticket() { }

@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Catalog;
 using TicketFlow.Search.Application.Abstractions;
 
@@ -14,6 +15,9 @@ namespace TicketFlow.Search.Api.Consumers;
 /// </summary>
 public sealed class CatalogEventCancelledConsumer(IEventSearchIndex searchIndex) : IConsumer<CatalogEventCancelled>
 {
-    public Task Consume(ConsumeContext<CatalogEventCancelled> context) =>
-        searchIndex.DeleteAsync(context.Message.CatalogEventId, context.CancellationToken);
+    public Task Consume(ConsumeContext<CatalogEventCancelled> context)
+    {
+        ContractVersionMetrics.RecordInbound(nameof(CatalogEventCancelled), context.Message.AggregateVersion);
+        return searchIndex.DeleteAsync(context.Message.CatalogEventId, context.CancellationToken);
+    }
 }

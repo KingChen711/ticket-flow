@@ -1,9 +1,9 @@
 using Scalar.AspNetCore;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Recommendation.Api.Consumers;
 using TicketFlow.Recommendation.Api.Endpoints;
 using TicketFlow.Recommendation.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);

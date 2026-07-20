@@ -12,4 +12,6 @@ public sealed record IssueTickets(
     Guid EventId,
     IReadOnlyList<Guid> SeatIds,
     string CustomerName,
-    string CustomerEmail);
+    string CustomerEmail,
+    string? OperationKey = null,
+    long PriceSnapshotVersion = 0);

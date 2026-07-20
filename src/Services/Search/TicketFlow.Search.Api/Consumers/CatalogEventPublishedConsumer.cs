@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Catalog;
 using TicketFlow.Search.Application.Abstractions;
 using TicketFlow.Search.Application.Events;
@@ -14,6 +15,7 @@ public sealed class CatalogEventPublishedConsumer(IEventSearchIndex searchIndex)
 {
     public Task Consume(ConsumeContext<CatalogEventPublished> context)
     {
+        ContractVersionMetrics.RecordInbound(nameof(CatalogEventPublished), context.Message.AggregateVersion);
         var message = context.Message;
         return searchIndex.UpsertAsync(
             new SearchDocument(

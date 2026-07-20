@@ -24,4 +24,8 @@ public sealed record OrderSubmitted(
     string PaymentMethod,
     string CustomerName,
     string CustomerEmail,
-    DateTimeOffset SubmittedAt);
+    DateTimeOffset SubmittedAt,
+    string Currency = "VND",
+    long PriceSnapshotVersion = 0,
+    string? IdempotencyKey = null,
+    string? AllocationReference = null);

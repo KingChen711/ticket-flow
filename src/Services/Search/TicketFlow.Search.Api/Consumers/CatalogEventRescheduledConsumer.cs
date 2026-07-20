@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Catalog;
 using TicketFlow.Search.Application.Abstractions;
 
@@ -12,6 +13,9 @@ namespace TicketFlow.Search.Api.Consumers;
 /// </summary>
 public sealed class CatalogEventRescheduledConsumer(IEventSearchIndex searchIndex) : IConsumer<CatalogEventRescheduled>
 {
-    public Task Consume(ConsumeContext<CatalogEventRescheduled> context) =>
-        searchIndex.UpdateStartsAtAsync(context.Message.CatalogEventId, context.Message.StartsAt, context.CancellationToken);
+    public Task Consume(ConsumeContext<CatalogEventRescheduled> context)
+    {
+        ContractVersionMetrics.RecordInbound(nameof(CatalogEventRescheduled), context.Message.AggregateVersion);
+        return searchIndex.UpdateStartsAtAsync(context.Message.CatalogEventId, context.Message.StartsAt, context.CancellationToken);
+    }
 }

@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(databaseName));
 
         services.AddSingleton<IPurchaseHistoryStore, MongoPurchaseHistoryStore>();
+        services.AddHostedService<PurchaseHistoryIndexInitializer>();
 
         var searchBaseUrl = configuration["Search:BaseUrl"]
             ?? throw new InvalidOperationException("Configuration 'Search:BaseUrl' was not found.");

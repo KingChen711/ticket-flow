@@ -10,6 +10,7 @@ public sealed class Event : AggregateRoot<Guid>
     public string Description { get; private set; } = null!;
     public string Artist { get; private set; } = null!;
     public Guid VenueId { get; private set; }
+    public Guid? OrganizerId { get; private set; }
     public EventSchedule Schedule { get; private set; } = null!;
     public EventStatus Status { get; private set; }
     public IReadOnlyList<PriceTier> PriceTiers => _priceTiers.AsReadOnly();

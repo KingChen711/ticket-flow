@@ -7,4 +7,7 @@ namespace TicketFlow.Contracts.Messaging.Reservation;
 public sealed record SeatsConfirmed(
     Guid OrderId,
     IReadOnlyList<Guid> SeatIds,
-    DateTimeOffset ConfirmedAt);
+    DateTimeOffset ConfirmedAt,
+    string? AllocationReference = null,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

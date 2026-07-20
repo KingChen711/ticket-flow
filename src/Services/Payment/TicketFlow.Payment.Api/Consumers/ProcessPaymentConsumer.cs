@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Payment.Application.Abstractions;
 using TicketFlow.Payment.Domain.Payments;
@@ -25,6 +26,7 @@ public sealed class ProcessPaymentConsumer(
     public async Task Consume(ConsumeContext<ProcessPayment> context)
     {
         var message = context.Message;
+        ContractVersionMetrics.RecordInbound(nameof(ProcessPayment), message.PriceSnapshotVersion);
 
         var existing = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
         if (existing is not null)

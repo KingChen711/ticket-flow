@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Ticketing;
 using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Domain.Tickets;
@@ -24,6 +25,7 @@ public sealed class IssueTicketsConsumer(
     public async Task Consume(ConsumeContext<IssueTickets> context)
     {
         var message = context.Message;
+        ContractVersionMetrics.RecordInbound(nameof(IssueTickets), message.PriceSnapshotVersion);
 
         var existing = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
         if (existing.Count > 0)

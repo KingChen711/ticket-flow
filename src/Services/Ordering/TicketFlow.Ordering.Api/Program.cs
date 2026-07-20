@@ -1,8 +1,10 @@
 using MassTransit;
 using Scalar.AspNetCore;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Analytics;
 using TicketFlow.Contracts.Reservation;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Ordering.Api.Consumers;
 using TicketFlow.Ordering.Api.Endpoints;
 using TicketFlow.Ordering.Api.Messaging;
@@ -11,7 +13,6 @@ using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -21,7 +22,7 @@ builder.Services.AddSingleton<TicketSalesMetrics>();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "ordering",
-    configureMetrics: m => m.AddMeter(TicketSalesMetrics.MeterName));
+    configureMetrics: m => m.AddMeter(TicketSalesMetrics.MeterName).AddMeter(ContractVersionMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();

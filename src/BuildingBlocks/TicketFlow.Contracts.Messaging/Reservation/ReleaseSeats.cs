@@ -12,4 +12,6 @@ public sealed record ReleaseSeats(
     Guid OrderId,
     Guid EventId,
     Guid HoldId,
-    IReadOnlyList<Guid> SeatIds);
+    IReadOnlyList<Guid> SeatIds,
+    string? OperationKey = null,
+    long Generation = 0);

@@ -27,4 +27,6 @@ public sealed record CatalogEventPublished(
     DateTimeOffset PublishedAt,
     string Artist,
     string VenueName,
-    string City);
+    string City,
+    long AggregateVersion = 0,
+    DateTimeOffset? OccurredAt = null);

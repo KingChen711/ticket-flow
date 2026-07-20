@@ -7,4 +7,6 @@ namespace TicketFlow.Contracts.Messaging.Payment;
 /// </summary>
 public sealed record PaymentFailed(
     Guid OrderId,
-    string Reason);
+    string Reason,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

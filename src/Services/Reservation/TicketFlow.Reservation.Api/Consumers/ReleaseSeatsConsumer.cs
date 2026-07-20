@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Reservation;
 using ApplicationReservationService = TicketFlow.Reservation.Application.Seats.ReservationService;
 
@@ -21,6 +22,7 @@ public sealed class ReleaseSeatsConsumer(ApplicationReservationService reservati
     public async Task Consume(ConsumeContext<ReleaseSeats> context)
     {
         var message = context.Message;
+        ContractVersionMetrics.RecordInbound(nameof(ReleaseSeats), message.OperationKey is null ? 0 : 1);
         await reservationService.ReleaseAsync(message.EventId, message.HoldId, context.CancellationToken);
         await reservationService.UnsellAsync(message.EventId, message.SeatIds, context.CancellationToken);
 

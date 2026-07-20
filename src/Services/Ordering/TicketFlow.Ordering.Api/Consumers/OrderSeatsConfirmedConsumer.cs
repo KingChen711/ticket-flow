@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Reservation;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Domain.Orders;
@@ -30,6 +31,7 @@ public sealed class OrderSeatsConfirmedConsumer(IOrderStore store, TimeProvider 
 {
     public async Task Consume(ConsumeContext<SeatsConfirmed> context)
     {
+        ContractVersionMetrics.RecordInbound(nameof(SeatsConfirmed), context.Message.AggregateVersion);
         var order = await store.LoadAsync(context.Message.OrderId, context.CancellationToken);
         if (order is null)
         {

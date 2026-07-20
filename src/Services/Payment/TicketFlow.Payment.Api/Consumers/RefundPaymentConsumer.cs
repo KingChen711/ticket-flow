@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Payment.Application.Abstractions;
 using TicketFlow.Payment.Domain.Payments;
@@ -22,6 +23,7 @@ public sealed class RefundPaymentConsumer(
     public async Task Consume(ConsumeContext<RefundPayment> context)
     {
         var message = context.Message;
+        ContractVersionMetrics.RecordInbound(nameof(RefundPayment), message.OperationKey is null ? 0 : 1);
         var payment = await repository.GetByIdAsync(message.PaymentId, context.CancellationToken);
 
         if (payment is null)

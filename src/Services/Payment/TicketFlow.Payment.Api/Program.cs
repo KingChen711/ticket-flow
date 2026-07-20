@@ -1,11 +1,12 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Payment.Api.Consumers;
 using TicketFlow.Payment.Application;
 using TicketFlow.Payment.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,7 +18,7 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "payment",
-    configureMetrics: m => m.AddMeter("Polly"));
+    configureMetrics: m => m.AddMeter("Polly").AddMeter(ContractVersionMetrics.MeterName));
 builder.Services.AddOpenApi();
 builder.Services.AddPaymentApplication();
 builder.Services.AddPaymentInfrastructure(builder.Configuration);

@@ -53,6 +53,9 @@
     <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Application\TicketFlow.Ticketing.Application.csproj" />
     <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Domain\TicketFlow.Ticketing.Domain.csproj" />
     <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Infrastructure\TicketFlow.Ticketing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Infrastructure\TicketFlow.Reservation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Infrastructure\TicketFlow.Payment.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Infrastructure\TicketFlow.Catalog.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

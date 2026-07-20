@@ -114,7 +114,7 @@ tags: [ticketflow, phase-12, plan, hardening, dual-write, concurrency, idempoten
 
 **Kết quả thực tế (2026-07-20):** thêm project explicit gate `tests/TicketFlow.Phase12.HardeningTests` (cố ý chưa đưa vào `TicketFlow.slnx`), không có test `Skip`. Trait `Phase12Harness` xanh **5/5** với Postgres 16 + Marten, Redis 7 và RabbitMQ 3 thật; trait `Phase12ExpectedFailure` chạy **27 case: 23 đỏ đúng blocker, 4 xanh là control case của các permutation hợp lệ**. Bảy test project regression cũ vẫn **81/81 xanh**. Counting fake dùng chung đã chứng minh barrier, timeout và trạng thái "side effect thành công nhưng mất response" cho payment/object/email. Danh sách case, lệnh chạy và promotion rule nằm tại [`docs/phase-12-hardening-baseline.md`](phase-12-hardening-baseline.md).
 
-### Commit 2 — `feat(contracts,data): expand schema v2 — operation keys, ownership, revisions, currency`
+### Commit 2 — `feat(contracts,data): expand schema v2 — operation keys, ownership, revisions, currency` ✅ DONE
 - Thêm message/request v2 và schema nullable/index trước, chưa cutover behavior:
   - checkout `IdempotencyKey`, hold quote/allocation result;
   - `Currency`, `PriceSnapshotVersion`, `AggregateVersion`, stable `CompletedAt` xuyên contracts;
@@ -125,6 +125,14 @@ tags: [ticketflow, phase-12, plan, hardening, dual-write, concurrency, idempoten
 - Consumer đọc được v1/v2; unknown/missing revision = `0`; log metric đếm traffic/message v1 để biết khi nào contract được.
 - Migration dùng expand-only, không backfill phỏng đoán owner nếu nguồn không đủ. Record không xác định owner phải vào report/manual-review, không tự gán.
 - **Verify:** migration chạy từ database phase 11 và database trắng; rollback binary cũ vẫn đọc được schema mới; contract serialization compatibility test xanh.
+
+**Kết quả thực tế (2026-07-20):** thêm `CheckoutIntentV2`, `HoldQuoteV2`, `ConfirmedAllocationV2` và các field optional cuối record cho contract đang dùng, nên payload v1 deserialize với revision/snapshot `0` và không làm caller cũ đổi chữ ký. `ticketflow.contract.v1_traffic_total` được ghi tại các consumer Ordering/Payment/Reservation/Ticketing/Search và các service đó đã đăng ký meter để Prometheus scrape.
+
+Schema chỉ expand: Reservation có `seat_allocations` (owner nullable, generation, quote/price, `xmin` concurrency) và receipt unique `(OperationType, BusinessKey)`; Payment có `payment_attempts`/`payment_refunds`; Ticket có field ownership/issuance/revocation nullable; Catalog có `OrganizerId` nullable + `xmin`; Mongo tạo unique index `purchaseHistory.UserId` lúc startup. Không có writer v2, backfill hay gán owner tự động. Nếu index Mongo gặp dữ liệu trùng, startup fail rõ để manual review thay vì chọn/gộp một record ngầm.
+
+**Điều chỉnh plan có bằng chứng:** Catalog/Payment/Ticketing đã có unique inbox/outbox trong migration trước nên không tạo lại index trùng; Reservation chưa có EF inbox/outbox transaction nên cố ý chưa thêm một index không được consumer dùng — phần này vẫn thuộc Commit 4. Phiên bản Npgsql hiện tại không có `UseXminAsConcurrencyToken`; dùng shadow `xmin`/`IsRowVersion` thay thế. EF cố sinh cột vật lý `xmin`, nhưng `xmin` là system column của PostgreSQL nên migration đã được hiệu chỉnh để không `ADD COLUMN`, tránh migration lỗi trên DB thật.
+
+**Gate đã chạy:** hardening harness xanh **10/10**, gồm JSON v1/v2 serialization, database trắng migrate lên head, database ở migration cuối trước Phase 12 upgrade lên head và query bằng tập cột v1; `TicketFlow.slnx` regression xanh **81/81**. Migrations được sinh qua design-time factory riêng, do đó EF tooling không khởi động Redis/Lambda/MinIO/Elasticsearch/RabbitMQ.
 
 ---
 

@@ -1,16 +1,20 @@
 using Elastic.Clients.Elasticsearch;
 using Scalar.AspNetCore;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Search.Api.Consumers;
 using TicketFlow.Search.Api.Endpoints;
 using TicketFlow.Search.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddTicketFlowWeb();
-builder.Services.AddTicketFlowObservability(builder.Configuration, "search");
+builder.Services.AddTicketFlowObservability(
+    builder.Configuration,
+    "search",
+    configureMetrics: m => m.AddMeter(ContractVersionMetrics.MeterName));
 builder.Services.AddOpenApi();
 builder.Services.AddSearchInfrastructure(builder.Configuration);
 

@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Reservation;
 using ApplicationReservationService = TicketFlow.Reservation.Application.Seats.ReservationService;
 
@@ -16,6 +17,7 @@ public sealed class ConfirmSeatsConsumer(ApplicationReservationService reservati
     public async Task Consume(ConsumeContext<ConfirmSeats> context)
     {
         var message = context.Message;
+        ContractVersionMetrics.RecordInbound(nameof(ConfirmSeats), message.PriceSnapshotVersion);
         var confirmedSeatIds = await reservationService.ConfirmAsync(message.EventId, message.HoldId, context.CancellationToken);
 
         if (confirmedSeatIds.Count > 0)

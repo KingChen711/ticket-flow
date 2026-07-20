@@ -9,4 +9,8 @@ public sealed record PaymentProcessed(
     Guid OrderId,
     Guid PaymentId,
     decimal Amount,
-    DateTimeOffset ProcessedAt);
+    DateTimeOffset ProcessedAt,
+    string Currency = "VND",
+    string? GatewayReference = null,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

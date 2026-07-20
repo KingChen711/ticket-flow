@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Reservation.Api.Consumers;
 using TicketFlow.Reservation.Api.Endpoints;
 using TicketFlow.Reservation.Api.Hubs;
@@ -9,7 +11,6 @@ using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,7 +28,10 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 builder.Services.AddTicketFlowWeb();
-builder.Services.AddTicketFlowObservability(builder.Configuration, "reservation");
+builder.Services.AddTicketFlowObservability(
+    builder.Configuration,
+    "reservation",
+    configureMetrics: m => m.AddMeter(ContractVersionMetrics.MeterName));
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();

@@ -8,4 +8,6 @@ namespace TicketFlow.Contracts.Messaging.Payment;
 public sealed record RefundPayment(
     Guid OrderId,
     Guid PaymentId,
-    decimal Amount);
+    decimal Amount,
+    string Currency = "VND",
+    string? OperationKey = null);

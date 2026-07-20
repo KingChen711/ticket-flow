@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Domain.Orders;
@@ -11,6 +12,7 @@ public sealed class OrderPaymentRefundedConsumer(IOrderStore store, TimeProvider
 {
     public async Task Consume(ConsumeContext<PaymentRefunded> context)
     {
+        ContractVersionMetrics.RecordInbound(nameof(PaymentRefunded), context.Message.AggregateVersion);
         var order = await store.LoadAsync(context.Message.OrderId, context.CancellationToken);
         if (order is null)
         {

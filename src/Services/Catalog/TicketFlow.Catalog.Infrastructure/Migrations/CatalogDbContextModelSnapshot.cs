@@ -259,6 +259,10 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("description");
 
+                    b.Property<Guid?>("OrganizerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("organizer_id");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -275,8 +279,17 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("venue_id");
 
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id")
                         .HasName("pk_events");
+
+                    b.HasIndex("OrganizerId")
+                        .HasDatabaseName("ix_events_organizer_id");
 
                     b.ToTable("events", "catalog");
                 });

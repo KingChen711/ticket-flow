@@ -1,4 +1,5 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Ordering.Api.Metrics;
 using TicketFlow.Ordering.Application.Abstractions;
@@ -28,6 +29,7 @@ public sealed class OrderCompletedConsumer(
 {
     public async Task Consume(ConsumeContext<OrderCompleted> context)
     {
+        ContractVersionMetrics.RecordInbound(nameof(OrderCompleted), context.Message.AggregateVersion);
         var order = await store.LoadAsync(context.Message.OrderId, context.CancellationToken);
         if (order is null)
         {

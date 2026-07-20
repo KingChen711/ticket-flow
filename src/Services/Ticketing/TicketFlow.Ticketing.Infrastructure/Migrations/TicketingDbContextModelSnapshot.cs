@@ -251,6 +251,19 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("checked_in_at");
 
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("customer_id");
+
+                    b.Property<Guid?>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("IssuanceState")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("issuance_state");
+
                     b.Property<DateTimeOffset>("IssuedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("issued_at");
@@ -271,12 +284,27 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("qr_payload");
 
+                    b.Property<string>("RevocationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("revocation_reason");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
                     b.Property<Guid>("SeatId")
                         .HasColumnType("uuid")
                         .HasColumnName("seat_id");
 
                     b.HasKey("Id")
                         .HasName("pk_tickets");
+
+                    b.HasIndex("CustomerId")
+                        .HasDatabaseName("ix_tickets_customer_id");
+
+                    b.HasIndex("EventId")
+                        .HasDatabaseName("ix_tickets_event_id");
 
                     b.HasIndex("QrPayload")
                         .IsUnique()

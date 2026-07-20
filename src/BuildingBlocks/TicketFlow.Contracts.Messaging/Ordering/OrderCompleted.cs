@@ -11,4 +11,6 @@ public sealed record OrderCompleted(
     Guid EventId,
     IReadOnlyList<Guid> SeatIds,
     IReadOnlyList<string> TicketPdfUrls,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAt,
+    long AggregateVersion = 0,
+    DateTimeOffset? OccurredAt = null);
