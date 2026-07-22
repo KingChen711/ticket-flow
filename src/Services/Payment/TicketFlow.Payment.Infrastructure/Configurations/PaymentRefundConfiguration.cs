@@ -18,8 +18,14 @@ public sealed class PaymentRefundConfiguration : IEntityTypeConfiguration<Paymen
         builder.Property(r => r.GatewayReference).HasMaxLength(200);
         builder.Property(r => r.Amount).HasColumnType("numeric(12,2)").IsRequired();
         builder.Property(r => r.Currency).HasMaxLength(3).IsRequired();
+        builder.Property(r => r.FailureReason).HasMaxLength(500);
+        builder.Property(r => r.ReconcileAttempts).IsRequired();
         builder.Property(r => r.CreatedAt).IsRequired();
         builder.HasIndex(r => r.OperationKey).IsUnique();
         builder.HasIndex(r => r.PaymentId);
+
+        // One refund per order, same claim-before-call reasoning as the attempt above.
+        builder.HasIndex(r => r.OrderId).IsUnique();
+        builder.HasIndex(r => r.State);
     }
 }

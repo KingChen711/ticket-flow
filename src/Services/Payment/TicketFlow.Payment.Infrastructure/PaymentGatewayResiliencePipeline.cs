@@ -32,6 +32,11 @@ public static class PaymentGatewayResiliencePipeline
                 MaxRetryAttempts = 3,
                 Delay = TimeSpan.FromMilliseconds(200),
                 BackoffType = DelayBackoffType.Exponential,
+                // Phase 12 Commit 6: a declined card is the provider's answer, not a fault.
+                // Retrying it wastes three more round trips on a guaranteed refusal, and — worse
+                // — feeds the circuit breaker below, so enough legitimately declined cards would
+                // open the circuit for everyone else.
+                ShouldHandle = new PredicateBuilder().Handle<Exception>(IsTransient),
             })
             .AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
@@ -39,7 +44,15 @@ public static class PaymentGatewayResiliencePipeline
                 SamplingDuration = TimeSpan.FromSeconds(10),
                 MinimumThroughput = 4,
                 BreakDuration = TimeSpan.FromSeconds(15),
+                ShouldHandle = new PredicateBuilder().Handle<Exception>(IsTransient),
             })
             .AddTimeout(TimeSpan.FromSeconds(5))
             .Build();
+
+    /// <summary>
+    /// Everything except an explicit provider refusal is treated as transient. Being wrong in
+    /// this direction costs a retry; being wrong the other way (treating a timeout as a decline)
+    /// cancels an order that may already be paid.
+    /// </summary>
+    private static bool IsTransient(Exception exception) => exception is not GatewayDeclinedException;
 }

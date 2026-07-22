@@ -17,8 +17,16 @@ public sealed class PaymentAttemptConfiguration : IEntityTypeConfiguration<Payme
         builder.Property(a => a.GatewayReference).HasMaxLength(200);
         builder.Property(a => a.Amount).HasColumnType("numeric(12,2)").IsRequired();
         builder.Property(a => a.Currency).HasMaxLength(3).IsRequired();
+        builder.Property(a => a.FailureReason).HasMaxLength(500);
+        builder.Property(a => a.ReconcileAttempts).IsRequired();
         builder.Property(a => a.CreatedAt).IsRequired();
         builder.HasIndex(a => a.OperationKey).IsUnique();
-        builder.HasIndex(a => a.OrderId);
+
+        // Commit 6 makes this UNIQUE. It is the actual double-charge guard: the attempt row is
+        // committed before the provider is called, so two concurrent consumers cannot both get
+        // past the claim — the loser sees a unique violation and replays the winner's outcome
+        // instead of charging again.
+        builder.HasIndex(a => a.OrderId).IsUnique();
+        builder.HasIndex(a => a.State);
     }
 }

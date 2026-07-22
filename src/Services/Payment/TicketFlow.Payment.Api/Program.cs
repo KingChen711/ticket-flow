@@ -5,7 +5,9 @@ using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
 using TicketFlow.Observability;
 using TicketFlow.Payment.Api.Consumers;
+using TicketFlow.Payment.Api.Services;
 using TicketFlow.Payment.Application;
+using TicketFlow.Payment.Application.Payments;
 using TicketFlow.Payment.Infrastructure;
 using TicketFlow.Web;
 
@@ -18,10 +20,17 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "payment",
-    configureMetrics: m => m.AddMeter("Polly").AddMeter(ContractVersionMetrics.MeterName));
+    configureMetrics: m => m
+        .AddMeter("Polly")
+        .AddMeter(ContractVersionMetrics.MeterName)
+        // Commit 6: an ambiguous charge is money that may already have moved — it has to be a
+        // number on a dashboard, not just a log line.
+        .AddMeter(PaymentOperationMetrics.MeterName));
 builder.Services.AddOpenApi();
 builder.Services.AddPaymentApplication();
 builder.Services.AddPaymentInfrastructure(builder.Configuration);
+builder.Services.AddSingleton(new PaymentReconciliationOptions());
+builder.Services.AddHostedService<PaymentReconciliationWorker>();
 builder.Services.AddTicketFlowMessaging(
     builder.Configuration,
     "payment",

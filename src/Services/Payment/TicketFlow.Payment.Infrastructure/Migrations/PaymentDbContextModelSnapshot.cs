@@ -265,10 +265,19 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .HasColumnType("character varying(3)")
                         .HasColumnName("currency");
 
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("failure_reason");
+
                     b.Property<string>("GatewayReference")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
                         .HasColumnName("gateway_reference");
+
+                    b.Property<DateTimeOffset?>("LastReconciledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_reconciled_at");
 
                     b.Property<string>("OperationKey")
                         .IsRequired()
@@ -279,6 +288,10 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uuid")
                         .HasColumnName("order_id");
+
+                    b.Property<int>("ReconcileAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("reconcile_attempts");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -294,7 +307,11 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .HasDatabaseName("ix_payment_attempts_operation_key");
 
                     b.HasIndex("OrderId")
+                        .IsUnique()
                         .HasDatabaseName("ix_payment_attempts_order_id");
+
+                    b.HasIndex("State")
+                        .HasDatabaseName("ix_payment_attempts_state");
 
                     b.ToTable("payment_attempts", "payment");
                 });
@@ -323,10 +340,19 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .HasColumnType("character varying(3)")
                         .HasColumnName("currency");
 
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("failure_reason");
+
                     b.Property<string>("GatewayReference")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
                         .HasColumnName("gateway_reference");
+
+                    b.Property<DateTimeOffset?>("LastReconciledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_reconciled_at");
 
                     b.Property<string>("OperationKey")
                         .IsRequired()
@@ -342,6 +368,10 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("payment_id");
 
+                    b.Property<int>("ReconcileAttempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("reconcile_attempts");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -355,8 +385,15 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_payment_refunds_operation_key");
 
+                    b.HasIndex("OrderId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_payment_refunds_order_id");
+
                     b.HasIndex("PaymentId")
                         .HasDatabaseName("ix_payment_refunds_payment_id");
+
+                    b.HasIndex("State")
+                        .HasDatabaseName("ix_payment_refunds_state");
 
                     b.ToTable("payment_refunds", "payment");
                 });

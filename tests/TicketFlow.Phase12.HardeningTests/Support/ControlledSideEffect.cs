@@ -77,17 +77,64 @@ public sealed class AsyncRendezvous(int participants)
     }
 }
 
+/// <summary>
+/// Counting provider stand-in. The ledger models a real provider's idempotency store: a repeat of
+/// the same key returns the original charge instead of creating a second one, so a test can prove
+/// the difference between "we retried safely" and "we charged twice".
+/// </summary>
 public sealed class ControlledPaymentGatewayFake(ControlledSideEffect<GatewayChargeResult> sideEffect)
     : IPaymentGatewayClient
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, GatewayChargeResult> _ledger = new();
+
     public ControlledSideEffect<GatewayChargeResult> SideEffect { get; } = sideEffect;
 
-    public Task<GatewayChargeResult> ChargeAsync(
-        Guid orderId,
-        decimal amount,
-        string paymentMethod,
+    /// <summary>Charges the provider actually recorded, even when the caller never saw the answer.</summary>
+    public int LedgerEntries => _ledger.Count;
+
+    public async Task<GatewayChargeResult> ChargeAsync(
+        GatewayChargeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (_ledger.TryGetValue(request.IdempotencyKey, out var existing))
+            return existing;
+
+        try
+        {
+            var result = await SideEffect.InvokeAsync(cancellationToken);
+            _ledger[request.IdempotencyKey] = result;
+            return result;
+        }
+        catch (AmbiguousSideEffectException)
+        {
+            // The provider committed the charge; only the response was lost. Recording it here is
+            // what lets a later lookup discover the truth.
+            _ledger[request.IdempotencyKey] = GatewayChargeResult.Authorized($"gw-{request.IdempotencyKey}");
+            throw;
+        }
+    }
+
+    public Task<GatewayChargeResult?> LookupChargeAsync(
+        string idempotencyKey,
         CancellationToken cancellationToken = default) =>
-        SideEffect.InvokeAsync(cancellationToken);
+        Task.FromResult(_ledger.GetValueOrDefault(idempotencyKey));
+
+    public async Task<GatewayChargeResult> RefundAsync(
+        GatewayRefundRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (_ledger.TryGetValue(request.IdempotencyKey, out var existing))
+            return existing;
+
+        var result = await SideEffect.InvokeAsync(cancellationToken);
+        _ledger[request.IdempotencyKey] = result;
+        return result;
+    }
+
+    public Task<GatewayChargeResult?> LookupRefundAsync(
+        string idempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(_ledger.GetValueOrDefault(idempotencyKey));
 }
 
 public sealed class ControlledTicketRendererFake(ControlledSideEffect<string> sideEffect)

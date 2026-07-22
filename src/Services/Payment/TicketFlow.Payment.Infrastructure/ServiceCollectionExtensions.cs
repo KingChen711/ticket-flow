@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
             options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
 
         services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddScoped<IPaymentAttemptRepository, PaymentAttemptRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 
         // Singleton — a ResiliencePipeline is immutable and thread-safe once built; building it
