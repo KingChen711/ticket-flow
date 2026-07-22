@@ -43,7 +43,8 @@ public sealed class PlaceOrderV2CommandHandler(
         if (quote.OwnerUserId != command.CustomerId || quote.ExpiresAt <= now)
             throw new InvalidOperationException("Hold quote is not valid for this customer.");
 
-        if (quote.SeatIds.Count == 0 || quote.Amount <= 0 || quote.PriceSnapshotVersion <= 0)
+        if (quote.SeatIds.Count == 0 || quote.Amount <= 0 ||
+            quote.PriceSnapshotVersion <= 0 || quote.AllocationGeneration <= 0)
             throw new InvalidOperationException("Hold quote is incomplete and cannot be used for checkout.");
 
         var total = Money.Create(quote.Amount, quote.Currency);
@@ -66,7 +67,8 @@ public sealed class PlaceOrderV2CommandHandler(
             total.Currency,
             quote.PriceSnapshotVersion,
             command.IdempotencyKey,
-            quote.HoldId.ToString()), cancellationToken);
+            quote.HoldId.ToString(),
+            quote.AllocationGeneration), cancellationToken);
 
         return OrderResponseMapper.Map(Order.Load([placed]));
     }

@@ -24,6 +24,9 @@ public sealed class PurchaseState : SagaStateMachineInstance
     public decimal Amount { get; set; }
     public string Currency { get; set; } = null!;
     public long PriceSnapshotVersion { get; set; }
+    /// <summary>Allocation ownership epoch for this hold/exact seat set; not an event-stream revision.</summary>
+    public long AllocationGeneration { get; set; }
+    public string? AllocationReference { get; set; }
     public string IdempotencyKey { get; set; } = null!;
     public string PaymentMethod { get; set; } = null!;
     public string CustomerName { get; set; } = null!;

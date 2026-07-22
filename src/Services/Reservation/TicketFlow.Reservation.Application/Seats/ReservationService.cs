@@ -1,4 +1,5 @@
 using TicketFlow.Reservation.Application.Abstractions;
+using TicketFlow.Reservation.Domain.Allocations;
 using TicketFlow.Reservation.Domain.Holds;
 using TicketFlow.Reservation.Domain.Seats;
 
@@ -9,26 +10,29 @@ public sealed class ReservationService(
     ISeatHoldStore holdStore,
     IEventSalePolicyRepository salePolicyRepository,
     IHoldQuoteRepository holdQuoteRepository,
+    ISeatAllocationRepository allocationRepository,
+    IReservationOperationReceiptRepository receiptRepository,
+    IAllocationGenerationSource generationSource,
     IUnitOfWork unitOfWork,
-    ISeatMapNotifier notifier,
+    ISeatAvailabilityEventPublisher availabilityEventPublisher,
     TimeProvider timeProvider,
     ReservationOptions options)
 {
     private readonly TimeSpan _holdTtl = TimeSpan.FromMinutes(options.HoldTtlMinutes);
 
-    public async Task<HoldSeatsResult> HoldAsync(HoldSeatsRequest request, CancellationToken cancellationToken = default)
+    public async Task<HoldSeatsResult> HoldAsync(
+        HoldSeatsRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (request.SeatIds.Count == 0)
-            throw new ArgumentException("At least one seat id is required.", nameof(request));
+        ValidateHoldRequest(request);
 
-        if (request.OwnerUserId == Guid.Empty)
-            throw new ArgumentException("Hold owner is required.", nameof(request));
-
-        if (request.SeatIds.Count > 20)
-            throw new ArgumentException("A hold cannot contain more than 20 seats.", nameof(request));
-
-        if (request.SeatIds.Distinct().Count() != request.SeatIds.Count)
-            throw new ArgumentException("Seat ids must be unique.", nameof(request));
+        // Concurrent holds share this lock, while a Catalog lifecycle update takes it
+        // exclusively. A cancellation therefore cannot miss a quote inserted from a stale
+        // Published snapshot between its active-quote scan and commit.
+        await using var salePolicyLock = await receiptRepository.AcquireSharedLockAsync(
+            "sale-policy",
+            request.EventId.ToString("N"),
+            cancellationToken);
 
         var now = timeProvider.GetUtcNow();
         var policy = await salePolicyRepository.GetAsync(request.EventId, cancellationToken)
@@ -41,26 +45,67 @@ public sealed class ReservationService(
         if (seats.Count != request.SeatIds.Count)
             throw new InvalidOperationException("One or more seats do not belong to this event.");
 
+        var durableAllocations = await allocationRepository.GetBySeatIdsAsync(
+            request.EventId,
+            request.SeatIds,
+            cancellationToken);
+        var durablyUnavailable = durableAllocations
+            .Where(allocation => allocation.IsActiveAt(now))
+            .Select(allocation => allocation.SeatId)
+            .ToHashSet();
+        durablyUnavailable.UnionWith(
+            seats.Where(seat => seat.Status == SeatStatus.Sold).Select(seat => seat.Id));
+
+        var activeQuotes = await holdQuoteRepository.GetActiveOverlappingAsync(
+            request.EventId,
+            request.SeatIds,
+            now,
+            cancellationToken);
+        foreach (var activeQuote in activeQuotes)
+        {
+            foreach (var seatId in activeQuote.SeatIds)
+            {
+                if (request.SeatIds.Contains(seatId))
+                    durablyUnavailable.Add(seatId);
+            }
+        }
+
+        if (durablyUnavailable.Count > 0)
+            return HoldSeatsResult.Unavailable(durablyUnavailable.Order().ToArray());
+
         var pricesBySection = policy.PriceTiers.ToDictionary(tier => tier.SectionId);
         var prices = seats.Select(seat => pricesBySection.TryGetValue(seat.SectionId, out var price)
                 ? price
-                : throw new InvalidOperationException($"Section '{seat.SectionId}' has no price in snapshot {policy.PriceSnapshotVersion}."))
+                : throw new InvalidOperationException(
+                    $"Section '{seat.SectionId}' has no price in snapshot {policy.PriceSnapshotVersion}."))
             .ToList();
 
-        var currencies = prices.Select(price => price.Currency).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var currencies = prices.Select(price => price.Currency)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (currencies.Count != 1)
             throw new InvalidOperationException("A hold cannot span price tiers with different currencies.");
 
-        var expiresAt = now.Add(_holdTtl) < policy.SaleEndsAt ? now.Add(_holdTtl) : policy.SaleEndsAt;
+        var expiresAt = now.Add(_holdTtl) < policy.SaleEndsAt
+            ? now.Add(_holdTtl)
+            : policy.SaleEndsAt;
         var ttl = expiresAt - now;
         if (ttl <= TimeSpan.Zero)
             throw new InvalidOperationException($"Event '{request.EventId}' is no longer saleable.");
 
         var holdId = Guid.NewGuid();
-        var unavailable = await holdStore.TryHoldAsync(request.EventId, request.SeatIds, holdId, ttl, cancellationToken);
+        var generation = await generationSource.NextAsync(cancellationToken);
+        var cacheRequest = new HoldStoreRequest(
+            request.EventId,
+            request.SeatIds,
+            holdId,
+            request.OwnerUserId,
+            generation,
+            ttl);
+        var holdResult = await holdStore.TryHoldAsync(cacheRequest, cancellationToken);
 
-        if (unavailable.Count > 0)
-            return HoldSeatsResult.Unavailable(unavailable);
+        if (holdResult.Outcome != HoldStoreOutcome.Held)
+            return HoldSeatsResult.Unavailable(holdResult.UnavailableSeatIds);
 
         var quote = HoldQuote.Create(
             holdId,
@@ -70,21 +115,37 @@ public sealed class ReservationService(
             prices.Sum(price => price.Amount),
             currencies[0],
             policy.PriceSnapshotVersion,
+            generation,
             now,
             expiresAt);
 
-        holdQuoteRepository.Add(quote);
         try
         {
+            // An active quote is the durable Held authority. SeatAllocation rows are deliberately
+            // not created until ConfirmSeats consumes this quote.
+            holdQuoteRepository.Add(quote);
+            await availabilityEventPublisher.PublishAsync(
+                request.EventId,
+                request.SeatIds,
+                "Held",
+                generation,
+                now,
+                cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
         catch
         {
-            await holdStore.ReleaseAsync(request.EventId, holdId, CancellationToken.None);
+            await holdStore.ReleaseAsync(
+                new ReleaseHoldStoreRequest(
+                    request.EventId,
+                    holdId,
+                    request.OwnerUserId,
+                    generation,
+                    request.SeatIds),
+                CancellationToken.None);
             throw;
         }
 
-        await notifier.SeatsUpdatedAsync(request.EventId, request.SeatIds, "Held", cancellationToken);
         return HoldSeatsResult.Succeeded(MapQuote(quote));
     }
 
@@ -104,55 +165,338 @@ public sealed class ReservationService(
         return MapQuote(quote);
     }
 
-    private static HoldQuoteResponse MapQuote(HoldQuote quote) => new(
-        quote.Id,
-        quote.EventId,
-        quote.OwnerUserId,
-        quote.SeatIds,
-        quote.Amount,
-        quote.Currency,
-        quote.PriceSnapshotVersion,
-        quote.ExpiresAt);
-
-    public async Task<bool> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
+    public async Task<ConfirmSeatAllocationResult> ConfirmAsync(
+        ConfirmSeatAllocationRequest request,
+        CancellationToken cancellationToken = default)
     {
-        var releasedSeatIds = await holdStore.ReleaseAsync(eventId, holdId, cancellationToken);
-        if (releasedSeatIds.Count == 0)
-            return false;
+        ValidateConfirmRequest(request);
 
-        await notifier.SeatsUpdatedAsync(eventId, releasedSeatIds, "Available", cancellationToken);
-        return true;
-    }
+        var businessKey = ReservationOperationReceipt.ConfirmBusinessKey(
+            request.OperationKey,
+            request.OrderId,
+            request.HoldId);
+        var fingerprint = ConfirmRequestFingerprint.Create(request);
 
-    /// <summary>
-    /// Redis confirm first (moves the held seats into the sold set and tells us which seats),
-    /// then persist Sold to Postgres. These two are NOT atomic across stores — that gap is the
-    /// Saga/Outbox concern of Phase 4/5. Safe here because only the exclusive holder reaches this.
-    /// Returns the actual confirmed seat ids (empty means the hold was no longer valid) rather
-    /// than a bool — the PurchaseSaga's ConfirmSeatsConsumer (Commit 6) needs the real list for
-    /// SeatsConfirmed, not just success/failure; that data already existed here, just discarded.
-    /// </summary>
-    public async Task<IReadOnlyList<Guid>> ConfirmAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default)
-    {
-        var confirmedSeatIds = await holdStore.ConfirmAsync(eventId, holdId, cancellationToken);
-        if (confirmedSeatIds.Count == 0)
-            return confirmedSeatIds;
+        // Always acquire order before hold. The order lock prevents two different holds from
+        // mutating Redis for the same order, while the hold lock serializes competing operations
+        // against one quote. MassTransit's EF outbox supplies the ambient transaction in production.
+        await using var orderLock = await receiptRepository.AcquireLockAsync(
+            "confirm-order",
+            request.OrderId.ToString("N"),
+            cancellationToken);
+        await using var authorityLock = await receiptRepository.AcquireLockAsync(
+            "confirm-hold",
+            request.HoldId.ToString("N"),
+            cancellationToken);
 
-        var seats = await seatRepository.GetByIdsAsync(eventId, confirmedSeatIds, cancellationToken);
-        foreach (var seat in seats)
+        var receipt = await receiptRepository.GetAsync(
+            ReservationOperationReceipt.OperationTypes.ConfirmSeats,
+            businessKey,
+            cancellationToken);
+
+        if (receipt is null)
+        {
+            receipt = ReservationOperationReceipt.StartConfirm(
+                businessKey,
+                fingerprint,
+                timeProvider.GetUtcNow());
+            receiptRepository.Add(receipt);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        if (!receipt.IsPending || !receipt.HasFingerprint(fingerprint))
+        {
+            try
+            {
+                return MapReceipt(receipt.ReplayConfirm(fingerprint));
+            }
+            catch (ReservationOperationFingerprintMismatchException)
+            {
+                return IdempotencyConflict(request, receipt.Id);
+            }
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var existingOrderQuote = await holdQuoteRepository.GetByOrderAsync(
+            request.OrderId,
+            cancellationToken);
+        if (existingOrderQuote is not null && existingOrderQuote.Id != request.HoldId)
+        {
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "OrderAlreadyAllocated",
+                "The order is already mapped to a different authoritative hold quote.",
+                cancellationToken);
+        }
+
+        var quote = await holdQuoteRepository.GetAsync(request.HoldId, cancellationToken);
+        if (quote is null)
+        {
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "HoldNotFound",
+                "The authoritative hold quote was not found.",
+                cancellationToken);
+        }
+
+        var authoritativeSeatIds = quote.SeatIds.Order().ToArray();
+        if (!MatchesAuthority(quote, request, authoritativeSeatIds))
+        {
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "AuthorityMismatch",
+                "Confirm payload does not match the authoritative hold quote.",
+                cancellationToken);
+        }
+
+        if (quote.State == HoldQuoteState.Consumed)
+        {
+            if (quote.OrderId != request.OrderId)
+            {
+                return await CompleteConfirmFailureAsync(
+                    receipt,
+                    request,
+                    fingerprint,
+                    now,
+                    "HoldAlreadyConsumed",
+                    "The hold quote was already consumed by another order.",
+                    cancellationToken);
+            }
+
+            var consumedAllocations = await allocationRepository.GetByHoldAsync(quote.Id, cancellationToken);
+            if (!IsExactConfirmedAllocationSet(consumedAllocations, quote, request.OrderId, authoritativeSeatIds))
+                throw new InvalidOperationException($"Consumed hold quote '{quote.Id}' has an ambiguous allocation set.");
+
+            return await CompleteConfirmSuccessAsync(
+                receipt,
+                request,
+                quote,
+                authoritativeSeatIds,
+                fingerprint,
+                now,
+                publishAvailability: false,
+                cancellationToken);
+        }
+
+        if (quote.State is HoldQuoteState.Invalidated or HoldQuoteState.Expired)
+        {
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                quote.State == HoldQuoteState.Expired ? "HoldExpired" : "HoldInvalidated",
+                $"The hold quote is {quote.State.ToString().ToLowerInvariant()}.",
+                cancellationToken);
+        }
+
+        if (quote.ExpiresAt <= now)
+        {
+            quote.Expire(now);
+            await holdStore.ReleaseAsync(ToReleaseRequest(quote), cancellationToken);
+            await availabilityEventPublisher.PublishAsync(
+                quote.EventId,
+                authoritativeSeatIds,
+                "Available",
+                quote.Generation,
+                now,
+                cancellationToken);
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "HoldExpired",
+                "The hold expired before confirmation.",
+                cancellationToken);
+        }
+
+        var policy = await salePolicyRepository.GetAsync(quote.EventId, cancellationToken);
+        if (policy is null || !string.Equals(policy.Status, "Published", StringComparison.OrdinalIgnoreCase))
+        {
+            await holdStore.ReleaseAsync(ToReleaseRequest(quote), cancellationToken);
+            quote.Invalidate(now);
+            await availabilityEventPublisher.PublishAsync(
+                quote.EventId,
+                authoritativeSeatIds,
+                "Available",
+                quote.Generation,
+                now,
+                cancellationToken);
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "EventNotSaleable",
+                "The event is no longer saleable.",
+                cancellationToken);
+        }
+
+        var existingAllocations = await allocationRepository.GetBySeatIdsAsync(
+            quote.EventId,
+            authoritativeSeatIds,
+            cancellationToken);
+        if (HasAllocationConflict(existingAllocations, quote, request.OrderId, now))
+        {
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                "AllocationAuthorityConflict",
+                "A seat already has a conflicting durable allocation.",
+                cancellationToken);
+        }
+
+        var cacheRequest = new ConfirmHoldStoreRequest(
+            quote.EventId,
+            quote.Id,
+            request.OrderId,
+            quote.OwnerUserId,
+            quote.Generation,
+            authoritativeSeatIds);
+        var cacheResult = await holdStore.ConfirmAsync(cacheRequest, cancellationToken);
+
+        if (cacheResult.Outcome == ConfirmHoldStoreOutcome.MissingOrExpired)
+        {
+            // Redis is recoverable cache: restore Held from the still-active quote, then retry
+            // the exact owner/generation/seat-set CAS.
+            foreach (var seatId in authoritativeSeatIds)
+            {
+                await holdStore.RestoreAsync(
+                    new RestoreSeatAllocationRequest(
+                        quote.EventId,
+                        new CachedSeatAllocation(
+                            seatId,
+                            quote.Id,
+                            quote.OwnerUserId,
+                            quote.Generation,
+                            CachedAllocationState.Held,
+                            null,
+                            quote.ExpiresAt)),
+                    cancellationToken);
+            }
+
+            cacheResult = await holdStore.ConfirmAsync(cacheRequest, cancellationToken);
+        }
+
+        if (!cacheResult.IsSuccessful)
+        {
+            var code = cacheResult.Outcome == ConfirmHoldStoreOutcome.Conflict
+                ? "CacheAuthorityConflict"
+                : "HoldMissingOrExpired";
+            return await CompleteConfirmFailureAsync(
+                receipt,
+                request,
+                fingerprint,
+                now,
+                code,
+                cacheResult.Reason ?? "The cache could not confirm the authoritative hold.",
+                cancellationToken);
+        }
+
+        if (!cacheResult.SeatIds.Order().SequenceEqual(authoritativeSeatIds))
+            throw new InvalidOperationException("Cache confirmation returned a non-authoritative seat set.");
+
+        var seats = await seatRepository.GetByIdsAsync(quote.EventId, authoritativeSeatIds, cancellationToken);
+        if (seats.Count != authoritativeSeatIds.Length)
+            throw new InvalidOperationException("One or more allocated seats are missing from inventory.");
+
+        var allocationsBySeat = existingAllocations.ToDictionary(allocation => allocation.SeatId);
+        var newAllocations = new List<SeatAllocation>();
+        foreach (var seatId in authoritativeSeatIds)
+        {
+            if (allocationsBySeat.TryGetValue(seatId, out var allocation))
+            {
+                allocation.ReallocateConfirmed(
+                    quote.Id,
+                    request.OrderId,
+                    quote.OwnerUserId,
+                    quote.Generation,
+                    quote.PriceSnapshotVersion,
+                    quote.Amount,
+                    quote.Currency,
+                    now);
+            }
+            else
+            {
+                newAllocations.Add(SeatAllocation.CreateConfirmed(
+                    seatId,
+                    quote.EventId,
+                    quote.Id,
+                    request.OrderId,
+                    quote.OwnerUserId,
+                    quote.Generation,
+                    quote.PriceSnapshotVersion,
+                    quote.Amount,
+                    quote.Currency,
+                    now));
+            }
+        }
+
+        allocationRepository.AddRange(newAllocations);
+        foreach (var seat in seats.Where(seat => seat.Status != SeatStatus.Sold))
             seat.MarkSold();
 
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-        await notifier.SeatsUpdatedAsync(eventId, confirmedSeatIds, "Sold", cancellationToken);
-        return confirmedSeatIds;
+        quote.Consume(request.OrderId, now);
+        return await CompleteConfirmSuccessAsync(
+            receipt,
+            request,
+            quote,
+            authoritativeSeatIds,
+            fingerprint,
+            now,
+            publishAvailability: true,
+            cancellationToken);
     }
 
-    /// <summary>
-    /// Compensation (Commit 9) — reverses a CONFIRMED sale, unlike ReleaseAsync (which only ever
-    /// releases an active hold, see Seat.MarkAvailable's doc comment for why they're different).
-    /// Idempotent: seats already Available are silently skipped, not an error.
-    /// </summary>
-    public async Task UnsellAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
+    public async Task<bool> ReleaseOwnedHoldAsync(
+        Guid holdId,
+        Guid ownerUserId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var authorityLock = await receiptRepository.AcquireLockAsync(
+            "confirm-hold",
+            holdId.ToString("N"),
+            cancellationToken);
+        var quote = await holdQuoteRepository.GetAsync(holdId, cancellationToken);
+        if (quote is null || quote.OwnerUserId != ownerUserId)
+            return false;
+
+        return await ReleaseQuoteAsync(quote, cancellationToken);
+    }
+
+    /// <summary>Trusted internal release path. HTTP callers must use ReleaseOwnedHoldAsync.</summary>
+    public async Task<bool> ReleaseAsync(
+        Guid eventId,
+        Guid holdId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var authorityLock = await receiptRepository.AcquireLockAsync(
+            "confirm-hold",
+            holdId.ToString("N"),
+            cancellationToken);
+        var quote = await holdQuoteRepository.GetAsync(holdId, cancellationToken);
+        if (quote is null || quote.EventId != eventId)
+            return false;
+
+        return await ReleaseQuoteAsync(quote, cancellationToken);
+    }
+
+    public async Task UnsellAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        CancellationToken cancellationToken = default)
     {
         if (seatIds.Count == 0)
             return;
@@ -166,15 +510,22 @@ public sealed class ReservationService(
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<EventAvailabilityResponse> GetAvailabilityAsync(Guid eventId, CancellationToken cancellationToken = default)
+    public async Task<EventAvailabilityResponse> GetAvailabilityAsync(
+        Guid eventId,
+        CancellationToken cancellationToken = default)
     {
         var seats = await seatRepository.GetByEventAsync(eventId, cancellationToken);
-        var liveStatuses = await holdStore.GetLiveStatusesAsync(eventId, seats.Select(seat => seat.Id).ToList(), cancellationToken);
+        var liveStatuses = await holdStore.GetLiveStatusesAsync(
+            eventId,
+            seats.Select(seat => seat.Id).ToList(),
+            cancellationToken);
 
         var dtos = seats
             .Select(seat =>
             {
-                var status = liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
+                var status = seat.Status == SeatStatus.Sold
+                    ? SeatStatus.Sold
+                    : liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
                 return new SeatDto(seat.Id, seat.SectionId, seat.Label, status.ToString());
             })
             .ToList();
@@ -182,30 +533,264 @@ public sealed class ReservationService(
         return new EventAvailabilityResponse(eventId, dtos);
     }
 
-    /// <summary>
-    /// Used by the gRPC endpoint (Commit 8) where the caller (ordering) supplies seat ids we
-    /// haven't validated yet — unlike GetAvailabilityAsync, which only ever asks Redis about
-    /// seat ids it already read from Postgres, this must treat any id NOT found in Postgres as
-    /// unavailable too, or a made-up seat id would come back as Available by default.
-    /// </summary>
-    public async Task<CheckAvailabilityResult> CheckAvailabilityAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
+    public async Task<CheckAvailabilityResult> CheckAvailabilityAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        CancellationToken cancellationToken = default)
     {
         if (seatIds.Count == 0)
             return new CheckAvailabilityResult(true, []);
 
         var knownSeats = await seatRepository.GetByIdsAsync(eventId, seatIds, cancellationToken);
         var knownIds = knownSeats.Select(seat => seat.Id).ToHashSet();
-
         var unavailable = seatIds.Where(id => !knownIds.Contains(id)).ToList();
 
         var liveStatuses = await holdStore.GetLiveStatusesAsync(eventId, seatIds, cancellationToken);
         foreach (var seat in knownSeats)
         {
-            var status = liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
+            var status = seat.Status == SeatStatus.Sold
+                ? SeatStatus.Sold
+                : liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
             if (status != SeatStatus.Available)
                 unavailable.Add(seat.Id);
         }
 
         return new CheckAvailabilityResult(unavailable.Count == 0, unavailable);
+    }
+
+    private async Task<bool> ReleaseQuoteAsync(
+        HoldQuote quote,
+        CancellationToken cancellationToken)
+    {
+        if (quote.State is HoldQuoteState.Invalidated or HoldQuoteState.Expired)
+            return true;
+
+        if (quote.State == HoldQuoteState.Consumed)
+            return false;
+
+        var now = timeProvider.GetUtcNow();
+        var releaseResult = await holdStore.ReleaseAsync(ToReleaseRequest(quote), cancellationToken);
+        if (!releaseResult.IsSuccessful)
+            throw new InvalidOperationException(
+                $"Cached hold release conflicted with durable authority: {releaseResult.Reason ?? "unknown conflict"}.");
+
+        if (quote.ExpiresAt <= now)
+            quote.Expire(now);
+        else
+            quote.Invalidate(now);
+
+        await availabilityEventPublisher.PublishAsync(
+            quote.EventId,
+            quote.SeatIds,
+            "Available",
+            quote.Generation,
+            now,
+            cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    private async Task<ConfirmSeatAllocationResult> CompleteConfirmSuccessAsync(
+        ReservationOperationReceipt receipt,
+        ConfirmSeatAllocationRequest request,
+        HoldQuote quote,
+        IReadOnlyList<Guid> seatIds,
+        string fingerprint,
+        DateTimeOffset now,
+        bool publishAvailability,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = new ConfirmSeatsReceiptSnapshot(
+            true,
+            request.OrderId,
+            quote.EventId,
+            quote.Id,
+            quote.OwnerUserId,
+            quote.Generation,
+            seatIds,
+            Guid.Empty,
+            quote.PriceSnapshotVersion,
+            quote.Amount,
+            quote.Currency,
+            now);
+        receipt.CompletePendingConfirm(fingerprint, snapshot, now);
+
+        if (publishAvailability)
+        {
+            await availabilityEventPublisher.PublishAsync(
+                quote.EventId,
+                seatIds,
+                "Sold",
+                quote.Generation,
+                now,
+                cancellationToken);
+        }
+
+        // Allocation rows, quote.Consume, the exact receipt and the bus-outbox message are all
+        // flushed by this same SaveChanges call/ambient EF transaction.
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapReceipt(receipt.ReplayConfirm(fingerprint));
+    }
+
+    private async Task<ConfirmSeatAllocationResult> CompleteConfirmFailureAsync(
+        ReservationOperationReceipt receipt,
+        ConfirmSeatAllocationRequest request,
+        string fingerprint,
+        DateTimeOffset now,
+        string failureCode,
+        string failureReason,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = new ConfirmSeatsReceiptSnapshot(
+            false,
+            request.OrderId,
+            request.EventId,
+            request.HoldId,
+            request.OwnerUserId,
+            request.Generation,
+            request.SeatIds.Order().ToArray(),
+            Guid.Empty,
+            request.PriceSnapshotVersion,
+            request.Amount,
+            request.Currency.ToUpperInvariant(),
+            now,
+            failureCode,
+            failureReason);
+        receipt.CompletePendingConfirm(fingerprint, snapshot, now);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapReceipt(receipt.ReplayConfirm(fingerprint));
+    }
+
+    private static bool MatchesAuthority(
+        HoldQuote quote,
+        ConfirmSeatAllocationRequest request,
+        IReadOnlyList<Guid> authoritativeSeatIds) =>
+        quote.EventId == request.EventId &&
+        quote.OwnerUserId == request.OwnerUserId &&
+        authoritativeSeatIds.SequenceEqual(request.SeatIds.Order()) &&
+        quote.PriceSnapshotVersion == request.PriceSnapshotVersion &&
+        quote.Amount == request.Amount &&
+        string.Equals(quote.Currency, request.Currency, StringComparison.OrdinalIgnoreCase) &&
+        quote.Generation == request.Generation;
+
+    private static bool HasAllocationConflict(
+        IReadOnlyList<SeatAllocation> allocations,
+        HoldQuote quote,
+        Guid orderId,
+        DateTimeOffset now) =>
+        allocations.Any(allocation =>
+            allocation.State == SeatAllocationState.Confirmed &&
+            (allocation.HoldId != quote.Id ||
+             allocation.OrderId != orderId ||
+             allocation.OwnerUserId != quote.OwnerUserId ||
+             allocation.Generation != quote.Generation) ||
+            allocation.State == SeatAllocationState.Held && allocation.ExpiresAt > now &&
+            (allocation.HoldId != quote.Id ||
+             allocation.OwnerUserId != quote.OwnerUserId ||
+             allocation.Generation != quote.Generation) ||
+            allocation.State is SeatAllocationState.Released or SeatAllocationState.Expired &&
+            allocation.Generation >= quote.Generation);
+
+    private static bool IsExactConfirmedAllocationSet(
+        IReadOnlyList<SeatAllocation> allocations,
+        HoldQuote quote,
+        Guid orderId,
+        IReadOnlyList<Guid> authoritativeSeatIds)
+    {
+        if (allocations.Count != authoritativeSeatIds.Count)
+            return false;
+
+        var bySeat = allocations.ToDictionary(allocation => allocation.SeatId);
+        return authoritativeSeatIds.All(seatId =>
+            bySeat.TryGetValue(seatId, out var allocation) &&
+            allocation.EventId == quote.EventId &&
+            allocation.HoldId == quote.Id &&
+            allocation.OwnerUserId == quote.OwnerUserId &&
+            allocation.OrderId == orderId &&
+            allocation.Generation == quote.Generation &&
+            allocation.State == SeatAllocationState.Confirmed);
+    }
+
+    private static ReleaseHoldStoreRequest ToReleaseRequest(HoldQuote quote) => new(
+        quote.EventId,
+        quote.Id,
+        quote.OwnerUserId,
+        quote.Generation,
+        quote.SeatIds);
+
+    private static HoldQuoteResponse MapQuote(HoldQuote quote) => new(
+        quote.Id,
+        quote.EventId,
+        quote.OwnerUserId,
+        quote.SeatIds,
+        quote.Amount,
+        quote.Currency,
+        quote.PriceSnapshotVersion,
+        quote.Generation,
+        quote.ExpiresAt);
+
+    private static ConfirmSeatAllocationResult MapReceipt(ConfirmSeatsReceiptSnapshot snapshot) => new(
+        snapshot.Succeeded,
+        snapshot.OrderId,
+        snapshot.EventId,
+        snapshot.HoldId,
+        snapshot.OwnerUserId,
+        snapshot.Generation,
+        snapshot.SeatIds,
+        snapshot.AllocationReference,
+        snapshot.PriceSnapshotVersion,
+        snapshot.Amount,
+        snapshot.Currency,
+        snapshot.DecidedAt,
+        snapshot.FailureCode,
+        snapshot.FailureReason);
+
+    private ConfirmSeatAllocationResult IdempotencyConflict(
+        ConfirmSeatAllocationRequest request,
+        Guid receiptId) => new(
+        false,
+        request.OrderId,
+        request.EventId,
+        request.HoldId,
+        request.OwnerUserId,
+        request.Generation,
+        request.SeatIds.Order().ToArray(),
+        receiptId,
+        request.PriceSnapshotVersion,
+        request.Amount,
+        request.Currency.ToUpperInvariant(),
+        timeProvider.GetUtcNow(),
+        "IdempotencyConflict",
+        "The operation key was already used with a different confirm payload.");
+
+    private static void ValidateHoldRequest(HoldSeatsRequest request)
+    {
+        if (request.EventId == Guid.Empty)
+            throw new ArgumentException("Event id is required.", nameof(request));
+        if (request.OwnerUserId == Guid.Empty)
+            throw new ArgumentException("Hold owner is required.", nameof(request));
+        if (request.SeatIds.Count == 0)
+            throw new ArgumentException("At least one seat id is required.", nameof(request));
+        if (request.SeatIds.Count > 20)
+            throw new ArgumentException("A hold cannot contain more than 20 seats.", nameof(request));
+        if (request.SeatIds.Distinct().Count() != request.SeatIds.Count)
+            throw new ArgumentException("Seat ids must be unique.", nameof(request));
+    }
+
+    private static void ValidateConfirmRequest(ConfirmSeatAllocationRequest request)
+    {
+        if (request.OrderId == Guid.Empty || request.EventId == Guid.Empty ||
+            request.HoldId == Guid.Empty || request.OwnerUserId == Guid.Empty)
+            throw new ArgumentException("Confirm authority identifiers cannot be empty.", nameof(request));
+        if (request.Generation <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "Confirm generation must be positive.");
+        if (request.PriceSnapshotVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "Price snapshot version must be positive.");
+        if (request.Amount < 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "Confirm amount cannot be negative.");
+        if (string.IsNullOrWhiteSpace(request.Currency) || request.Currency.Length != 3)
+            throw new ArgumentException("Confirm currency must be a three-letter code.", nameof(request));
+        if (request.SeatIds.Count == 0 || request.SeatIds.Distinct().Count() != request.SeatIds.Count)
+            throw new ArgumentException("Confirm requires a non-empty exact seat set.", nameof(request));
     }
 }

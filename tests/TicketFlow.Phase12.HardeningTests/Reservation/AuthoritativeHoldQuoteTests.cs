@@ -128,6 +128,31 @@ public sealed class AuthoritativeHoldQuoteTests
         Assert.Equal(0, unitOfWork.SaveCount);
     }
 
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Durable_sold_inventory_stays_unavailable_when_Redis_has_lost_its_sold_set()
+    {
+        var eventId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var seat = Seat.Create(eventId, sectionId, "A-1");
+        seat.MarkSold();
+        var service = CreateService(
+            [seat],
+            Policy(eventId, "Published", [(sectionId, 100_000m, "VND")]),
+            new FakeHoldQuoteRepository());
+
+        var hold = await service.HoldAsync(
+            new HoldSeatsRequest(eventId, [seat.Id], Guid.NewGuid()));
+        var availability = await service.GetAvailabilityAsync(eventId);
+        var check = await service.CheckAvailabilityAsync(eventId, [seat.Id]);
+
+        Assert.False(hold.Success);
+        Assert.Equal([seat.Id], hold.UnavailableSeatIds);
+        Assert.Equal("Sold", Assert.Single(availability.Seats).Status);
+        Assert.False(check.AllAvailable);
+        Assert.Equal([seat.Id], check.UnavailableSeatIds);
+    }
+
     private static ReservationService CreateService(
         IEnumerable<Seat> seats,
         EventSalePolicy policy,
@@ -138,8 +163,11 @@ public sealed class AuthoritativeHoldQuoteTests
         new FakeSeatHoldStore(),
         policyRepository ?? new FakeEventSalePolicyRepository(policy),
         quotes,
+        new FakeSeatAllocationRepository(),
+        new FakeReservationOperationReceiptRepository(),
+        new FakeAllocationGenerationSource(),
         unitOfWork ?? new ControlledReservationUnitOfWork(),
-        new ControlledSeatMapNotifier(),
+        new RecordingSeatAvailabilityEventPublisher(),
         new FixedTimeProvider(Now),
         new ReservationOptions());
 

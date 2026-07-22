@@ -28,4 +28,5 @@ public sealed record OrderSubmitted(
     string Currency = "VND",
     long PriceSnapshotVersion = 0,
     string? IdempotencyKey = null,
-    string? AllocationReference = null);
+    string? AllocationReference = null,
+    long AllocationGeneration = 0);

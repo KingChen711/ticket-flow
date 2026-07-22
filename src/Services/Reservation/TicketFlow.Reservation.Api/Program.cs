@@ -8,16 +8,25 @@ using TicketFlow.Observability;
 using TicketFlow.Reservation.Api.Consumers;
 using TicketFlow.Reservation.Api.Endpoints;
 using TicketFlow.Reservation.Api.Hubs;
+using TicketFlow.Reservation.Api.Messaging;
 using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Infrastructure;
+using TicketFlow.Reservation.Infrastructure.Reconciliation;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var httpPort = builder.Configuration.GetValue("Kestrel:HttpPort", 8003);
 var grpcPort = builder.Configuration.GetValue("Kestrel:GrpcPort", 9003);
+var reconcileModeName = builder.Configuration["Reservation:CacheReconcileMode"] ?? "RepairCache";
+if (!Enum.TryParse<SeatCacheReconcileMode>(reconcileModeName, ignoreCase: true, out var reconcileMode))
+{
+    throw new InvalidOperationException(
+        $"Reservation:CacheReconcileMode '{reconcileModeName}' is invalid. " +
+        $"Expected one of: {string.Join(", ", Enum.GetNames<SeatCacheReconcileMode>())}.");
+}
 
 // gRPC needs HTTP/2; REST (health check) needs HTTP/1.1. Plaintext (no TLS) Kestrel can't
 // auto-negotiate between the two on one port the way it does over TLS ALPN, so they get
@@ -38,6 +47,8 @@ builder.Services.AddGrpc();
 builder.Services.AddOpenApi();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<ISeatMapNotifier, SignalRSeatMapNotifier>();
+builder.Services.AddScoped<ISeatAvailabilityEventPublisher, MassTransitSeatAvailabilityEventPublisher>();
+builder.Services.AddHostedService<ReservationCacheReconciliationWorker>();
 
 // Postgres + Redis wiring (Infrastructure), then the orchestration services on top
 // (Application) — ISeatHoldStore now has a real implementation (Commit 4-6), so this no
@@ -47,16 +58,52 @@ builder.Services.AddReservationApplication();
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cfg =>
 {
+    cfg.AddEntityFrameworkOutbox<ReservationDbContext>(outbox =>
+    {
+        outbox.UsePostgres();
+        outbox.UseBusOutbox();
+    });
+
     cfg.AddConsumer<ConfirmSeatsConsumer>();
     cfg.AddConsumer<ReleaseSeatsConsumer>();
     cfg.AddConsumer<CatalogSalePolicyChangedConsumer>();
+    cfg.AddConsumer<SeatMapNotificationConsumer>();
 }, configureRabbitMq: (context, rabbit) =>
 {
+    // These names match the queues previously created by ConfigureEndpoints, so enabling the
+    // EF consumer outbox continues the existing endpoints instead of creating replacement queues.
+    rabbit.ReceiveEndpoint("reservation-confirm-seats", endpoint =>
+    {
+        endpoint.ConcurrentMessageLimit = 8;
+        endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
+        endpoint.ConfigureConsumer<ConfirmSeatsConsumer>(context);
+    });
+
+    rabbit.ReceiveEndpoint("reservation-release-seats", endpoint =>
+    {
+        endpoint.ConcurrentMessageLimit = 8;
+        endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
+        endpoint.ConfigureConsumer<ReleaseSeatsConsumer>(context);
+    });
+
     rabbit.ReceiveEndpoint("reservation-catalog-sale-policy-changed", endpoint =>
     {
         // Serialize snapshots so two first deliveries cannot race the EventId primary key.
         endpoint.ConcurrentMessageLimit = 1;
+        endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
         endpoint.ConfigureConsumer<CatalogSalePolicyChangedConsumer>(context);
+    });
+
+    // SignalR is a retryable projection on a separate queue. It intentionally has no EF outbox:
+    // hub failure must never roll back or redeliver the allocation transaction that emitted the
+    // SeatAvailabilityChanged event.
+    rabbit.ReceiveEndpoint("reservation-seat-map-notification", endpoint =>
+    {
+        // Held and Sold for one quote intentionally share its allocation generation. Serialize
+        // the projection queue so a faster Sold hub call cannot be overtaken by the earlier Held
+        // notification for that same seat.
+        endpoint.ConcurrentMessageLimit = 1;
+        endpoint.ConfigureConsumer<SeatMapNotificationConsumer>(context);
     });
 });
 
@@ -69,6 +116,44 @@ if (!app.Environment.IsProduction())
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<ReservationDbContext>();
     await dbContext.Database.MigrateAsync();
+}
+
+// PostgreSQL is the allocation authority. Runtime behavior follows the configured mode: Report
+// is observational, RepairCache fails closed on ownership conflict, and QuarantineConflict
+// explicitly contains conflicts while repairing safe drift.
+using (var scope = app.Services.CreateScope())
+{
+    var bootstrapper = scope.ServiceProvider.GetRequiredService<ISeatCacheBootstrapper>();
+    var results = await bootstrapper.ReconcileAllAsync(reconcileMode);
+    var unresolved = results
+        .Select(result => new
+        {
+            Result = result,
+            Drifts = result.RemainingDrifts
+                .Where(drift =>
+                    reconcileMode != SeatCacheReconcileMode.QuarantineConflict ||
+                    !result.QuarantinedSeatIds.Contains(drift.SeatId))
+                .ToArray(),
+        })
+        .Where(item => item.Drifts.Length > 0)
+        .ToArray();
+    if (unresolved.Length > 0 && reconcileMode == SeatCacheReconcileMode.Report)
+    {
+        app.Logger.LogWarning(
+            "Reservation Redis bootstrap report found {DriftCount} drift(s) across {EventCount} event(s); Report mode is read-only and startup will continue.",
+            unresolved.Sum(item => item.Drifts.Length),
+            unresolved.Length);
+    }
+    else if (unresolved.Length > 0)
+    {
+        var summary = string.Join(
+            "; ",
+            unresolved.Select(item =>
+                $"event {item.Result.EventId}: {item.Drifts.Length} unresolved drift(s) " +
+                $"[{string.Join(", ", item.Drifts.Take(5).Select(drift => $"{drift.SeatId}/{drift.Kind}"))}]"));
+        throw new InvalidOperationException(
+            $"Reservation Redis bootstrap ({reconcileMode}) failed closed: {summary}");
+    }
 }
 
 app.UseTicketFlowWeb();

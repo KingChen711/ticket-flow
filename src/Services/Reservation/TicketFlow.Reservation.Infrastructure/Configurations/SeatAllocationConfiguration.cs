@@ -23,6 +23,7 @@ public sealed class SeatAllocationConfiguration : IEntityTypeConfiguration<SeatA
 
         builder.HasIndex(a => new { a.EventId, a.SeatId }).IsUnique();
         builder.HasIndex(a => a.HoldId);
+        builder.HasIndex(a => new { a.HoldId, a.Generation });
         builder.HasIndex(a => a.OrderId);
         builder.HasIndex(a => a.OwnerUserId);
         // PostgreSQL's system xmin supplies optimistic concurrency without an application column.

@@ -18,7 +18,36 @@ public sealed record HoldQuoteResponse(
     decimal Amount,
     string Currency,
     long PriceSnapshotVersion,
+    long Generation,
     DateTimeOffset ExpiresAt);
+
+public sealed record ConfirmSeatAllocationRequest(
+    Guid OrderId,
+    Guid EventId,
+    Guid HoldId,
+    IReadOnlyList<Guid> SeatIds,
+    Guid OwnerUserId,
+    long Generation,
+    long PriceSnapshotVersion,
+    decimal Amount,
+    string Currency,
+    string? OperationKey = null);
+
+public sealed record ConfirmSeatAllocationResult(
+    bool Succeeded,
+    Guid OrderId,
+    Guid EventId,
+    Guid HoldId,
+    Guid OwnerUserId,
+    long Generation,
+    IReadOnlyList<Guid> SeatIds,
+    Guid AllocationReference,
+    long PriceSnapshotVersion,
+    decimal Amount,
+    string Currency,
+    DateTimeOffset DecidedAt,
+    string? FailureCode = null,
+    string? FailureReason = null);
 
 public sealed record HoldSeatsResult(
     bool Success,

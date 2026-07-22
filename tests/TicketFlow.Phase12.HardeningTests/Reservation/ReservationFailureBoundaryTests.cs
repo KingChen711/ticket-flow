@@ -1,5 +1,6 @@
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Application.Seats;
+using TicketFlow.Reservation.Domain.Allocations;
 using TicketFlow.Reservation.Domain.Holds;
 using TicketFlow.Reservation.Domain.SalePolicies;
 using TicketFlow.Reservation.Domain.Seats;
@@ -9,47 +10,141 @@ namespace TicketFlow.Phase12.HardeningTests.Reservation;
 public sealed class ReservationFailureBoundaryTests
 {
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Crash_after_Redis_confirm_before_Postgres_commit_must_replay_the_same_confirm_receipt()
     {
+        var now = DateTimeOffset.UtcNow;
         var eventId = Guid.NewGuid();
         var holdId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        const long generation = 7;
         var seat = Seat.Create(eventId, Guid.NewGuid(), "VIP-1");
         var repository = new FakeSeatRepository([seat]);
         var holds = new FakeSeatHoldStore();
-        holds.SeedHold(eventId, holdId, [seat.Id]);
-        var unitOfWork = new ControlledReservationUnitOfWork { FailNextSave = true };
-        var service = CreateService(repository, holds, unitOfWork, new ControlledSeatMapNotifier());
+        holds.SeedTypedHold(eventId, holdId, ownerId, generation, [seat.Id]);
+        var quote = ActiveQuote(
+            holdId, eventId, ownerId, [seat.Id], generation, 11, 100_000m, "VND", now);
+        var quotes = new FakeHoldQuoteRepository([quote]);
+        var allocations = new FakeSeatAllocationRepository();
+        var receipts = new FakeReservationOperationReceiptRepository();
+        var publisher = new RecordingSeatAvailabilityEventPublisher();
+        var unitOfWork = new ControlledReservationUnitOfWork { FailOnSaveNumber = 2 };
+        var service = CreateService(
+            repository,
+            holds,
+            unitOfWork,
+            allocations,
+            receipts,
+            publisher,
+            quotes,
+            PublishedPolicy(eventId, seat.SectionId, 11, 100_000m, "VND", now),
+            new FixedTimeProvider(now));
+        var request = new ConfirmSeatAllocationRequest(
+            orderId, eventId, holdId, [seat.Id], ownerId, generation, 11, 100_000m, "VND", "confirm-1");
 
         // Failpoint: Redis has moved the hold to Sold; Postgres SaveChanges throws.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(eventId, holdId));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(request));
 
-        var replay = await service.ConfirmAsync(eventId, holdId);
+        var replay = await service.ConfirmAsync(request);
 
         // A durable ReservationOperation receipt must return the first operation's exact outcome.
-        Assert.Equal([seat.Id], replay);
+        Assert.True(replay.Succeeded);
+        Assert.Equal(orderId, replay.OrderId);
+        Assert.Equal(ownerId, replay.OwnerUserId);
+        Assert.Equal(generation, replay.Generation);
+        Assert.Equal([seat.Id], replay.SeatIds);
+        var confirmed = Assert.Single(allocations.Allocations);
+        AssertConfirmedAllocation(
+            confirmed, seat.Id, eventId, holdId, orderId, ownerId, generation, 11, 100_000m, "VND");
+        Assert.Equal(HoldQuoteState.Consumed, quote.State);
+        Assert.Equal(orderId, quote.OrderId);
+        Assert.Single(receipts.Receipts);
+        Assert.Single(publisher.Published);
     }
 
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
-    public async Task Failure_after_Postgres_commit_in_SignalR_notifier_must_not_turn_success_into_failure()
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Hold_persists_one_active_quote_without_materializing_a_seat_allocation()
     {
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var seat = Seat.Create(eventId, sectionId, "C-1");
+        var quotes = new FakeHoldQuoteRepository();
+        var allocations = new FakeSeatAllocationRepository();
+        var service = CreateService(
+            new FakeSeatRepository([seat]),
+            new FakeSeatHoldStore(),
+            new ControlledReservationUnitOfWork(),
+            allocations,
+            quotes: quotes,
+            policy: PublishedPolicy(eventId, sectionId, 9, 50_000m, "VND", now),
+            timeProvider: new FixedTimeProvider(now));
+
+        var result = await service.HoldAsync(new HoldSeatsRequest(eventId, [seat.Id], ownerId));
+
+        Assert.True(result.Success);
+        var quote = Assert.Single(quotes.Quotes);
+        Assert.Equal(result.HoldId, quote.Id);
+        Assert.Equal(HoldQuoteState.Active, quote.State);
+        Assert.Equal(eventId, quote.EventId);
+        Assert.Equal(ownerId, quote.OwnerUserId);
+        Assert.Equal([seat.Id], quote.SeatIds);
+        Assert.Null(quote.OrderId);
+        Assert.Null(quote.TerminalAt);
+        Assert.Empty(allocations.Allocations);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Confirmation_event_is_outboxed_and_receipt_replay_does_not_repeat_the_mutation()
+    {
+        var now = DateTimeOffset.UtcNow;
         var eventId = Guid.NewGuid();
         var holdId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        const long generation = 3;
         var seat = Seat.Create(eventId, Guid.NewGuid(), "A-1");
         var repository = new FakeSeatRepository([seat]);
         var holds = new FakeSeatHoldStore();
-        holds.SeedHold(eventId, holdId, [seat.Id]);
-        var notifier = new ControlledSeatMapNotifier { FailNextNotification = true };
-        var service = CreateService(repository, holds, new ControlledReservationUnitOfWork(), notifier);
+        holds.SeedTypedHold(eventId, holdId, ownerId, generation, [seat.Id]);
+        var quote = ActiveQuote(
+            holdId, eventId, ownerId, [seat.Id], generation, 4, 75_000m, "VND", now);
+        var quotes = new FakeHoldQuoteRepository([quote]);
+        var allocations = new FakeSeatAllocationRepository();
+        var receipts = new FakeReservationOperationReceiptRepository();
+        var publisher = new RecordingSeatAvailabilityEventPublisher();
+        var service = CreateService(
+            repository,
+            holds,
+            new ControlledReservationUnitOfWork(),
+            allocations,
+            receipts,
+            publisher,
+            quotes,
+            PublishedPolicy(eventId, seat.SectionId, 4, 75_000m, "VND", now),
+            new FixedTimeProvider(now));
+        var request = new ConfirmSeatAllocationRequest(
+            orderId, eventId, holdId, [seat.Id], ownerId, generation, 4, 75_000m, "VND", "confirm-2");
 
-        // Failpoint: Redis and Postgres committed, then the non-critical notifier threw.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(eventId, holdId));
+        var first = await service.ConfirmAsync(request);
+        var replay = await service.ConfirmAsync(request);
 
-        var replay = await service.ConfirmAsync(eventId, holdId);
-
-        Assert.Equal([seat.Id], replay);
+        Assert.True(first.Succeeded);
+        Assert.True(replay.Succeeded);
+        Assert.Equal(first.AllocationReference, replay.AllocationReference);
+        Assert.Equal(first.SeatIds, replay.SeatIds);
         Assert.Equal(SeatStatus.Sold, seat.Status);
+        var confirmed = Assert.Single(allocations.Allocations);
+        AssertConfirmedAllocation(
+            confirmed, seat.Id, eventId, holdId, orderId, ownerId, generation, 4, 75_000m, "VND");
+        Assert.Equal(HoldQuoteState.Consumed, quote.State);
+        Assert.Equal(orderId, quote.OrderId);
+        Assert.Single(receipts.Receipts);
+        Assert.Single(publisher.Published);
     }
 
     [Fact]
@@ -62,7 +157,7 @@ public sealed class ReservationFailureBoundaryTests
         var repository = new FakeSeatRepository([seat]);
         var holds = new FakeSeatHoldStore();
         holds.SeedSold([seat.Id]);
-        var service = CreateService(repository, holds, new ControlledReservationUnitOfWork(), new ControlledSeatMapNotifier());
+        var service = CreateService(repository, holds, new ControlledReservationUnitOfWork());
 
         // Current API carries only seat ids, so delayed compensation for order A cannot prove
         // ownership/generation and blindly makes order B's seat Available.
@@ -97,16 +192,87 @@ public sealed class ReservationFailureBoundaryTests
         ISeatRepository repository,
         ISeatHoldStore holds,
         IUnitOfWork unitOfWork,
-        ISeatMapNotifier notifier) =>
+        ISeatAllocationRepository? allocations = null,
+        IReservationOperationReceiptRepository? receipts = null,
+        ISeatAvailabilityEventPublisher? publisher = null,
+        FakeHoldQuoteRepository? quotes = null,
+        EventSalePolicy? policy = null,
+        TimeProvider? timeProvider = null) =>
         new(
             repository,
             holds,
-            new FakeEventSalePolicyRepository(),
-            new FakeHoldQuoteRepository(),
+            new FakeEventSalePolicyRepository(policy),
+            quotes ?? new FakeHoldQuoteRepository(),
+            allocations ?? new FakeSeatAllocationRepository(),
+            receipts ?? new FakeReservationOperationReceiptRepository(),
+            new FakeAllocationGenerationSource(),
             unitOfWork,
-            notifier,
-            TimeProvider.System,
+            publisher ?? new RecordingSeatAvailabilityEventPublisher(),
+            timeProvider ?? TimeProvider.System,
             new ReservationOptions());
+
+    private static HoldQuote ActiveQuote(
+        Guid holdId,
+        Guid eventId,
+        Guid ownerId,
+        IReadOnlyList<Guid> seatIds,
+        long generation,
+        long priceSnapshotVersion,
+        decimal amount,
+        string currency,
+        DateTimeOffset now) =>
+        HoldQuote.Create(
+            holdId,
+            eventId,
+            ownerId,
+            seatIds,
+            amount,
+            currency,
+            priceSnapshotVersion,
+            generation,
+            now,
+            now.AddMinutes(5));
+
+    private static EventSalePolicy PublishedPolicy(
+        Guid eventId,
+        Guid sectionId,
+        long priceSnapshotVersion,
+        decimal amount,
+        string currency,
+        DateTimeOffset now) =>
+        EventSalePolicy.FromSnapshot(
+            eventId,
+            "Published",
+            now.AddMinutes(-1),
+            now.AddHours(1),
+            priceSnapshotVersion,
+            now,
+            [(sectionId, amount, currency)]);
+
+    private static void AssertConfirmedAllocation(
+        SeatAllocation allocation,
+        Guid seatId,
+        Guid eventId,
+        Guid holdId,
+        Guid orderId,
+        Guid ownerId,
+        long generation,
+        long priceSnapshotVersion,
+        decimal amount,
+        string currency)
+    {
+        Assert.Equal(seatId, allocation.SeatId);
+        Assert.Equal(eventId, allocation.EventId);
+        Assert.Equal(holdId, allocation.HoldId);
+        Assert.Equal(orderId, allocation.OrderId);
+        Assert.Equal(ownerId, allocation.OwnerUserId);
+        Assert.Equal(SeatAllocationState.Confirmed, allocation.State);
+        Assert.Equal(generation, allocation.Generation);
+        Assert.Null(allocation.ExpiresAt);
+        Assert.Equal(priceSnapshotVersion, allocation.PriceSnapshotVersion);
+        Assert.Equal(amount, allocation.Amount);
+        Assert.Equal(currency, allocation.Currency);
+    }
 }
 
 internal sealed class FakeEventSalePolicyRepository(EventSalePolicy? policy = null) : IEventSalePolicyRepository
@@ -119,16 +285,102 @@ internal sealed class FakeEventSalePolicyRepository(EventSalePolicy? policy = nu
     public void Add(EventSalePolicy value) => Policy = value;
 }
 
-internal sealed class FakeHoldQuoteRepository : IHoldQuoteRepository
+internal sealed class FakeHoldQuoteRepository(IEnumerable<HoldQuote>? initial = null) : IHoldQuoteRepository
 {
-    private readonly Dictionary<Guid, HoldQuote> _quotes = [];
+    private readonly Dictionary<Guid, HoldQuote> _quotes =
+        initial?.ToDictionary(quote => quote.Id) ?? [];
 
     public IReadOnlyCollection<HoldQuote> Quotes => _quotes.Values;
 
     public Task<HoldQuote?> GetAsync(Guid holdId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_quotes.GetValueOrDefault(holdId));
 
+    public Task<HoldQuote?> GetByOrderAsync(Guid orderId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_quotes.Values.SingleOrDefault(quote => quote.OrderId == orderId));
+
+    public Task<IReadOnlyList<HoldQuote>> GetActiveOverlappingAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<HoldQuote>>(
+            _quotes.Values.Where(quote =>
+                quote.EventId == eventId &&
+                quote.IsActiveAt(now) &&
+                quote.SeatIds.Any(seatIds.Contains)).ToList());
+
+    public Task<IReadOnlyList<Guid>> GetActiveIdsByEventAsync(
+        Guid eventId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Guid>>(
+            _quotes.Values
+                .Where(quote => quote.EventId == eventId && quote.State == HoldQuoteState.Active)
+                .Select(quote => quote.Id)
+                .Order()
+                .ToList());
+
     public void Add(HoldQuote quote) => _quotes.Add(quote.Id, quote);
+}
+
+internal sealed class FakeSeatAllocationRepository(IEnumerable<SeatAllocation>? initial = null) : ISeatAllocationRepository
+{
+    private readonly List<SeatAllocation> _allocations = initial?.ToList() ?? [];
+
+    public IReadOnlyList<SeatAllocation> Allocations => _allocations;
+
+    public Task<IReadOnlyList<SeatAllocation>> GetBySeatIdsAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SeatAllocation>>(
+            _allocations.Where(item => item.EventId == eventId && seatIds.Contains(item.SeatId)).ToList());
+
+    public Task<IReadOnlyList<SeatAllocation>> GetByHoldAsync(
+        Guid holdId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SeatAllocation>>(
+            _allocations.Where(item => item.HoldId == holdId).ToList());
+
+    public void AddRange(IEnumerable<SeatAllocation> allocations) => _allocations.AddRange(allocations);
+}
+
+internal sealed class FakeReservationOperationReceiptRepository : IReservationOperationReceiptRepository
+{
+    private readonly List<ReservationOperationReceipt> _receipts = [];
+    public IReadOnlyCollection<ReservationOperationReceipt> Receipts => _receipts;
+
+    public Task<ReservationOperationReceipt?> GetAsync(
+        string operationType,
+        string businessKey,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(_receipts.SingleOrDefault(
+            receipt => receipt.OperationType == operationType && receipt.BusinessKey == businessKey));
+
+    public void Add(ReservationOperationReceipt receipt) => _receipts.Add(receipt);
+}
+
+internal sealed class FakeAllocationGenerationSource : IAllocationGenerationSource
+{
+    private long _generation;
+    public Task<long> NextAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(Interlocked.Increment(ref _generation));
+}
+
+internal sealed class RecordingSeatAvailabilityEventPublisher : ISeatAvailabilityEventPublisher
+{
+    public List<(Guid EventId, IReadOnlyList<Guid> SeatIds, string Status, long Generation)> Published { get; } = [];
+
+    public Task PublishAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        string status,
+        long generation,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken = default)
+    {
+        Published.Add((eventId, seatIds, status, generation));
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeSeatRepository(IEnumerable<Seat>? initial = null) : ISeatRepository
@@ -158,6 +410,8 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
     private IReadOnlyList<Guid> _heldSeatIds = [];
     private bool _confirmed;
     private readonly HashSet<Guid> _soldSeatIds = [];
+    private HoldStoreRequest? _typedHold;
+    private ConfirmHoldStoreRequest? _typedConfirmation;
 
     public bool FailNextInventoryLoad { get; set; }
     public bool InventoryLoaded { get; private set; }
@@ -171,6 +425,15 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
     }
 
     public void SeedSold(IEnumerable<Guid> seatIds) => _soldSeatIds.UnionWith(seatIds);
+
+    public void SeedTypedHold(
+        Guid eventId,
+        Guid holdId,
+        Guid ownerUserId,
+        long generation,
+        IReadOnlyList<Guid> seatIds) =>
+        _typedHold = new HoldStoreRequest(
+            eventId, seatIds, holdId, ownerUserId, generation, TimeSpan.FromMinutes(5));
 
     public Task LoadInventoryAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
     {
@@ -192,6 +455,14 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Guid>>([]);
 
+    public Task<HoldStoreResult> TryHoldAsync(
+        HoldStoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _typedHold = request;
+        return Task.FromResult(new HoldStoreResult(HoldStoreOutcome.Held, []));
+    }
+
     public Task<IReadOnlyList<Guid>> ReleaseAsync(Guid eventId, Guid holdId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Guid>>([]);
 
@@ -204,6 +475,53 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
         _soldSeatIds.UnionWith(_heldSeatIds);
         return Task.FromResult(_heldSeatIds);
     }
+
+    public Task<ConfirmHoldStoreResult> ConfirmAsync(
+        ConfirmHoldStoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (_typedConfirmation is not null)
+        {
+            var same = SameTuple(_typedConfirmation, request);
+            return Task.FromResult(new ConfirmHoldStoreResult(
+                same ? ConfirmHoldStoreOutcome.AlreadyAppliedSame : ConfirmHoldStoreOutcome.Conflict,
+                same ? request.SeatIds.OrderBy(id => id).ToArray() : [],
+                same ? null : "confirmation tuple mismatch"));
+        }
+
+        if (_typedHold is null)
+        {
+            return Task.FromResult(new ConfirmHoldStoreResult(
+                ConfirmHoldStoreOutcome.MissingOrExpired, [], "hold missing"));
+        }
+
+        var heldSeats = _typedHold.SeatIds.ToHashSet();
+        var requestedSeats = request.SeatIds.ToHashSet();
+        var matches = _typedHold.EventId == request.EventId
+            && _typedHold.HoldId == request.HoldId
+            && _typedHold.OwnerUserId == request.OwnerUserId
+            && _typedHold.Generation == request.Generation
+            && heldSeats.SetEquals(requestedSeats);
+        if (!matches)
+        {
+            return Task.FromResult(new ConfirmHoldStoreResult(
+                ConfirmHoldStoreOutcome.Conflict, [], "hold authority mismatch"));
+        }
+
+        _typedConfirmation = request;
+        _soldSeatIds.UnionWith(request.SeatIds);
+        return Task.FromResult(new ConfirmHoldStoreResult(
+            ConfirmHoldStoreOutcome.Applied, request.SeatIds.OrderBy(id => id).ToArray()));
+    }
+
+    public Task RestoreAsync(
+        RestoreSeatAllocationRequest request,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task<RebuildSeatCacheResult> RebuildAsync(
+        RebuildSeatCacheRequest request,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new RebuildSeatCacheResult(true, [], request.SnapshotVersion));
 
     public Task<IReadOnlyDictionary<Guid, SeatStatus>> GetLiveStatusesAsync(
         Guid eventId,
@@ -220,19 +538,29 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
         _soldSeatIds.ExceptWith(seatIds);
         return Task.CompletedTask;
     }
+
+    private static bool SameTuple(ConfirmHoldStoreRequest left, ConfirmHoldStoreRequest right) =>
+        left.EventId == right.EventId
+        && left.HoldId == right.HoldId
+        && left.OrderId == right.OrderId
+        && left.OwnerUserId == right.OwnerUserId
+        && left.Generation == right.Generation
+        && left.SeatIds.ToHashSet().SetEquals(right.SeatIds);
 }
 
 internal sealed class ControlledReservationUnitOfWork : IUnitOfWork
 {
     public bool FailNextSave { get; set; }
+    public int? FailOnSaveNumber { get; set; }
     public int SaveCount { get; private set; }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         SaveCount++;
-        if (FailNextSave)
+        if (FailNextSave || FailOnSaveNumber == SaveCount)
         {
             FailNextSave = false;
+            FailOnSaveNumber = null;
             throw new InvalidOperationException("Failpoint: Redis committed before Postgres SaveChanges.");
         }
 

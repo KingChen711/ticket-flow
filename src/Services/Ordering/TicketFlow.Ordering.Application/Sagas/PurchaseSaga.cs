@@ -74,6 +74,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.Amount = message.Amount;
                     context.Saga.Currency = message.Currency;
                     context.Saga.PriceSnapshotVersion = message.PriceSnapshotVersion;
+                    context.Saga.AllocationGeneration = message.AllocationGeneration;
                     context.Saga.IdempotencyKey = message.IdempotencyKey ?? $"legacy:{message.OrderId}";
                     context.Saga.PaymentMethod = message.PaymentMethod;
                     context.Saga.CustomerName = message.CustomerName;
@@ -89,11 +90,17 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.PriceSnapshotVersion,
                     context.Saga.Amount,
                     context.Saga.Currency,
-                    context.Saga.UserId))
+                    context.Saga.UserId,
+                    context.Saga.AllocationGeneration))
                 .TransitionTo(AwaitingSeats));
 
         During(AwaitingSeats,
             When(SeatsConfirmedEvent)
+                .Then(context =>
+                {
+                    context.Saga.AllocationGeneration = context.Message.Generation;
+                    context.Saga.AllocationReference = context.Message.AllocationReference;
+                })
                 .Publish(context => new ProcessPayment(
                     context.Saga.CorrelationId,
                     context.Saga.UserId,
@@ -132,7 +139,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CatalogEventId,
                     context.Saga.HoldId,
                     context.Saga.SeatIds,
-                    $"{context.Saga.IdempotencyKey}:release"))
+                    $"{context.Saga.IdempotencyKey}:release",
+                    context.Saga.AllocationGeneration))
                 .TransitionTo(CompensatingSeats));
 
         During(AwaitingTickets,
@@ -203,7 +211,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CatalogEventId,
                     context.Saga.HoldId,
                     context.Saga.SeatIds,
-                    $"{context.Saga.IdempotencyKey}:release"))
+                    $"{context.Saga.IdempotencyKey}:release",
+                    context.Saga.AllocationGeneration))
                 .TransitionTo(CompensatingSeats));
 
         // Both compensation paths (PaymentFailed direct, TicketingFailed via CompensatingRefund)

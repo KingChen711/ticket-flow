@@ -26,6 +26,7 @@ message GetHoldQuoteResponse {
   string currency = 6;
   int64 price_snapshot_version = 7;
   string expires_at = 8;
+  int64 generation = 9;
 }
 
 message CheckSeatAvailabilityRequest {

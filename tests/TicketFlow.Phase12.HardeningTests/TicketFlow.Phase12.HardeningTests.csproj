@@ -18,6 +18,7 @@
     <PackageReference Include="MassTransit.RabbitMQ" />
     <PackageReference Include="Marten" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="StackExchange.Redis" />
     <PackageReference Include="Testcontainers.PostgreSql" />
@@ -46,6 +47,7 @@
     <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Application\TicketFlow.Payment.Application.csproj" />
     <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Domain\TicketFlow.Payment.Domain.csproj" />
     <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Application\TicketFlow.Reservation.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Api\TicketFlow.Reservation.Api.csproj" />
     <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Domain\TicketFlow.Reservation.Domain.csproj" />
     <ProjectReference Include="..\..\src\Services\Search\TicketFlow.Search.Api\TicketFlow.Search.Api.csproj" />
     <ProjectReference Include="..\..\src\Services\Search\TicketFlow.Search.Application\TicketFlow.Search.Application.csproj" />

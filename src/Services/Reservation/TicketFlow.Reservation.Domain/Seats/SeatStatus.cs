@@ -6,9 +6,8 @@ public enum SeatStatus
     Available,
 
     /// <summary>
-    /// Temporarily reserved with a TTL. This value is NEVER persisted to Postgres — a hold
-    /// lives only in Redis and expires on its own. It is computed at query time by combining
-    /// the durable seat (Available/Sold) with the presence of a Redis hold key.
+    /// Temporarily reserved with a TTL. This value is never persisted on the Seat row; an active
+    /// HoldQuote is the durable authority and Redis is its expiring acceleration view.
     /// </summary>
     Held,
 

@@ -11,6 +11,8 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.OpenApi" />
     <PackageReference Include="Scalar.AspNetCore" />
+    <!-- Program.cs configures the Reservation EF consumer/bus outbox. -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" />
     <!-- dotnet-ef requires the STARTUP project to reference Design directly; Infrastructure's
          own reference is PrivateAssets="all" and doesn't flow through ProjectReference. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">

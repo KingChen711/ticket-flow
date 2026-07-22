@@ -36,6 +36,7 @@ public sealed class GrpcHoldQuoteProvider(ReservationService.ReservationServiceC
             decimal.Parse(response.Amount, NumberStyles.Number, CultureInfo.InvariantCulture),
             response.Currency,
             response.PriceSnapshotVersion,
-            DateTimeOffset.Parse(response.ExpiresAt, CultureInfo.InvariantCulture));
+            DateTimeOffset.Parse(response.ExpiresAt, CultureInfo.InvariantCulture),
+            response.Generation);
     }
 }

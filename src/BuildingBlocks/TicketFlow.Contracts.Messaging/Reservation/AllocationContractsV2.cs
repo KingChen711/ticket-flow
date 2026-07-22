@@ -8,7 +8,8 @@ public sealed record HoldQuoteV2(
     decimal Amount,
     string Currency,
     long PriceSnapshotVersion,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt,
+    long Generation = 0);
 
 /// <summary>Durable allocation receipt used by later phases to make confirmation idempotent.</summary>
 public sealed record ConfirmedAllocationV2(

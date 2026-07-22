@@ -60,6 +60,7 @@ public sealed class ReservationServiceImpl(ApplicationReservationService reserva
             Amount = quote.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Currency = quote.Currency,
             PriceSnapshotVersion = quote.PriceSnapshotVersion,
+            Generation = quote.Generation,
             ExpiresAt = quote.ExpiresAt.ToString("O"),
         };
         response.SeatIds.AddRange(quote.SeatIds.Select(id => id.ToString()));

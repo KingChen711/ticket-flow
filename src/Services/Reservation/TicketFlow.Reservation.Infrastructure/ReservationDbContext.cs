@@ -1,3 +1,4 @@
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using TicketFlow.Reservation.Domain.Allocations;
 using TicketFlow.Reservation.Domain.Holds;
@@ -17,6 +18,14 @@ public sealed class ReservationDbContext(DbContextOptions<ReservationDbContext> 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("reservation");
+        modelBuilder.HasSequence<long>("seat_allocation_generation");
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(ReservationDbContext).Assembly);
+
+        // MassTransit EF Core Inbox/Outbox. InboxState deduplicates redelivery of the same
+        // physical message; the business operation receipt remains the semantic idempotency
+        // boundary for distinct envelopes carrying the same operation key.
+        modelBuilder.AddInboxStateEntity();
+        modelBuilder.AddOutboxMessageEntity();
+        modelBuilder.AddOutboxStateEntity();
     }
 }

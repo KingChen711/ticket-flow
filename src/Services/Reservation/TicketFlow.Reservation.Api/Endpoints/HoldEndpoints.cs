@@ -3,12 +3,6 @@ using TicketFlow.Reservation.Application.Seats;
 
 namespace TicketFlow.Reservation.Api.Endpoints;
 
-/// <summary>
-/// Confirm/release only need EventId in the body — the Redis key scheme (hold:{eventId}:{seatId})
-/// requires it to locate the right keys, and the client already has it in context (it's the
-/// same event it just held seats for). See docs/phase-2-plan.md for why holdId alone isn't enough.
-/// </summary>
-public sealed record HoldActionRequest(Guid EventId);
 public sealed record CreateHoldRequest(Guid EventId, IReadOnlyList<Guid> SeatIds);
 
 public static class HoldEndpoints
@@ -44,23 +38,16 @@ public static class HoldEndpoints
             return quote is null ? Results.NotFound() : Results.Ok(quote);
         });
 
-        group.MapPost("/{holdId:guid}/confirm", async (
-            Guid holdId,
-            HoldActionRequest request,
-            ReservationService service,
-            CancellationToken ct) =>
-        {
-            var confirmed = await service.ConfirmAsync(request.EventId, holdId, ct);
-            return confirmed.Count > 0 ? Results.Ok() : Results.NotFound();
-        });
-
         group.MapPost("/{holdId:guid}/release", async (
             Guid holdId,
-            HoldActionRequest request,
+            ClaimsPrincipal user,
             ReservationService service,
             CancellationToken ct) =>
         {
-            var released = await service.ReleaseAsync(request.EventId, holdId, ct);
+            if (!Guid.TryParse(user.FindFirstValue("sub"), out var ownerUserId))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var released = await service.ReleaseOwnedHoldAsync(holdId, ownerUserId, ct);
             return released ? Results.NoContent() : Results.NotFound();
         });
     }

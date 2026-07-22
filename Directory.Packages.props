@@ -34,6 +34,7 @@
          real build failure before adding this — CS0234, namespace didn't resolve via
          FrameworkReference alone). Pinned to match the other ASP.NET Core 10.0.9 packages above. -->
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.9" />
     <PackageVersion Include="Microsoft.OpenApi" Version="2.10.0" />
     <!--
       Phase 10 Commit 1 — TicketFlow.Observability, wired into every service's Program.cs

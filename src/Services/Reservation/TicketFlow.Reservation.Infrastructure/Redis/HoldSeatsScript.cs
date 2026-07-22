@@ -22,7 +22,7 @@ internal static class HoldSeatsScript
     /// Returns an empty array on success (every seat now held under holdId), or the list of
     /// seat ids that were NOT available — in which case NOTHING was set, by design.
     /// </remarks>
-    public const string Source = """
+    public const string LegacySource = """
         local seats_key = KEYS[1]
         local sold_key = KEYS[2]
         local hold_seats_key = KEYS[3]
@@ -58,5 +58,87 @@ internal static class HoldSeatsScript
         redis.call('EXPIRE', hold_seats_key, ttl_seconds)
 
         return {}
+        """;
+
+    /// <summary>
+    /// Phase 12 typed hold. The value stored per seat is an ownership token rather than a bare
+    /// hold id. A retry with the exact same tuple is idempotent; a partial/mismatched reverse
+    /// index is a conflict and is never repaired by silently choosing one side.
+    /// </summary>
+    public const string Source = """
+        local seats_key = KEYS[1]
+        local sold_key = KEYS[2]
+        local hold_seats_key = KEYS[3]
+        local hold_id = ARGV[1]
+        local owner_id = ARGV[2]
+        local generation = ARGV[3]
+        local ttl_seconds = tonumber(ARGV[4])
+        local seat_count = #KEYS - 3
+        local expected = 'H|' .. hold_id .. '|' .. owner_id .. '|' .. generation
+
+        local unavailable = {}
+        local conflicts = {}
+        local reverse_count = redis.call('SCARD', hold_seats_key)
+
+        if reverse_count > 0 and reverse_count ~= seat_count then
+            for i = 1, seat_count do
+                table.insert(conflicts, ARGV[i + 4])
+            end
+            local result = {'CONFLICT'}
+            for _, seat_id in ipairs(conflicts) do table.insert(result, seat_id) end
+            return result
+        end
+
+        if reverse_count > 0 then
+            for i = 1, seat_count do
+                local seat_id = ARGV[i + 4]
+                if redis.call('SISMEMBER', hold_seats_key, seat_id) == 0 then
+                    table.insert(conflicts, seat_id)
+                end
+            end
+        end
+
+        for i = 1, seat_count do
+            local hold_key = KEYS[i + 3]
+            local seat_id = ARGV[i + 4]
+            local current = redis.call('GET', hold_key)
+
+            if redis.call('SISMEMBER', seats_key, seat_id) == 0
+                or redis.call('SISMEMBER', sold_key, seat_id) == 1 then
+                table.insert(unavailable, seat_id)
+            elseif current then
+                if current == expected then
+                    -- Exact retry. The authoritative request supplies the remaining TTL, so
+                    -- refreshing to that value cannot extend the immutable quote expiry.
+                elseif string.sub(current, 1, string.len('H|' .. hold_id .. '|')) == 'H|' .. hold_id .. '|' then
+                    table.insert(conflicts, seat_id)
+                else
+                    table.insert(unavailable, seat_id)
+                end
+            end
+        end
+
+        if #conflicts > 0 then
+            local result = {'CONFLICT'}
+            for _, seat_id in ipairs(conflicts) do table.insert(result, seat_id) end
+            return result
+        end
+
+        if #unavailable > 0 then
+            local result = {'UNAVAILABLE'}
+            for _, seat_id in ipairs(unavailable) do table.insert(result, seat_id) end
+            return result
+        end
+
+        if ttl_seconds < 1 then ttl_seconds = 1 end
+        for i = 1, seat_count do
+            local hold_key = KEYS[i + 3]
+            local seat_id = ARGV[i + 4]
+            redis.call('SET', hold_key, expected, 'EX', ttl_seconds)
+            redis.call('SADD', hold_seats_key, seat_id)
+        end
+        redis.call('EXPIRE', hold_seats_key, ttl_seconds)
+
+        return {'HELD'}
         """;
 }

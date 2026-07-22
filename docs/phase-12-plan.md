@@ -160,7 +160,9 @@ Ordering production `POST /orders` chỉ nhận `HoldId + PaymentMethod + Idempo
 - EF inbox + outbox cùng transaction với durable seat state; SignalR publish từ outbox/non-critical notifier.
 - Viết reconciler ba mode: `report`, `repair-cache`, `quarantine-conflict`. Startup không tự sửa conflict ownership mơ hồ.
 - Redis bootstrap dựng lại inventory **gồm sold/held còn hạn**, không chỉ danh sách seat IDs; active hold hết hạn có rule rõ.
-- **Verify:** kill process tại mọi failpoint Redis/DB/outbox/SignalR rồi redeliver cho cùng outcome; xóa toàn Redis rồi rebuild không oversell, availability khớp Postgres.
+- **[Delta review 2026-07-21]** Khớp với deviation `hold_quotes` của Commit 3: định nghĩa rõ lifecycle **quote → allocation** ngay trong commit này — `ConfirmSeats` (mang operation key) load quote theo owner, tạo `seat_allocations` + receipt trong **cùng transaction**, quote đi tới terminal state (`Consumed`/`Expired`/`Invalidated`) thay vì nằm lại vĩnh viễn (Commit 3 chưa có bất kỳ cleanup nào cho `hold_quotes`), và unique mapping hold/quote → order đặt ở đây làm nền cho "unique hold-to-order" của Commit 7. Không để hai bảng quote/allocation cùng mô tả một ghế mà không có ràng buộc chuyển trạng thái giữa chúng.
+- **[Delta review 2026-07-21]** **Xóa public HTTP `POST /holds/{holdId}/confirm`** (`HoldEndpoints`): sau Commit 3 endpoint này có `RequireAuthenticated` nhưng **không owner-scope và không gắn với order/payment nào** — bất kỳ user đăng nhập nào biết holdId đều chuyển được ghế sang Sold với 0 đồng; kể cả chính chủ hold cũng không được phép confirm ngoài saga. Đường confirm hợp lệ duy nhất là ConfirmSeats consumer (+ gRPC nội bộ). `POST /holds/{holdId}/release` giữ cho UX bỏ chọn ghế nhưng phải owner-scope theo quote. Bổ sung expected-failure test gọi tên exploit này — suite Commit 1 hiện chỉ phủ tamper mức message/request body, chưa phủ endpoint exposure.
+- **Verify:** kill process tại mọi failpoint Redis/DB/outbox/SignalR rồi redeliver cho cùng outcome; xóa toàn Redis rồi rebuild không oversell, availability khớp Postgres; gọi HTTP confirm trực tiếp không còn route nào chấp nhận; release hold của user khác bị chặn.
 
 ### Commit 5 — `fix(reservation): owner-scoped compensation + idempotent inventory provisioning`
 - `ReleaseSeats`/`Unsell` bắt buộc expected `OrderId/HoldId/Generation`; conditional Lua + optimistic DB update chỉ release allocation còn thuộc operation đó.
@@ -168,7 +170,8 @@ Ordering production `POST /orders` chỉ nhận `HoldId + PaymentMethod + Idempo
 - `EnsureInventory` idempotent: nếu Postgres đã có nhưng Redis thiếu thì reload/reconcile; concurrent provisioning dùng unique constraint và cùng result, không check-then-insert.
 - Validate organizer/event/section/capacity trước allocate list; đặt hard limit request/seat count.
 - **[Delta review 2026-07-20]** `UnsellAsync` hiện không broadcast SignalR (`ReservationService.cs`: `ReleaseAsync` notify "Available" nhưng `UnsellAsync` thì không) — ghế được compensation trả lại không bao giờ hiện "Available" trên seat map live cho tới khi client tự refetch. Khi SignalR chuyển sang publish-from-outbox (Commit 4), thêm notify cho đường unsell/compensation cùng lúc, cùng cơ chế.
-- **Verify:** delayed release sau resale, DB failure sau Redis mutation, concurrent provision và Redis-missing retry đều xanh; invariant `mỗi seat tối đa một active owner` được query/assert trực tiếp; seat map live thấy "Available" sau compensation.
+- **[Delta review 2026-07-21]** Commit 3 đã khóa "mua **cái gì**, giá **bao nhiêu**" nhưng chưa giới hạn "**giữ bao nhiêu, bao lâu một lần**": thêm per-user cap (số hold active + tổng ghế đang giữ trên mỗi event) và rate limit tạo hold, trả 409/429 có body phân biệt được với sold-out thật. Không có cap, một user thường có thể loop hold toàn bộ venue mỗi TTL window mà không mua — griefing rẻ tiền mà flash-sale load test (đo oversell, không đo lock-out) không bắt được. Hard limit provisioning ở bullet trên chỉ chặn phía organizer, không chặn phía customer.
+- **Verify:** delayed release sau resale, DB failure sau Redis mutation, concurrent provision và Redis-missing retry đều xanh; invariant `mỗi seat tối đa một active owner` được query/assert trực tiếp; seat map live thấy "Available" sau compensation; vượt hold cap/rate limit bị chặn có test riêng và không thể làm sold-out giả toàn venue.
 
 ### Commit 6 — `feat(payment): idempotent charge/refund state machine + unknown reconciliation` ⭐
 - Atomically insert/claim `PaymentAttempt` unique `OrderId` trước external call; partition/lock cùng order để hai consumer không charge song song.
@@ -347,6 +350,7 @@ flowchart LR
 | Ephemeral Redis/Rabbit/Kafka/Keycloak; Kafka topic startup race; migration/readiness/secrets | 17 | Clean-cluster topic provisioning + broker-delay retry + pod-delete recovery + Helm security/readiness checks |
 | CI sai nhánh, thiếu frontend/E2E/fault tests | 1, 18 | Clean `main` pipeline + chaos artifacts |
 | **Delta review 2026-07-20** (review độc lập lần 2, xác minh code thật): SignalR unsell không notify; `MyOrderView` thiếu PDF keys; metric vé bán đếm trùng redelivery; retry policy toàn cục 3×2s không phân loại lỗi; `realm-export.json` 2 bản drift | 5, 8, 9, 18 | Test case gọi tên riêng trong permutation/E2E suite + CI diff check realm |
+| **Delta review 2026-07-21** (đối chiếu synthesis 2 review độc lập + soát code sau Commit 3): public HTTP confirm còn tồn tại và không owner-scope; release không owner-scope; lifecycle `hold_quotes` → `seat_allocations` chưa định nghĩa sau deviation Commit 3; thiếu per-user hold cap/rate limit | 4, 5 | Expected-failure case endpoint-exposure; ràng buộc quote→order trong migration/receipt; hold-cap test |
 
 ---
 
@@ -395,6 +399,7 @@ flowchart LR
 - Automated customer-support console cho `ManualReview`, chargeback/dispute và partial event cancellation.
 - Full GitOps/ArgoCD, managed Kafka/Rabbit/Postgres HA, backup restore drill ngoài kind single-node.
 - Offline cryptographic ticket validation; Phase 12 vẫn chọn server-authoritative online validation.
+- Precompute/cache popular-events aggregation của Recommendation (`GetPopularEventIdsAsync` hiện unwind + group toàn bộ collection mỗi request) — performance, không phải correctness; không chặn Phase 12.
 
 ## Thứ tự đọc trước khi code
 

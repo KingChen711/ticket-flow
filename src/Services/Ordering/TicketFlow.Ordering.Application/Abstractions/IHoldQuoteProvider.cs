@@ -8,7 +8,8 @@ public sealed record AuthoritativeHoldQuote(
     decimal Amount,
     string Currency,
     long PriceSnapshotVersion,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt,
+    long AllocationGeneration = 0);
 
 public interface IHoldQuoteProvider
 {
