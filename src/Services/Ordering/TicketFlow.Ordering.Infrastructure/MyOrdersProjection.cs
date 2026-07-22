@@ -30,6 +30,7 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         nameof(OrderStatus.Pending),
         e.PlacedAt,
         null,
+        null,
         null);
 
     public MyOrderView Apply(OrderSeatsConfirmed e, MyOrderView current) =>
@@ -39,7 +40,7 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         WithIntermediateStatus(current, OrderStatus.PaymentAuthorized);
 
     public MyOrderView Apply(OrderTicketsIssued e, MyOrderView current) =>
-        WithIntermediateStatus(current, OrderStatus.TicketsIssued);
+        WithIntermediateStatus(current, OrderStatus.TicketsIssued) with { TicketPdfUrls = e.TicketPdfUrls };
 
     public MyOrderView Apply(OrderConfirmed e, MyOrderView current) =>
         current with { Status = nameof(OrderStatus.Confirmed), ConfirmedAt = e.ConfirmedAt };
@@ -54,19 +55,20 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         current with { Status = nameof(OrderStatus.Cancelled), CancelledAt = e.CancelledAt };
 
     /// <summary>
-    /// Monotonic guard (Commit 10) — real race found while re-verifying the compensation DoD:
-    /// OrderSeatsReleasedConsumer and OrderCancelledConsumer both react independently to the same
-    /// underlying SeatsReleased delivery (one via the saga's own SeatsReleased handler that then
-    /// publishes OrderCancelledIntegrationEvent, one via this projection's own direct consumer) —
-    /// RabbitMQ gives no ordering guarantee between two separately-queued consumers of the same
-    /// message, so OrderCancelled can occasionally get folded BEFORE OrderSeatsReleased, and
-    /// without this guard the later Apply would silently regress Status from the terminal
-    /// Cancelled back to the intermediate SeatsReleased. Once a stream reaches a terminal status
-    /// (Confirmed/Cancelled), no intermediate milestone may downgrade it — the terminal event
-    /// itself is still the one that recorded the real outcome; only the read model's display
-    /// value was at risk. The underlying event STREAM can still show the two events in either
-    /// relative order (a real, smaller audit-trail imperfection, not fixed here — see
-    /// phase-5-plan.md Commit 10).
+    /// Monotonic guard (Commit 10), now defense-in-depth only (Commit 8).
+    ///
+    /// It was written for a real race: OrderSeatsReleasedConsumer and OrderCancelledConsumer sat
+    /// on separate queues reacting to the same underlying delivery, RabbitMQ orders nothing
+    /// between two separately-queued consumers, so OrderCancelled could be folded BEFORE
+    /// OrderSeatsReleased and the later Apply would regress Status from terminal Cancelled back to
+    /// intermediate SeatsReleased. That guard was masking a genuinely misordered write stream —
+    /// the display value was corrected while the audit trail stayed wrong.
+    ///
+    /// Commit 8 removed the cause: one consumer and one version-checked writer now own the stream,
+    /// and OrderMilestoneWriter's transition table refuses a milestone that would walk a terminal
+    /// order backwards, so the events themselves can no longer arrive out of order. This stays as
+    /// a second line of defence for streams written before that change and for any future writer
+    /// that bypasses the funnel — but it is no longer the thing keeping the read model honest.
     /// </summary>
     private static MyOrderView WithIntermediateStatus(MyOrderView current, OrderStatus status) =>
         current.Status is nameof(OrderStatus.Confirmed) or nameof(OrderStatus.Cancelled)

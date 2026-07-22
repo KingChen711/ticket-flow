@@ -10,6 +10,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<CheckoutAcceptanceService>();
+        services.AddScoped<OrderMilestoneWriter>();
 
         // Registered as concrete types, not via ICommandHandler<,>/IQueryHandler<,> — endpoints
         // inject the specific handler directly (no generic resolve-by-type dispatch, see

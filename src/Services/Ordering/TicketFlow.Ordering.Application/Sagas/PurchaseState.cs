@@ -37,4 +37,40 @@ public sealed class PurchaseState : SagaStateMachineInstance
 
     /// <summary>Set on any failure event (Commit 9) — carried through compensation to the final OrderCancelledIntegrationEvent.</summary>
     public string? CancellationReason { get; set; }
+
+    // ---- Recorded facts (Commit 8) ----
+    //
+    // Before Commit 8 a milestone was only meaningful in the one state that expected it: a
+    // TicketsIssued arriving while the saga was still AwaitingSeats matched no handler and was
+    // discarded, and no later state could recover it — the purchase hung forever with the tickets
+    // already issued. These timestamps make each milestone a fact that is remembered whenever it
+    // arrives, so the order can be driven by what is known rather than by what happened to arrive
+    // in the expected sequence. Null means "not yet"; a set value is never overwritten, which is
+    // what makes redelivery a no-op.
+
+    public DateTimeOffset? SeatsConfirmedAt { get; set; }
+    public DateTimeOffset? PaymentAuthorizedAt { get; set; }
+    public DateTimeOffset? TicketsIssuedAt { get; set; }
+
+    /// <summary>Set when the command was published, so it is published exactly once.</summary>
+    public DateTimeOffset? PaymentRequestedAt { get; set; }
+
+    public DateTimeOffset? TicketsRequestedAt { get; set; }
+
+    /// <summary>Guards the whole completion fan-out: OrderCompleted, the notification and the Kafka sale.</summary>
+    public DateTimeOffset? CompletedAt { get; set; }
+
+    public DateTimeOffset? CancelledAt { get; set; }
+
+    // ---- Compensation facts ----
+    public DateTimeOffset? RefundRequestedAt { get; set; }
+    public DateTimeOffset? PaymentRefundedAt { get; set; }
+    public DateTimeOffset? ReleaseRequestedAt { get; set; }
+    public DateTimeOffset? SeatsReleasedAt { get; set; }
+
+    /// <summary>
+    /// A terminal order ignores every further milestone. Without this a late TicketsIssued for a
+    /// cancelled order would walk it back into an active state.
+    /// </summary>
+    public bool IsTerminal => CompletedAt is not null || CancelledAt is not null;
 }

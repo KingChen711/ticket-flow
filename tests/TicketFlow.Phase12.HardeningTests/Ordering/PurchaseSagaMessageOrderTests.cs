@@ -21,7 +21,7 @@ public sealed class PurchaseSagaMessageOrderTests(HardeningEnvironmentFixture en
 
     [Theory]
     [MemberData(nameof(ParticipantMilestonePermutations))]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Every_participant_milestone_permutation_and_duplicate_must_converge_once(string[] deliveryOrder)
     {
         var orderId = Guid.NewGuid();

@@ -13,6 +13,7 @@ using TicketFlow.Ordering.Api.Services;
 using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Checkout;
+using TicketFlow.Ordering.Application.Orders;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Infrastructure;
 using TicketFlow.Web;
@@ -28,7 +29,9 @@ builder.Services.AddTicketFlowObservability(
         .AddMeter(TicketSalesMetrics.MeterName)
         .AddMeter(ContractVersionMetrics.MeterName)
         // Commit 7: a replayed checkout and a backlogged outbox are both invisible in logs.
-        .AddMeter(CheckoutOperationMetrics.MeterName));
+        .AddMeter(CheckoutOperationMetrics.MeterName)
+        // Commit 8: an ignored milestone and a re-decided version race are both silent by design.
+        .AddMeter(OrderMilestoneMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
@@ -51,19 +54,18 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     // The connectionString-accepting overload still compiles but is obsolete as of this
     // MassTransit.Marten version precisely because it used to spin up a second, redundant
     // DocumentStore instead of sharing the one DI already has.
-    cfg.AddSagaStateMachine<PurchaseSaga, PurchaseState>()
+    // PurchaseSagaDefinition partitions every message type by OrderId and buffers outgoing
+    // messages until Marten has committed the saga version. MartenRepository enables optimistic
+    // concurrency for saga documents itself; the explicit callback used here before Commit 8 was
+    // redundant and, crucially, could not stop a losing execution publishing before SaveChanges.
+    cfg.AddSagaStateMachine<PurchaseSaga, PurchaseState, PurchaseSagaDefinition>()
         .MartenRepository();
 
-    // Order-stream milestone consumers (Commit 5) — separate from the saga, see
-    // OrderSeatsConfirmedConsumer's doc comment for why these aren't folded into PurchaseSaga.
-    cfg.AddConsumer<OrderSeatsConfirmedConsumer>();
-    cfg.AddConsumer<OrderPaymentAuthorizedConsumer>();
-    cfg.AddConsumer<OrderCompletedConsumer>();
-
-    // Compensation milestone consumers (Commit 9).
-    cfg.AddConsumer<OrderPaymentRefundedConsumer>();
-    cfg.AddConsumer<OrderSeatsReleasedConsumer>();
-    cfg.AddConsumer<OrderCancelledConsumer>();
+    // ONE consumer for every lifecycle milestone (Commit 8), still separate from the saga:
+    // orchestration and audit trail remain two concerns, but the audit trail now has a single
+    // writer. The six per-message consumers this replaces each owned a queue, so six of them
+    // could be inside one order's stream at the same time.
+    cfg.AddConsumer<OrderMilestoneConsumer>();
 }, configureKafka: rider =>
 {
     // Producer-only — Ordering never consumes from Kafka. Confirmed via a real probe: this

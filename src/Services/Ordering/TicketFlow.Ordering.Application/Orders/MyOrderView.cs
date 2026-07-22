@@ -26,4 +26,9 @@ public sealed record MyOrderView(
     string Status,
     DateTimeOffset PlacedAt,
     DateTimeOffset? ConfirmedAt,
-    DateTimeOffset? CancelledAt);
+    DateTimeOffset? CancelledAt,
+    // Commit 8 (delta review): the ticket PDF object keys were folded into the write stream by
+    // OrderTicketsIssued but dropped here, so "my orders" had to call Ticketing just to render a
+    // download link for data it already had. Trailing with a default so existing persisted
+    // documents keep deserializing until the projection is rebuilt.
+    IReadOnlyList<string>? TicketPdfUrls = null);

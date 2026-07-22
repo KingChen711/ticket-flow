@@ -16,6 +16,23 @@ namespace TicketFlow.Ordering.Application.Sagas;
 /// (Commit 9) — see the mermaid state diagram in phase-5-plan.md for the full picture.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Commit 8 changed the shape of this machine. Every milestone used to be bound with
+/// <c>During(SomeState, When(...))</c>, so a milestone that arrived in any other state matched no
+/// handler and was silently dropped — and nothing ever redelivered it. All six delivery orders of
+/// the three participant milestones were proven to hang the purchase, including the natural one,
+/// because the test publishes each fact twice with no pause and the second copy could overtake
+/// the first transition. Milestones are now bound with <see cref="MassTransitStateMachine{T}.DuringAny"/>:
+/// each one records a fact on the instance, then <c>Advance</c> decides what the order is owed
+/// next from the facts it holds. State is now a reflection of progress, not a gate on it.
+/// </para>
+/// <para>
+/// The instance is no longer removed on completion (<c>SetCompletedWhenFinalized</c> is gone).
+/// A removed instance cannot recognise a duplicate, so a late redelivery would look like a brand
+/// new correlation; keeping a terminal instance is what makes "ignore this, we already finished"
+/// expressible. Retention/archival of terminal instances belongs to Commit 9 along with deadlines.
+/// </para>
+/// <para>
 /// Every step below uses <c>Publish</c>, including for the commands (ConfirmSeats,
 /// ProcessPayment, IssueTickets, ReleaseSeats, RefundPayment) that are conceptually targeted at
 /// exactly one participant. MassTransit's RabbitMQ topology binds each consumer's queue to an
@@ -26,6 +43,7 @@ namespace TicketFlow.Ordering.Application.Sagas;
 /// assembly, see TicketFlow.Messaging's endpoint-formatter comment). Since each command type here
 /// has exactly one bound consumer, <c>Publish</c> reaches it identically and keeps the saga
 /// decoupled from participant queue-naming.
+/// </para>
 /// </remarks>
 public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 {
@@ -34,6 +52,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
     public State AwaitingTickets { get; private set; } = null!;
     public State CompensatingRefund { get; private set; } = null!;
     public State CompensatingSeats { get; private set; } = null!;
+    public State Completed { get; private set; } = null!;
+    public State Cancelled { get; private set; } = null!;
 
     // Suffixed "Event" to avoid the exact class-of-bug Commit 2 hit (aggregate named `Payment`
     // colliding with the `TicketFlow.Payment` namespace root) — here it'd be a property named
@@ -94,140 +114,268 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.AllocationGeneration))
                 .TransitionTo(AwaitingSeats));
 
-        During(AwaitingSeats,
+        // A duplicate OrderSubmitted is the outbox relay's at-least-once delivery (Commit 7)
+        // reaching an instance that already exists. Re-running Initially would republish
+        // ConfirmSeats, so it is explicitly a no-op instead.
+        //
+        // Listed state by state rather than with DuringAny: DuringAny includes Initial, and
+        // binding this event there as well as in Initially registers two handlers for the same
+        // event in the same state — the no-op can then shadow the real start.
+        foreach (var state in new[]
+                 {
+                     AwaitingSeats, AwaitingPayment, AwaitingTickets,
+                     CompensatingRefund, CompensatingSeats, Completed, Cancelled,
+                 })
+        {
+            During(state, When(OrderSubmittedEvent).Then(_ => { }));
+        }
+
+        DuringAny(
             When(SeatsConfirmedEvent)
                 .Then(context =>
                 {
+                    if (context.Saga.IsTerminal)
+                        return;
+
+                    // First writer wins; a redelivery finds the fact already recorded.
+                    context.Saga.SeatsConfirmedAt ??= DateTimeOffset.UtcNow;
                     context.Saga.AllocationGeneration = context.Message.Generation;
                     context.Saga.AllocationReference = context.Message.AllocationReference;
                 })
-                .Publish(context => new ProcessPayment(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.Amount,
-                    context.Saga.PaymentMethod,
-                    context.Saga.Currency,
-                    $"{context.Saga.IdempotencyKey}:charge",
-                    context.Saga.PriceSnapshotVersion))
-                .TransitionTo(AwaitingPayment),
+                .ThenAsync(AdvanceAsync),
+            When(PaymentProcessedEvent)
+                .Then(context =>
+                {
+                    if (context.Saga.IsTerminal)
+                        return;
+
+                    context.Saga.PaymentAuthorizedAt ??= DateTimeOffset.UtcNow;
+                    context.Saga.PaymentId ??= context.Message.PaymentId;
+                })
+                .ThenAsync(AdvanceAsync),
+            When(TicketsIssuedEvent)
+                .Then(context =>
+                {
+                    if (context.Saga.IsTerminal)
+                        return;
+
+                    context.Saga.TicketsIssuedAt ??= DateTimeOffset.UtcNow;
+                    if (context.Saga.TicketPdfUrls.Count == 0)
+                        context.Saga.TicketPdfUrls = [.. context.Message.TicketPdfUrls];
+                })
+                .ThenAsync(AdvanceAsync));
+
+        DuringAny(
             // Hold expired/missing before checkout completed — nothing charged, nothing to
             // release. Straight to Cancelled, no compensation commands needed (DoD scenario 3).
             When(SeatsConfirmationFailedEvent)
-                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
-                .Publish(context => new OrderCancelledIntegrationEvent(
-                    context.Saga.CorrelationId, context.Saga.UserId, context.Saga.CancellationReason!, DateTimeOffset.UtcNow))
-                .Finalize());
-
-        During(AwaitingPayment,
-            When(PaymentProcessedEvent)
-                .Then(context => context.Saga.PaymentId = context.Message.PaymentId)
-                .Publish(context => new IssueTickets(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.CatalogEventId,
-                    context.Saga.SeatIds,
-                    context.Saga.CustomerName,
-                    context.Saga.CustomerEmail,
-                    $"{context.Saga.IdempotencyKey}:issue",
-                    context.Saga.PriceSnapshotVersion))
-                .TransitionTo(AwaitingTickets),
+                .ThenAsync(context => FailAsync(context, context.Message.Reason, compensate: false)),
             // Nothing charged — release the hold directly (DoD scenario 1).
             When(PaymentFailedEvent)
-                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
-                .Publish(context => new ReleaseSeats(
-                    context.Saga.CorrelationId,
-                    context.Saga.CatalogEventId,
-                    context.Saga.HoldId,
-                    context.Saga.SeatIds,
-                    $"{context.Saga.IdempotencyKey}:release",
-                    context.Saga.AllocationGeneration,
-                    context.Saga.UserId))
-                .TransitionTo(CompensatingSeats));
-
-        During(AwaitingTickets,
-            When(TicketsIssuedEvent)
-                .Then(context => context.Saga.TicketPdfUrls = [.. context.Message.TicketPdfUrls])
-                // Same business moment as OrderCompleted/NotifyOrderCompleted below, different
-                // transport (Kafka, not RabbitMQ) and different purpose (analytics stream, not a
-                // command/notification) — Phase 6 mục 3's "2 transport, 2 mục đích" made concrete.
-                // Ordered before the two Publish calls, not after: Finalize() must directly follow
-                // a synchronous DSL activity — placing ThenAsync immediately before Finalize()
-                // causes Finalize() to silently never run (saga instance stays un-removed),
-                // confirmed by re-running this suite repeatedly with a temporary diagnostic that
-                // showed ThenAsync completing cleanly yet the instance still existing afterward.
-                //
-                // ISaleRecordedPublisher is deliberately resolved HERE (consume-time, via the
-                // scope's IServiceProvider), not constructor-injected into PurchaseSaga. It
-                // ultimately depends on ITopicProducer<SaleRecorded>, which the Kafka Rider
-                // attached to this SAME bus provides — constructor-injecting it deadlocks the
-                // whole bus at startup (MassTransit has to construct the saga to register its
-                // endpoint, which needs the Rider's producer, which needs the Rider's own
-                // startup on the bus still being configured). Confirmed by reproducing the exact
-                // hang in an isolated probe with a saga constructor depending on ITopicProducer,
-                // then confirming it disappears once resolved lazily instead.
-                .ThenAsync(async context =>
-                {
-                    var saleRecordedPublisher = context.GetPayload<IServiceProvider>().GetRequiredService<ISaleRecordedPublisher>();
-                    await saleRecordedPublisher.PublishAsync(
-                        new SaleRecorded(
-                            context.Saga.CorrelationId,
-                            context.Saga.CatalogEventId,
-                            context.Saga.SeatIds.Count,
-                            context.Saga.Amount,
-                            DateTimeOffset.UtcNow,
-                            context.Saga.Currency,
-                            context.Saga.PriceSnapshotVersion),
-                        context.CancellationToken);
-                })
-                .Publish(context => new OrderCompleted(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.CatalogEventId,
-                    context.Saga.SeatIds,
-                    context.Saga.TicketPdfUrls,
-                    DateTimeOffset.UtcNow))
-                .Publish(context => new NotifyOrderCompleted(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.CatalogEventId,
-                    context.Saga.CustomerName,
-                    context.Saga.CustomerEmail,
-                    context.Saga.TicketPdfUrls))
-                .Finalize(),
+                .ThenAsync(context => FailAsync(context, context.Message.Reason, compensate: true)),
             // Already charged — refund first, THEN release the hold (DoD scenario 2).
             When(TicketingFailedEvent)
-                .Then(context => context.Saga.CancellationReason = context.Message.Reason)
-                .Publish(context => new RefundPayment(
-                    context.Saga.CorrelationId,
-                    context.Saga.PaymentId!.Value,
-                    context.Saga.Amount,
-                    context.Saga.Currency,
-                    $"{context.Saga.IdempotencyKey}:refund"))
-                .TransitionTo(CompensatingRefund));
-
-        During(CompensatingRefund,
+                .ThenAsync(context => FailAsync(context, context.Message.Reason, compensate: true)),
             When(PaymentRefundedEvent)
-                .Publish(context => new ReleaseSeats(
-                    context.Saga.CorrelationId,
-                    context.Saga.CatalogEventId,
-                    context.Saga.HoldId,
-                    context.Saga.SeatIds,
-                    $"{context.Saga.IdempotencyKey}:release",
-                    context.Saga.AllocationGeneration,
-                    context.Saga.UserId))
-                .TransitionTo(CompensatingSeats));
-
-        // Both compensation paths (PaymentFailed direct, TicketingFailed via CompensatingRefund)
-        // converge here — the seats are released either way, then the order is finally cancelled.
-        During(CompensatingSeats,
+                .Then(context => context.Saga.PaymentRefundedAt ??= DateTimeOffset.UtcNow)
+                .ThenAsync(CompensateAsync),
             When(SeatsReleasedEvent)
-                .Publish(context => new OrderCancelledIntegrationEvent(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.CancellationReason ?? "Compensation completed.",
-                    DateTimeOffset.UtcNow))
-                .Finalize());
+                .Then(context => context.Saga.SeatsReleasedAt ??= DateTimeOffset.UtcNow)
+                .ThenAsync(CompensateAsync));
+    }
 
-        SetCompletedWhenFinalized();
+    /// <summary>
+    /// The whole decision table, evaluated from recorded facts only. Reading it top to bottom is
+    /// the order's actual dependency chain; nothing here depends on which message just arrived or
+    /// on the current state, which is exactly why every delivery order converges.
+    /// </summary>
+    private static async Task AdvanceAsync(BehaviorContext<PurchaseState> context)
+    {
+        var saga = context.Saga;
+        if (saga.IsTerminal || saga.CancellationReason is not null)
+            return;
+
+        if (saga.SeatsConfirmedAt is null)
+            return;
+
+        if (saga.PaymentAuthorizedAt is null)
+        {
+            if (saga.PaymentRequestedAt is null)
+            {
+                saga.PaymentRequestedAt = DateTimeOffset.UtcNow;
+                await context.Publish(new ProcessPayment(
+                    saga.CorrelationId,
+                    saga.UserId,
+                    saga.Amount,
+                    saga.PaymentMethod,
+                    saga.Currency,
+                    $"{saga.IdempotencyKey}:charge",
+                    saga.PriceSnapshotVersion));
+            }
+
+            await TransitionAsync(context, "AwaitingPayment");
+            return;
+        }
+
+        if (saga.TicketsIssuedAt is null)
+        {
+            if (saga.TicketsRequestedAt is null)
+            {
+                saga.TicketsRequestedAt = DateTimeOffset.UtcNow;
+                await context.Publish(new IssueTickets(
+                    saga.CorrelationId,
+                    saga.UserId,
+                    saga.CatalogEventId,
+                    saga.SeatIds,
+                    saga.CustomerName,
+                    saga.CustomerEmail,
+                    $"{saga.IdempotencyKey}:issue",
+                    saga.PriceSnapshotVersion));
+            }
+
+            await TransitionAsync(context, "AwaitingTickets");
+            return;
+        }
+
+        saga.CompletedAt = DateTimeOffset.UtcNow;
+
+        // ISaleRecordedPublisher is deliberately resolved HERE (consume-time, via the scope's
+        // IServiceProvider), not constructor-injected into PurchaseSaga. It ultimately depends on
+        // ITopicProducer<SaleRecorded>, which the Kafka Rider attached to this SAME bus provides —
+        // constructor-injecting it deadlocks the whole bus at startup (MassTransit has to
+        // construct the saga to register its endpoint, which needs the Rider's producer, which
+        // needs the Rider's own startup on the bus still being configured). Confirmed by
+        // reproducing the exact hang in an isolated probe with a saga constructor depending on
+        // ITopicProducer, then confirming it disappears once resolved lazily instead.
+        var saleRecordedPublisher = context.GetPayload<IServiceProvider>().GetRequiredService<ISaleRecordedPublisher>();
+        await saleRecordedPublisher.PublishAsync(
+            new SaleRecorded(
+                saga.CorrelationId,
+                saga.CatalogEventId,
+                saga.SeatIds.Count,
+                saga.Amount,
+                saga.CompletedAt.Value,
+                saga.Currency,
+                saga.PriceSnapshotVersion),
+            context.CancellationToken);
+
+        await context.Publish(new OrderCompleted(
+            saga.CorrelationId,
+            saga.UserId,
+            saga.CatalogEventId,
+            saga.SeatIds,
+            saga.TicketPdfUrls,
+            // Stable, persisted before publication, so a redelivery cannot invent a second
+            // completion time for the same order.
+            saga.CompletedAt.Value));
+
+        await context.Publish(new NotifyOrderCompleted(
+            saga.CorrelationId,
+            saga.UserId,
+            saga.CatalogEventId,
+            saga.CustomerName,
+            saga.CustomerEmail,
+            saga.TicketPdfUrls));
+
+        await TransitionAsync(context, "Completed");
+    }
+
+    private static async Task FailAsync(BehaviorContext<PurchaseState> context, string reason, bool compensate)
+    {
+        var saga = context.Saga;
+        if (saga.IsTerminal)
+            return;
+
+        // A failure after the order already completed is a late duplicate, not a reversal.
+        if (saga.CompletedAt is not null)
+            return;
+
+        saga.CancellationReason ??= reason;
+
+        if (!compensate)
+        {
+            await FinishCancellationAsync(context);
+            return;
+        }
+
+        await CompensateAsync(context);
+    }
+
+    /// <summary>
+    /// Compensation as a decision table too, for the same reason: a PaymentRefunded that overtakes
+    /// the TicketingFailed that asked for it must not be lost.
+    /// </summary>
+    private static async Task CompensateAsync(BehaviorContext<PurchaseState> context)
+    {
+        var saga = context.Saga;
+        if (saga.IsTerminal || saga.CancellationReason is null)
+            return;
+
+        // Only a charge that actually happened needs reversing.
+        if (saga.PaymentAuthorizedAt is not null && saga.PaymentRefundedAt is null)
+        {
+            if (saga.RefundRequestedAt is null)
+            {
+                saga.RefundRequestedAt = DateTimeOffset.UtcNow;
+                await context.Publish(new RefundPayment(
+                    saga.CorrelationId,
+                    saga.PaymentId!.Value,
+                    saga.Amount,
+                    saga.Currency,
+                    $"{saga.IdempotencyKey}:refund"));
+            }
+
+            await TransitionAsync(context, "CompensatingRefund");
+            return;
+        }
+
+        if (saga.SeatsReleasedAt is null)
+        {
+            if (saga.ReleaseRequestedAt is null)
+            {
+                saga.ReleaseRequestedAt = DateTimeOffset.UtcNow;
+                await context.Publish(new ReleaseSeats(
+                    saga.CorrelationId,
+                    saga.CatalogEventId,
+                    saga.HoldId,
+                    saga.SeatIds,
+                    $"{saga.IdempotencyKey}:release",
+                    saga.AllocationGeneration,
+                    saga.UserId));
+            }
+
+            await TransitionAsync(context, "CompensatingSeats");
+            return;
+        }
+
+        await FinishCancellationAsync(context);
+    }
+
+    private static async Task FinishCancellationAsync(BehaviorContext<PurchaseState> context)
+    {
+        var saga = context.Saga;
+        saga.CancelledAt = DateTimeOffset.UtcNow;
+
+        await context.Publish(new OrderCancelledIntegrationEvent(
+            saga.CorrelationId,
+            saga.UserId,
+            saga.CancellationReason ?? "Compensation completed.",
+            saga.CancelledAt.Value));
+
+        await TransitionAsync(context, "Cancelled");
+    }
+
+    /// <summary>
+    /// The DSL's <c>TransitionTo</c> only exists on an activity binder, and the target here is
+    /// decided at run time from the facts. Resolving the state by name off the machine is the
+    /// supported way to move an instance from inside an activity.
+    /// </summary>
+    private static Task TransitionAsync(BehaviorContext<PurchaseState> context, string stateName)
+    {
+        var machine = (PurchaseSaga)context.StateMachine;
+        var state = machine.GetState(stateName);
+        return context.Saga.CurrentState == stateName
+            ? Task.CompletedTask
+            : context.TransitionToState(state);
     }
 }

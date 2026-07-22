@@ -62,7 +62,10 @@ public sealed class HardeningEnvironmentFixture : IAsyncLifetime
             configuration.SetEndpointNameFormatter(
                 new KebabCaseEndpointNameFormatter("phase12-hardening", includeNamespace: false));
 
-            configuration.AddSagaStateMachine<PurchaseSaga, PurchaseState>()
+            // Keep the real-infrastructure fixture on the exact production partition/outbox and
+            // Marten repository configuration; otherwise the permutation gate measures a bus
+            // topology that Ordering never runs.
+            configuration.AddSagaStateMachine<PurchaseSaga, PurchaseState, PurchaseSagaDefinition>()
                 .MartenRepository();
 
             configuration.AddConsumer<InfrastructureProbeConsumer>();

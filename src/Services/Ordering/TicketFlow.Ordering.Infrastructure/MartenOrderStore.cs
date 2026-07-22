@@ -1,4 +1,6 @@
+using JasperFx.Events;
 using Marten;
+using Marten.Exceptions;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Domain.Orders;
 
@@ -34,6 +36,42 @@ public sealed class MartenOrderStore(IDocumentSession session) : IOrderStore
     public void Append(Guid orderId, object @event) =>
         session.Events.Append(orderId, @event);
 
+    /// <summary>
+    /// FetchForWriting records the version it read and makes Marten enforce it at SaveChanges —
+    /// the difference between "append whatever I decided" and "append only if nobody moved the
+    /// stream while I was deciding".
+    /// </summary>
+    public async Task<IOrderStreamWriter?> FetchForWritingAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        if (orderId == Guid.Empty)
+            return null;
+
+        var stream = await session.Events.FetchForWriting<Order>(orderId, cancellationToken);
+        return stream.Aggregate is null ? null : new MartenOrderStreamWriter(stream);
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken = default) =>
         session.SaveChangesAsync(cancellationToken);
+
+    public bool IsConcurrencyConflict(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is ConcurrentUpdateException or EventStreamUnexpectedMaxEventIdException)
+                return true;
+        }
+
+        return false;
+    }
+
+    private sealed class MartenOrderStreamWriter(IEventStream<Order> stream) : IOrderStreamWriter
+    {
+        public Order Order { get; } = stream.Aggregate;
+
+        public long Version { get; } = stream.CurrentVersion ?? 0;
+
+        public void Append(object @event) => stream.AppendOne(@event);
+    }
 }
