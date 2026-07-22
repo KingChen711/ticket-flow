@@ -22,7 +22,17 @@ public static class HoldEndpoints
 
             var result = await service.HoldAsync(
                 new HoldSeatsRequest(request.EventId, request.SeatIds, ownerUserId), ct);
-            return result.Success ? Results.Ok(result) : Results.Conflict(result);
+
+            // A throttled caller must be able to tell "you are asking for too much" apart from
+            // "these seats are gone" — otherwise a per-user cap is indistinguishable from a real
+            // sold-out event for both the UI and anyone probing availability (Commit 5 delta).
+            return result.Reason switch
+            {
+                HoldRejectionReason.RateLimited => Results.Json(result, statusCode: StatusCodes.Status429TooManyRequests),
+                HoldRejectionReason.HoldCapExceeded => Results.Json(result, statusCode: StatusCodes.Status409Conflict),
+                HoldRejectionReason.SeatsUnavailable => Results.Conflict(result),
+                _ => Results.Ok(result),
+            };
         });
 
         group.MapGet("/{holdId:guid}/quote", async (

@@ -49,19 +49,67 @@ public sealed record ConfirmSeatAllocationResult(
     string? FailureCode = null,
     string? FailureReason = null);
 
+/// <summary>
+/// Why a hold was refused. The caller must be able to tell "these seats are taken" apart from
+/// "you are holding too much / too often" — otherwise a per-user cap looks identical to a real
+/// sold-out event, both to the UI and to anyone probing the API (plan Commit 5 delta).
+/// </summary>
+public enum HoldRejectionReason
+{
+    None,
+    SeatsUnavailable,
+    HoldCapExceeded,
+    RateLimited,
+}
+
 public sealed record HoldSeatsResult(
     bool Success,
     Guid? HoldId,
     DateTimeOffset? ExpiresAt,
     IReadOnlyList<Guid> UnavailableSeatIds,
-    HoldQuoteResponse? Quote)
+    HoldQuoteResponse? Quote,
+    HoldRejectionReason Reason = HoldRejectionReason.None,
+    string? ReasonDetail = null)
 {
     public static HoldSeatsResult Succeeded(HoldQuoteResponse quote) =>
         new(true, quote.HoldId, quote.ExpiresAt, [], quote);
 
     public static HoldSeatsResult Unavailable(IReadOnlyList<Guid> seatIds) =>
-        new(false, null, null, seatIds, null);
+        new(false, null, null, seatIds, null, HoldRejectionReason.SeatsUnavailable);
+
+    public static HoldSeatsResult CapExceeded(string detail) =>
+        new(false, null, null, [], null, HoldRejectionReason.HoldCapExceeded, detail);
+
+    public static HoldSeatsResult RateLimited(string detail) =>
+        new(false, null, null, [], null, HoldRejectionReason.RateLimited, detail);
 }
+
+/// <summary>
+/// Owner-scoped compensation request. Every authority field is an <em>expectation</em>: the
+/// service releases only what still matches it, and reports the rest as stale.
+/// </summary>
+public sealed record ReleaseSeatAllocationRequest(
+    Guid OrderId,
+    Guid EventId,
+    Guid HoldId,
+    IReadOnlyList<Guid> SeatIds,
+    Guid? OwnerUserId,
+    long Generation,
+    string? OperationKey = null);
+
+public sealed record ReleaseSeatAllocationResult(
+    bool Succeeded,
+    Guid OrderId,
+    Guid EventId,
+    Guid HoldId,
+    Guid? OwnerUserId,
+    long Generation,
+    IReadOnlyList<Guid> ReleasedSeatIds,
+    IReadOnlyList<Guid> StaleSeatIds,
+    Guid OperationReference,
+    DateTimeOffset DecidedAt,
+    string? FailureCode = null,
+    string? FailureReason = null);
 
 /// <summary>
 /// Answers "can these exact seats be sold right now" for a caller that doesn't already know the

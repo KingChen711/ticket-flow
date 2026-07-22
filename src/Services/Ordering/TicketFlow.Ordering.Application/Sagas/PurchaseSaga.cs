@@ -140,7 +140,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.HoldId,
                     context.Saga.SeatIds,
                     $"{context.Saga.IdempotencyKey}:release",
-                    context.Saga.AllocationGeneration))
+                    context.Saga.AllocationGeneration,
+                    context.Saga.UserId))
                 .TransitionTo(CompensatingSeats));
 
         During(AwaitingTickets,
@@ -212,7 +213,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.HoldId,
                     context.Saga.SeatIds,
                     $"{context.Saga.IdempotencyKey}:release",
-                    context.Saga.AllocationGeneration))
+                    context.Saga.AllocationGeneration,
+                    context.Saga.UserId))
                 .TransitionTo(CompensatingSeats));
 
         // Both compensation paths (PaymentFailed direct, TicketingFailed via CompensatingRefund)

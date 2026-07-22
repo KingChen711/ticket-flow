@@ -275,6 +275,46 @@ public sealed class SeatAllocation : Entity<Guid>
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Owner-scoped compensation (Phase 12 Commit 5). The caller must prove the exact
+    /// hold/order/owner/generation that this row still carries; anything else is a stale or
+    /// duplicate compensation whose seat has already moved on, and it is refused as a no-op
+    /// rather than handed back to the pool. This is the ABA guard: order A's delayed release
+    /// arriving after the seat was resold to order B must not free B's seat.
+    /// </summary>
+    public SeatAllocationReleaseOutcome ReleaseOwned(
+        Guid expectedHoldId,
+        Guid? expectedOrderId,
+        Guid expectedOwnerUserId,
+        long expectedGeneration,
+        DateTimeOffset now)
+    {
+        if (expectedHoldId == Guid.Empty)
+            throw new ArgumentException("Hold id is required.", nameof(expectedHoldId));
+        if (expectedOwnerUserId == Guid.Empty)
+            throw new ArgumentException("Owner user id is required.", nameof(expectedOwnerUserId));
+        if (expectedGeneration <= 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedGeneration));
+
+        if (HoldId != expectedHoldId ||
+            OwnerUserId != expectedOwnerUserId ||
+            Generation != expectedGeneration)
+            return SeatAllocationReleaseOutcome.OwnershipChanged;
+
+        // A confirmed row also has to match the order that owns it. A release naming a different
+        // order for the same hold is the compensation of a different business operation.
+        if (State == SeatAllocationState.Confirmed && expectedOrderId is not null && OrderId != expectedOrderId)
+            return SeatAllocationReleaseOutcome.OwnershipChanged;
+
+        if (State is SeatAllocationState.Released or SeatAllocationState.Expired)
+            return SeatAllocationReleaseOutcome.AlreadyReleased;
+
+        State = SeatAllocationState.Released;
+        ExpiresAt = now;
+        UpdatedAt = now;
+        return SeatAllocationReleaseOutcome.Released;
+    }
+
     public void MarkExpired(DateTimeOffset now)
     {
         if (State != SeatAllocationState.Held || ExpiresAt is null || ExpiresAt > now)

@@ -148,33 +148,149 @@ public sealed class ReservationFailureBoundaryTests
     }
 
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Stale_release_from_order_A_must_not_unsell_a_seat_now_owned_by_order_B()
     {
+        var now = DateTimeOffset.UtcNow;
         var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var orderA = Guid.NewGuid();
+        var orderB = Guid.NewGuid();
+        var holdA = Guid.NewGuid();
+        var holdB = Guid.NewGuid();
         var seat = Seat.Create(eventId, Guid.NewGuid(), "B-1");
-        seat.MarkSold(); // Durable allocation is conceptually owned by order B.
-        var repository = new FakeSeatRepository([seat]);
+        seat.MarkSold();
+
+        // Order A's hold was consumed, then the same seat was resold to order B under a NEWER
+        // generation — the exact ABA shape a delayed compensation must not act on.
+        var quoteA = ConsumedQuote(holdA, eventId, ownerId, [seat.Id], generation: 4, orderA, now);
+        var allocation = SeatAllocation.CreateConfirmed(
+            seat.Id, eventId, holdB, orderB, ownerId, 9, 11, 100_000m, "VND", now);
+        var allocations = new FakeSeatAllocationRepository([allocation]);
         var holds = new FakeSeatHoldStore();
         holds.SeedSold([seat.Id]);
-        var service = CreateService(repository, holds, new ControlledReservationUnitOfWork());
+        var publisher = new RecordingSeatAvailabilityEventPublisher();
+        var service = CreateService(
+            new FakeSeatRepository([seat]),
+            holds,
+            new ControlledReservationUnitOfWork(),
+            allocations,
+            publisher: publisher,
+            quotes: new FakeHoldQuoteRepository([quoteA]),
+            timeProvider: new FixedTimeProvider(now));
 
-        // Current API carries only seat ids, so delayed compensation for order A cannot prove
-        // ownership/generation and blindly makes order B's seat Available.
-        await service.UnsellAsync(eventId, [seat.Id]);
+        var result = await service.CompensateAsync(new ReleaseSeatAllocationRequest(
+            orderA, eventId, holdA, [seat.Id], ownerId, 4, "release-stale"));
 
+        // The compensation completes (the saga must still reach Cancelled) but touches nothing:
+        // order B keeps its paid seat, in PostgreSQL, in the cache, and on the seat map.
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.ReleasedSeatIds);
+        Assert.Equal([seat.Id], result.StaleSeatIds);
         Assert.Equal(SeatStatus.Sold, seat.Status);
         Assert.Contains(seat.Id, holds.SoldSeatIds);
+        Assert.Equal(SeatAllocationState.Confirmed, allocation.State);
+        Assert.Equal(orderB, allocation.OrderId);
+        Assert.Empty(publisher.Published);
     }
 
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Owner_scoped_compensation_releases_only_its_own_allocation_and_republishes_availability()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var holdId = Guid.NewGuid();
+        const long generation = 5;
+        var seat = Seat.Create(eventId, Guid.NewGuid(), "A-7");
+        seat.MarkSold();
+        var quote = ConsumedQuote(holdId, eventId, ownerId, [seat.Id], generation, orderId, now);
+        var allocation = SeatAllocation.CreateConfirmed(
+            seat.Id, eventId, holdId, orderId, ownerId, generation, 11, 100_000m, "VND", now);
+        var allocations = new FakeSeatAllocationRepository([allocation]);
+        var holds = new FakeSeatHoldStore();
+        holds.SeedSold([seat.Id]);
+        var publisher = new RecordingSeatAvailabilityEventPublisher();
+        var service = CreateService(
+            new FakeSeatRepository([seat]),
+            holds,
+            new ControlledReservationUnitOfWork(),
+            allocations,
+            publisher: publisher,
+            quotes: new FakeHoldQuoteRepository([quote]),
+            timeProvider: new FixedTimeProvider(now));
+        var request = new ReleaseSeatAllocationRequest(
+            orderId, eventId, holdId, [seat.Id], ownerId, generation, "release-owned");
+
+        var first = await service.CompensateAsync(request);
+        var replay = await service.CompensateAsync(request);
+
+        Assert.True(first.Succeeded);
+        Assert.Equal([seat.Id], first.ReleasedSeatIds);
+        Assert.Empty(first.StaleSeatIds);
+        Assert.Equal(SeatStatus.Available, seat.Status);
+        Assert.DoesNotContain(seat.Id, holds.SoldSeatIds);
+        Assert.Equal(SeatAllocationState.Released, allocation.State);
+
+        // Delta review 2026-07-20: the old UnsellAsync never notified, so a compensated seat
+        // stayed visually Sold until a manual refetch.
+        var published = Assert.Single(publisher.Published);
+        Assert.Equal("Available", published.Status);
+        Assert.Equal([seat.Id], published.SeatIds);
+
+        // Redelivery replays the receipt instead of re-running the mutation.
+        Assert.Equal(first.OperationReference, replay.OperationReference);
+        Assert.Equal(first.ReleasedSeatIds, replay.ReleasedSeatIds);
+        Assert.Single(publisher.Published);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Compensation_naming_another_orders_seat_set_must_release_nothing()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var holdId = Guid.NewGuid();
+        const long generation = 2;
+        var ownSeat = Seat.Create(eventId, Guid.NewGuid(), "C-1");
+        var victimSeat = Seat.Create(eventId, Guid.NewGuid(), "C-2");
+        ownSeat.MarkSold();
+        victimSeat.MarkSold();
+        var quote = ConsumedQuote(holdId, eventId, ownerId, [ownSeat.Id], generation, orderId, now);
+        var victimAllocation = SeatAllocation.CreateConfirmed(
+            victimSeat.Id, eventId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 3, 11, 100_000m, "VND", now);
+        var service = CreateService(
+            new FakeSeatRepository([ownSeat, victimSeat]),
+            new FakeSeatHoldStore(),
+            new ControlledReservationUnitOfWork(),
+            new FakeSeatAllocationRepository([victimAllocation]),
+            quotes: new FakeHoldQuoteRepository([quote]),
+            timeProvider: new FixedTimeProvider(now));
+
+        // The message claims a seat the durable quote never covered.
+        var result = await service.CompensateAsync(new ReleaseSeatAllocationRequest(
+            orderId, eventId, holdId, [victimSeat.Id], ownerId, generation, "release-tampered"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("AuthorityMismatch", result.FailureCode);
+        Assert.Empty(result.ReleasedSeatIds);
+        Assert.Equal(SeatStatus.Sold, victimSeat.Status);
+        Assert.Equal(SeatAllocationState.Confirmed, victimAllocation.State);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Crash_after_inventory_Postgres_commit_before_Redis_load_must_be_repairable_by_retry()
     {
         var eventId = Guid.NewGuid();
         var repository = new FakeSeatRepository();
         var holds = new FakeSeatHoldStore { FailNextInventoryLoad = true };
-        var service = new InventoryService(repository, holds, new ControlledReservationUnitOfWork());
+        var service = new InventoryService(
+            repository, holds, new ControlledReservationUnitOfWork(), new ReservationOptions());
         var request = new ProvisionInventoryRequest(
             eventId,
             [new ProvisionSectionRequest(Guid.NewGuid(), "VIP", 2)]);
@@ -182,10 +298,112 @@ public sealed class ReservationFailureBoundaryTests
         // Failpoint: DB rows committed, Redis LoadInventory did not.
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ProvisionAsync(request));
 
-        var retryError = await Record.ExceptionAsync(() => service.ProvisionAsync(request));
+        var seatCount = await service.ProvisionAsync(request);
 
-        Assert.Null(retryError);
+        Assert.Equal(2, seatCount);
         Assert.True(holds.InventoryLoaded);
+        // The repair must not duplicate the durable inventory it is repairing.
+        Assert.Equal(2, (await repository.GetByEventAsync(eventId)).Count);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Repeat_provisioning_with_a_different_shape_must_be_refused()
+    {
+        var eventId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var service = new InventoryService(
+            new FakeSeatRepository(), new FakeSeatHoldStore(), new ControlledReservationUnitOfWork(),
+            new ReservationOptions());
+        await service.ProvisionAsync(new ProvisionInventoryRequest(
+            eventId, [new ProvisionSectionRequest(sectionId, "VIP", 2)]));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ProvisionAsync(
+            new ProvisionInventoryRequest(eventId, [new ProvisionSectionRequest(sectionId, "VIP", 5)])));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_single_user_cannot_lock_out_an_event_by_exceeding_the_per_user_hold_caps()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var seats = Enumerable.Range(0, 8).Select(index => Seat.Create(eventId, sectionId, $"G-{index}")).ToArray();
+        var quotes = new FakeHoldQuoteRepository();
+        var options = new ReservationOptions
+        {
+            MaxActiveHoldsPerUserPerEvent = 2,
+            MaxHeldSeatsPerUserPerEvent = 4,
+            MaxHoldsPerUserPerWindow = 10,
+        };
+        var service = CreateService(
+            new FakeSeatRepository(seats),
+            new FakeSeatHoldStore(),
+            new ControlledReservationUnitOfWork(),
+            quotes: quotes,
+            policy: PublishedPolicy(eventId, sectionId, 9, 50_000m, "VND", now),
+            timeProvider: new FixedTimeProvider(now),
+            options: options);
+
+        Assert.True((await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[0].Id], ownerId))).Success);
+        Assert.True((await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[1].Id], ownerId))).Success);
+
+        var capped = await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[2].Id], ownerId));
+
+        // A cap rejection must be distinguishable from a genuine sold-out response, which is what
+        // the endpoint maps to 409-cap vs 409-unavailable vs 429.
+        Assert.False(capped.Success);
+        Assert.Equal(HoldRejectionReason.HoldCapExceeded, capped.Reason);
+        Assert.Empty(capped.UnavailableSeatIds);
+        Assert.Equal(2, quotes.Quotes.Count);
+
+        // Another customer is unaffected by the first user's budget.
+        var otherUser = await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[3].Id], Guid.NewGuid()));
+        Assert.True(otherUser.Success);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Hold_release_looping_must_hit_the_rate_limit_instead_of_refilling_the_budget()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var seats = Enumerable.Range(0, 5).Select(index => Seat.Create(eventId, sectionId, $"R-{index}")).ToArray();
+        var quotes = new FakeHoldQuoteRepository();
+        var options = new ReservationOptions
+        {
+            MaxActiveHoldsPerUserPerEvent = 10,
+            MaxHeldSeatsPerUserPerEvent = 50,
+            MaxHoldsPerUserPerWindow = 2,
+            HoldRateLimitWindowSeconds = 60,
+        };
+        var service = CreateService(
+            new FakeSeatRepository(seats),
+            new FakeSeatHoldStore(),
+            new ControlledReservationUnitOfWork(),
+            quotes: quotes,
+            policy: PublishedPolicy(eventId, sectionId, 9, 50_000m, "VND", now),
+            timeProvider: new FixedTimeProvider(now),
+            options: options);
+
+        var first = await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[0].Id], ownerId));
+        var second = await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[1].Id], ownerId));
+        Assert.True(first.Success);
+        Assert.True(second.Success);
+
+        // Releasing frees the seats but must NOT refill the creation budget, otherwise the limit
+        // is bypassed by a hold/release loop.
+        Assert.True(await service.ReleaseOwnedHoldAsync(first.HoldId!.Value, ownerId));
+
+        var limited = await service.HoldAsync(new HoldSeatsRequest(eventId, [seats[2].Id], ownerId));
+
+        Assert.False(limited.Success);
+        Assert.Equal(HoldRejectionReason.RateLimited, limited.Reason);
+        Assert.Empty(limited.UnavailableSeatIds);
     }
 
     private static ReservationService CreateService(
@@ -197,7 +415,8 @@ public sealed class ReservationFailureBoundaryTests
         ISeatAvailabilityEventPublisher? publisher = null,
         FakeHoldQuoteRepository? quotes = null,
         EventSalePolicy? policy = null,
-        TimeProvider? timeProvider = null) =>
+        TimeProvider? timeProvider = null,
+        ReservationOptions? options = null) =>
         new(
             repository,
             holds,
@@ -209,7 +428,22 @@ public sealed class ReservationFailureBoundaryTests
             unitOfWork,
             publisher ?? new RecordingSeatAvailabilityEventPublisher(),
             timeProvider ?? TimeProvider.System,
-            new ReservationOptions());
+            options ?? new ReservationOptions());
+
+    private static HoldQuote ConsumedQuote(
+        Guid holdId,
+        Guid eventId,
+        Guid ownerId,
+        IReadOnlyList<Guid> seatIds,
+        long generation,
+        Guid orderId,
+        DateTimeOffset now)
+    {
+        var quote = HoldQuote.Create(
+            holdId, eventId, ownerId, seatIds, 100_000m, "VND", 11, generation, now, now.AddMinutes(5));
+        quote.Consume(orderId, now);
+        return quote;
+    }
 
     private static HoldQuote ActiveQuote(
         Guid holdId,
@@ -319,6 +553,29 @@ internal sealed class FakeHoldQuoteRepository(IEnumerable<HoldQuote>? initial = 
                 .Order()
                 .ToList());
 
+    public Task<IReadOnlyList<HoldQuote>> GetActiveByOwnerAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<HoldQuote>>(
+            _quotes.Values
+                .Where(quote =>
+                    quote.EventId == eventId &&
+                    quote.OwnerUserId == ownerUserId &&
+                    quote.IsActiveAt(now))
+                .ToList());
+
+    public Task<int> CountCreatedByOwnerSinceAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        DateTimeOffset since,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(_quotes.Values.Count(quote =>
+            quote.EventId == eventId &&
+            quote.OwnerUserId == ownerUserId &&
+            quote.CreatedAt >= since));
+
     public void Add(HoldQuote quote) => _quotes.Add(quote.Id, quote);
 }
 
@@ -340,6 +597,12 @@ internal sealed class FakeSeatAllocationRepository(IEnumerable<SeatAllocation>? 
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<SeatAllocation>>(
             _allocations.Where(item => item.HoldId == holdId).ToList());
+
+    public Task<IReadOnlyList<SeatAllocation>> GetByOrderAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<SeatAllocation>>(
+            _allocations.Where(item => item.OrderId == orderId).ToList());
 
     public void AddRange(IEnumerable<SeatAllocation> allocations) => _allocations.AddRange(allocations);
 }

@@ -12,6 +12,7 @@ using TicketFlow.Reservation.Api.Messaging;
 using TicketFlow.Reservation.Api.Services;
 using TicketFlow.Reservation.Application;
 using TicketFlow.Reservation.Application.Abstractions;
+using TicketFlow.Reservation.Application.Seats;
 using TicketFlow.Reservation.Infrastructure;
 using TicketFlow.Reservation.Infrastructure.Reconciliation;
 using TicketFlow.Web;
@@ -41,7 +42,11 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "reservation",
-    configureMetrics: m => m.AddMeter(ContractVersionMetrics.MeterName));
+    configureMetrics: m => m
+        .AddMeter(ContractVersionMetrics.MeterName)
+        // Commit 5: stale compensations and per-user hold rejections are silent no-ops by design,
+        // so they only exist operationally if they are counted.
+        .AddMeter(ReservationCompensationMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddGrpc();
 builder.Services.AddOpenApi();

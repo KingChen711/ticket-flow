@@ -43,6 +43,25 @@ public sealed class ReservationOperationReceipt
         };
     }
 
+    public static ReservationOperationReceipt StartRelease(
+        string businessKey,
+        string requestFingerprint,
+        DateTimeOffset startedAt)
+    {
+        ValidateIdentity(businessKey, requestFingerprint);
+
+        return new ReservationOperationReceipt
+        {
+            Id = Guid.NewGuid(),
+            OperationType = OperationTypes.ReleaseSeats,
+            BusinessKey = businessKey.Trim(),
+            RequestFingerprint = requestFingerprint.Trim(),
+            Outcome = null,
+            CreatedAt = startedAt,
+            CompletedAt = null
+        };
+    }
+
     public bool HasFingerprint(string requestFingerprint) =>
         string.Equals(RequestFingerprint, requestFingerprint, StringComparison.Ordinal);
 
@@ -76,6 +95,62 @@ public sealed class ReservationOperationReceipt
         return JsonSerializer.Deserialize<ConfirmSeatsReceiptSnapshot>(Outcome)
             ?? throw new InvalidOperationException("The stored confirm-seats outcome is invalid.");
     }
+
+    public void CompletePendingRelease(
+        string requestFingerprint,
+        ReleaseSeatsReceiptSnapshot snapshot,
+        DateTimeOffset completedAt)
+    {
+        EnsureReleaseFingerprint(requestFingerprint);
+
+        if (!IsPending)
+        {
+            _ = ReplayRelease(requestFingerprint);
+            return;
+        }
+
+        var normalizedSnapshot = snapshot with { OperationReference = Id };
+        Outcome = JsonSerializer.Serialize(normalizedSnapshot);
+        CompletedAt = completedAt;
+    }
+
+    public ReleaseSeatsReceiptSnapshot ReplayRelease(string requestFingerprint)
+    {
+        EnsureReleaseFingerprint(requestFingerprint);
+
+        if (IsPending || string.IsNullOrWhiteSpace(Outcome) || CompletedAt is null)
+        {
+            throw new InvalidOperationException("The release-seats operation is still pending.");
+        }
+
+        return JsonSerializer.Deserialize<ReleaseSeatsReceiptSnapshot>(Outcome)
+            ?? throw new InvalidOperationException("The stored release-seats outcome is invalid.");
+    }
+
+    /// <summary>
+    /// Compensation is keyed by order+hold, not by seat set: the saga may republish the same
+    /// logical release after a crash, and the seats it names must not widen or narrow what the
+    /// first attempt already decided.
+    /// </summary>
+    public static string ReleaseBusinessKey(Guid orderId, Guid holdId)
+    {
+        if (orderId == Guid.Empty)
+        {
+            throw new ArgumentException("Order id is required.", nameof(orderId));
+        }
+
+        if (holdId == Guid.Empty)
+        {
+            throw new ArgumentException("Hold id is required.", nameof(holdId));
+        }
+
+        return $"release:{orderId:N}:{holdId:N}";
+    }
+
+    public static string ReleaseBusinessKey(string? operationKey, Guid orderId, Guid holdId) =>
+        string.IsNullOrWhiteSpace(operationKey)
+            ? ReleaseBusinessKey(orderId, holdId)
+            : operationKey.Trim();
 
     public static string ConfirmBusinessKey(Guid orderId, Guid holdId)
     {
@@ -127,11 +202,48 @@ public sealed class ReservationOperationReceipt
         }
     }
 
+    private void EnsureReleaseFingerprint(string requestFingerprint)
+    {
+        if (!string.Equals(OperationType, OperationTypes.ReleaseSeats, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The receipt is not a release-seats operation.");
+        }
+
+        if (!HasFingerprint(requestFingerprint))
+        {
+            throw new ReservationOperationFingerprintMismatchException(
+                OperationType,
+                BusinessKey,
+                RequestFingerprint,
+                requestFingerprint);
+        }
+    }
+
     public static class OperationTypes
     {
         public const string ConfirmSeats = "ConfirmSeats";
+        public const string ReleaseSeats = "ReleaseSeats";
     }
 }
+
+/// <summary>
+/// What a compensation actually did, per seat set. <see cref="StaleSeatIds"/> is not an error:
+/// it records the seats this operation deliberately refused to touch because a newer
+/// hold/order/owner/generation already owns them.
+/// </summary>
+public sealed record ReleaseSeatsReceiptSnapshot(
+    bool Succeeded,
+    Guid OrderId,
+    Guid EventId,
+    Guid HoldId,
+    Guid? OwnerUserId,
+    long Generation,
+    IReadOnlyList<Guid> ReleasedSeatIds,
+    IReadOnlyList<Guid> StaleSeatIds,
+    Guid OperationReference,
+    DateTimeOffset DecidedAt,
+    string? FailureCode = null,
+    string? FailureReason = null);
 
 public sealed record ConfirmSeatsReceiptSnapshot(
     bool Succeeded,

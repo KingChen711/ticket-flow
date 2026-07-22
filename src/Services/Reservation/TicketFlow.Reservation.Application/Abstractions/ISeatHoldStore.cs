@@ -90,6 +90,22 @@ public interface ISeatHoldStore
             : new ConfirmHoldStoreResult(ConfirmHoldStoreOutcome.Applied, seatIds);
     }
 
+    /// <summary>
+    /// V2 owner-scoped reversal of a confirmed allocation. The default adapter falls back to the
+    /// blunt v1 sold-set removal so existing test doubles keep compiling; the Redis implementation
+    /// overrides it with a compare-and-set that leaves a newer owner's seat untouched.
+    /// </summary>
+    async Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+        ReleaseAllocationStoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await RemoveFromSoldAsync(request.EventId, request.SeatIds, cancellationToken);
+        return new ReleaseAllocationStoreResult(
+            ReleaseAllocationStoreOutcome.Applied,
+            request.SeatIds,
+            []);
+    }
+
     /// <summary>Restore one authoritative allocation into the cache after a recoverable drift.</summary>
     Task RestoreAsync(
         RestoreSeatAllocationRequest request,

@@ -116,6 +116,9 @@ public sealed class CheckoutAuthorityTests
             publisher);
     }
 
+    // AllocationGeneration must be positive: Commit 4 made it part of the handler's completeness
+    // check, but this helper kept using the 8-argument shape and left it at its default 0, which
+    // silently turned four Harness tests red. Regression found and fixed during Commit 5.
     private static AuthoritativeHoldQuote Quote(
         IReadOnlyList<Guid>? seatIds = null,
         decimal amount = 500_000m,
@@ -127,7 +130,8 @@ public sealed class CheckoutAuthorityTests
         amount,
         currency,
         7,
-        DateTimeOffset.UtcNow.AddMinutes(5));
+        DateTimeOffset.UtcNow.AddMinutes(5),
+        AllocationGeneration: 3);
 
     private static PlaceOrderV2Command V2Command(AuthoritativeHoldQuote quote) => new(
         quote.OwnerUserId,

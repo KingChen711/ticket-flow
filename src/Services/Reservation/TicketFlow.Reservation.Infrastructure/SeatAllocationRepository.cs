@@ -22,6 +22,14 @@ public sealed class SeatAllocationRepository(ReservationDbContext dbContext) : I
             .OrderBy(allocation => allocation.SeatId)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<SeatAllocation>> GetByOrderAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default) =>
+        await dbContext.SeatAllocations
+            .Where(allocation => allocation.OrderId == orderId)
+            .OrderBy(allocation => allocation.SeatId)
+            .ToListAsync(cancellationToken);
+
     public void AddRange(IEnumerable<SeatAllocation> allocations) =>
         dbContext.SeatAllocations.AddRange(allocations);
 }

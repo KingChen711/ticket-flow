@@ -72,6 +72,40 @@ public sealed record ReleaseHoldStoreResult(
         Outcome is ReleaseHoldStoreOutcome.Applied or ReleaseHoldStoreOutcome.AlreadyReleased;
 }
 
+/// <summary>
+/// Owner-scoped reversal of a CONFIRMED cache allocation. Unlike
+/// <see cref="ReleaseHoldStoreRequest"/> (which reverses an active hold), this undoes the sold
+/// marker written by a confirmation — and only when the cached token still names this exact
+/// hold/order/owner/generation.
+/// </summary>
+public sealed record ReleaseAllocationStoreRequest(
+    Guid EventId,
+    Guid HoldId,
+    Guid OrderId,
+    Guid OwnerUserId,
+    long Generation,
+    IReadOnlyList<Guid> SeatIds);
+
+public enum ReleaseAllocationStoreOutcome
+{
+    Applied,
+    AlreadyReleased,
+    OwnershipChanged,
+    Conflict,
+}
+
+public sealed record ReleaseAllocationStoreResult(
+    ReleaseAllocationStoreOutcome Outcome,
+    IReadOnlyList<Guid> ReleasedSeatIds,
+    IReadOnlyList<Guid> StaleSeatIds,
+    string? Reason = null)
+{
+    public bool IsSuccessful =>
+        Outcome is ReleaseAllocationStoreOutcome.Applied
+            or ReleaseAllocationStoreOutcome.AlreadyReleased
+            or ReleaseAllocationStoreOutcome.OwnershipChanged;
+}
+
 public enum CachedAllocationState
 {
     Held,

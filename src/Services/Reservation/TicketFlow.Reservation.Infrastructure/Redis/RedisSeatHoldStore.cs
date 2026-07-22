@@ -191,6 +191,62 @@ public sealed class RedisSeatHoldStore(IConnectionMultiplexer redis) : ISeatHold
             raw.Length > 1 ? raw[1].ToString() : null);
     }
 
+    public async Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+        ReleaseAllocationStoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.SeatIds.Count == 0 || request.SeatIds.Distinct().Count() != request.SeatIds.Count)
+        {
+            return new ReleaseAllocationStoreResult(
+                ReleaseAllocationStoreOutcome.Conflict,
+                [],
+                [],
+                "The exact seat set must be non-empty and contain no duplicates.");
+        }
+
+        var seats = request.SeatIds.OrderBy(id => id).ToArray();
+        var keys = new RedisKey[4 + seats.Length];
+        keys[0] = RedisKeys.SoldSet(request.EventId);
+        keys[1] = RedisKeys.ConfirmedSeatsSet(request.EventId, request.HoldId);
+        keys[2] = RedisKeys.ConfirmedMeta(request.EventId, request.HoldId);
+        keys[3] = RedisKeys.ConfirmedOrder(request.OrderId);
+        for (var i = 0; i < seats.Length; i++)
+            keys[i + 4] = RedisKeys.Allocation(request.EventId, seats[i]);
+
+        var values = new RedisValue[4 + seats.Length];
+        values[0] = request.HoldId.ToString();
+        values[1] = request.OrderId.ToString();
+        values[2] = request.OwnerUserId.ToString();
+        values[3] = request.Generation;
+        for (var i = 0; i < seats.Length; i++)
+            values[i + 4] = seats[i].ToString();
+
+        var raw = (RedisValue[]?)await Db.ScriptEvaluateAsync(ReleaseAllocationScript.Source, keys, values) ?? [];
+        if (raw.Length < 2)
+        {
+            return new ReleaseAllocationStoreResult(
+                ReleaseAllocationStoreOutcome.Conflict, [], [], "The release script returned no status.");
+        }
+
+        var status = raw[0].ToString();
+        var releasedCount = int.Parse(raw[1].ToString());
+        var seatValues = raw.Skip(2).ToArray();
+        var released = ParseGuids(seatValues.Take(releasedCount));
+        var stale = ParseGuids(seatValues.Skip(releasedCount));
+
+        return new ReleaseAllocationStoreResult(
+            status switch
+            {
+                "APPLIED" => ReleaseAllocationStoreOutcome.Applied,
+                "ALREADY_RELEASED" => ReleaseAllocationStoreOutcome.AlreadyReleased,
+                "OWNERSHIP_CHANGED" => ReleaseAllocationStoreOutcome.OwnershipChanged,
+                _ => ReleaseAllocationStoreOutcome.Conflict,
+            },
+            released,
+            stale,
+            stale.Count > 0 ? "One or more seats are owned by a newer allocation." : null);
+    }
+
     public async Task RestoreAsync(
         RestoreSeatAllocationRequest request,
         CancellationToken cancellationToken = default)

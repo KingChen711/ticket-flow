@@ -39,5 +39,33 @@ public sealed class HoldQuoteRepository(ReservationDbContext dbContext) : IHoldQ
             .OrderBy(id => id)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<HoldQuote>> GetActiveByOwnerAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        await dbContext.HoldQuotes
+            .AsNoTracking()
+            .Where(quote =>
+                quote.EventId == eventId &&
+                quote.OwnerUserId == ownerUserId &&
+                quote.State == HoldQuoteState.Active &&
+                quote.ExpiresAt > now)
+            .ToListAsync(cancellationToken);
+
+    public Task<int> CountCreatedByOwnerSinceAsync(
+        Guid eventId,
+        Guid ownerUserId,
+        DateTimeOffset since,
+        CancellationToken cancellationToken = default) =>
+        dbContext.HoldQuotes
+            .AsNoTracking()
+            .CountAsync(
+                quote =>
+                    quote.EventId == eventId &&
+                    quote.OwnerUserId == ownerUserId &&
+                    quote.CreatedAt >= since,
+                cancellationToken);
+
     public void Add(HoldQuote quote) => dbContext.HoldQuotes.Add(quote);
 }
