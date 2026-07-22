@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Checkout;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Orders;
 
 namespace TicketFlow.Ordering.Api.Endpoints;
@@ -41,8 +42,17 @@ public static class OrderEndpoints
                 customerName,
                 customerEmail);
 
-            var order = await handler.HandleAsync(command, ct);
-            return Results.Created($"/orders/{order.OrderId}", order);
+            // A reused idempotency key carrying a different intent is the caller's mistake, not a
+            // server fault: 409 rather than silently handing back the first order (Commit 7).
+            try
+            {
+                var order = await handler.HandleAsync(command, ct);
+                return Results.Created($"/orders/{order.OrderId}", order);
+            }
+            catch (CheckoutConflictException exception)
+            {
+                return Results.Conflict(new { error = exception.Message });
+            }
         });
 
         if (app.Environment.IsDevelopment())

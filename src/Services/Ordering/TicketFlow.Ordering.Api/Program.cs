@@ -12,6 +12,7 @@ using TicketFlow.Ordering.Api.Metrics;
 using TicketFlow.Ordering.Api.Services;
 using TicketFlow.Ordering.Application;
 using TicketFlow.Ordering.Application.Abstractions;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Infrastructure;
 using TicketFlow.Web;
@@ -23,11 +24,17 @@ builder.Services.AddSingleton<TicketSalesMetrics>();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "ordering",
-    configureMetrics: m => m.AddMeter(TicketSalesMetrics.MeterName).AddMeter(ContractVersionMetrics.MeterName));
+    configureMetrics: m => m
+        .AddMeter(TicketSalesMetrics.MeterName)
+        .AddMeter(ContractVersionMetrics.MeterName)
+        // Commit 7: a replayed checkout and a backlogged outbox are both invisible in logs.
+        .AddMeter(CheckoutOperationMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
 builder.Services.AddOrderingInfrastructure(builder.Configuration);
+builder.Services.AddSingleton(new OrderDispatchOptions());
+builder.Services.AddHostedService<OrderDispatchRelay>();
 builder.Services.AddScoped<IHoldQuoteProvider, GrpcHoldQuoteProvider>();
 builder.Services.AddScoped<ISaleRecordedPublisher, KafkaSaleRecordedPublisher>();
 

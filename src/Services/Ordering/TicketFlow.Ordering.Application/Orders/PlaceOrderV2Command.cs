@@ -1,5 +1,5 @@
-using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Ordering.Application.Abstractions;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Domain.Orders;
 
 namespace TicketFlow.Ordering.Application.Orders;
@@ -14,11 +14,11 @@ public sealed record PlaceOrderV2Command(
 
 /// <summary>
 /// V2 accepts purchase intent only. Event, seats, amount and currency always come from the
-/// owner-scoped Reservation quote. Durable idempotency storage is deliberately Commit 7.
+/// owner-scoped Reservation quote. Durable idempotency and broker hand-off belong to
+/// <see cref="CheckoutAcceptanceService"/> (Commit 7).
 /// </summary>
 public sealed class PlaceOrderV2CommandHandler(
-    IOrderStore store,
-    IIntegrationEventPublisher publisher,
+    CheckoutAcceptanceService checkout,
     IHoldQuoteProvider quoteProvider,
     TimeProvider timeProvider)
     : ICommandHandler<PlaceOrderV2Command, OrderResponse>
@@ -47,29 +47,23 @@ public sealed class PlaceOrderV2CommandHandler(
             quote.PriceSnapshotVersion <= 0 || quote.AllocationGeneration <= 0)
             throw new InvalidOperationException("Hold quote is incomplete and cannot be used for checkout.");
 
-        var total = Money.Create(quote.Amount, quote.Currency);
-        var placed = Order.Place(command.CustomerId, quote.EventId, quote.SeatIds, total, now);
+        var acceptance = await checkout.AcceptAsync(
+            new CheckoutAcceptanceRequest(
+                command.CustomerId,
+                command.HoldId,
+                command.IdempotencyKey,
+                CheckoutRequestFingerprint.Create(
+                    command.CustomerId, command.HoldId, command.PaymentMethod, command.CustomerEmail),
+                quote.EventId,
+                quote.SeatIds,
+                Money.Create(quote.Amount, quote.Currency),
+                command.PaymentMethod,
+                command.CustomerName,
+                command.CustomerEmail,
+                quote.PriceSnapshotVersion,
+                quote.AllocationGeneration),
+            cancellationToken);
 
-        store.StartStream(placed.OrderId, placed);
-        await store.SaveChangesAsync(cancellationToken);
-
-        await publisher.PublishAsync(new OrderSubmitted(
-            placed.OrderId,
-            quote.EventId,
-            command.CustomerId,
-            quote.HoldId,
-            quote.SeatIds,
-            total.Amount,
-            command.PaymentMethod,
-            command.CustomerName,
-            command.CustomerEmail,
-            now,
-            total.Currency,
-            quote.PriceSnapshotVersion,
-            command.IdempotencyKey,
-            quote.HoldId.ToString(),
-            quote.AllocationGeneration), cancellationToken);
-
-        return OrderResponseMapper.Map(Order.Load([placed]));
+        return acceptance.Order;
     }
 }

@@ -7,8 +7,7 @@ public class ConfirmOrderCommandHandlerTests
 {
     private static async Task<(FakeOrderStore Store, Guid OrderId)> PlaceOrderAsync()
     {
-        var store = new FakeOrderStore();
-        var placeHandler = new PlaceOrderCommandHandler(store, new FakeIntegrationEventPublisher(), TimeProvider.System);
+        var (placeHandler, store, _) = PlaceOrderCommandHandlerTests.CreateHandler();
         var placed = await placeHandler.HandleAsync(
             new PlaceOrderCommand(
                 Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()], 100_000, "VND",

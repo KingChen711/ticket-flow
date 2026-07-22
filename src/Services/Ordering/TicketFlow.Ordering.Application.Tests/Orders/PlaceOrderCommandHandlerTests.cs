@@ -1,4 +1,5 @@
 using TicketFlow.Contracts.Messaging.Ordering;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Orders;
 using TicketFlow.Ordering.Domain.Orders;
 
@@ -20,12 +21,22 @@ public class PlaceOrderCommandHandlerTests
             "Nguyen Van A",
             "a@example.com");
 
+    internal static (PlaceOrderCommandHandler Handler, FakeOrderStore Store, FakeCheckoutOperationStore Operations)
+        CreateHandler()
+    {
+        var orders = new FakeOrderStore();
+        var operations = new FakeCheckoutOperationStore();
+        var handler = new PlaceOrderCommandHandler(
+            new CheckoutAcceptanceService(
+                new FakeTransactionalOrderStore(orders, operations), operations, TimeProvider.System));
+
+        return (handler, orders, operations);
+    }
+
     [Fact]
     public async Task HandleAsync_ValidCommand_StartsStreamAndReturnsPendingOrder()
     {
-        var store = new FakeOrderStore();
-        var publisher = new FakeIntegrationEventPublisher();
-        var handler = new PlaceOrderCommandHandler(store, publisher, TimeProvider.System);
+        var (handler, store, operations) = CreateHandler();
         var customerId = Guid.NewGuid();
         var catalogEventId = Guid.NewGuid();
         var seatIds = new List<Guid> { Guid.NewGuid(), Guid.NewGuid() };
@@ -44,9 +55,12 @@ public class PlaceOrderCommandHandlerTests
         var placed = Assert.Single(events);
         Assert.IsType<OrderPlaced>(placed);
 
-        // The saga-starting integration event went out alongside the stream write.
-        var published = Assert.Single(publisher.Published);
-        var orderSubmitted = Assert.IsType<OrderSubmitted>(published);
+        // Commit 7: the saga-starting message is now queued in the outbox in the same transaction
+        // rather than published from inside the handler, so what this asserts is that it was
+        // durably recorded — the relay is what puts it on the broker.
+        var dispatch = Assert.Single(operations.Dispatches);
+        Assert.Equal(OrderDispatchState.Pending, dispatch.State);
+        var orderSubmitted = Assert.IsType<OrderSubmitted>(dispatch.Payload);
         Assert.Equal(response.OrderId, orderSubmitted.OrderId);
         Assert.Equal("Nguyen Van A", orderSubmitted.CustomerName);
     }
@@ -54,7 +68,7 @@ public class PlaceOrderCommandHandlerTests
     [Fact]
     public async Task HandleAsync_NoSeats_Throws()
     {
-        var handler = new PlaceOrderCommandHandler(new FakeOrderStore(), new FakeIntegrationEventPublisher(), TimeProvider.System);
+        var (handler, _, _) = CreateHandler();
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             handler.HandleAsync(ValidCommand(seatIds: [], totalAmount: 100_000)));
@@ -63,7 +77,7 @@ public class PlaceOrderCommandHandlerTests
     [Fact]
     public async Task HandleAsync_NoCurrency_DefaultsToVnd()
     {
-        var handler = new PlaceOrderCommandHandler(new FakeOrderStore(), new FakeIntegrationEventPublisher(), TimeProvider.System);
+        var (handler, _, _) = CreateHandler();
 
         var response = await handler.HandleAsync(ValidCommand(seatIds: [Guid.NewGuid()], totalAmount: 100_000, currency: null));
 

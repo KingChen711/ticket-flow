@@ -1,16 +1,13 @@
-using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Ordering.Application.Abstractions;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Domain.Orders;
 
 namespace TicketFlow.Ordering.Application.Orders;
 
 /// <summary>
-/// HoldId/PaymentMethod/CustomerName/CustomerEmail exist purely to build the OrderSubmitted
-/// integration event below — Order.Place/OrderPlaced don't need them (the seat hold and payment
-/// method aren't part of Order's own persisted history, only the saga's). CustomerName/Email are
-/// plain trusted request fields, same as CustomerId already was pre-Commit-5 — no JWT/claims
-/// extraction exists anywhere in Ordering yet, so this doesn't introduce a new pattern, just
-/// extends the existing one. Real auth-derived identity is a separate, not-yet-done concern.
+/// The pre-Commit-3 client-authoritative shape, kept only behind the dev-only <c>/orders/legacy</c>
+/// endpoint. It still trusts the caller's amount, currency and seat list — that is the whole
+/// reason V2 exists and this one is not reachable in production.
 /// </summary>
 public sealed record PlaceOrderCommand(
     Guid CustomerId,
@@ -23,41 +20,42 @@ public sealed record PlaceOrderCommand(
     string CustomerName,
     string CustomerEmail);
 
-public sealed class PlaceOrderCommandHandler(IOrderStore store, IIntegrationEventPublisher publisher, TimeProvider timeProvider)
+/// <summary>
+/// Routes through the same <see cref="CheckoutAcceptanceService"/> as V2. Before Commit 7 this
+/// handler was a second, independent writer: it minted its own order id and published straight to
+/// the broker, so it had neither the durable receipt nor the outbox. Two writers with different
+/// guarantees is the dual-write problem in miniature, so the legacy shape now differs only in
+/// where the numbers come from, not in how durably the order is recorded.
+/// </summary>
+/// <remarks>
+/// It has no idempotency key of its own, so one is derived from the hold: the legacy contract's
+/// own notion of "the same purchase" is the hold being checked out.
+/// </remarks>
+public sealed class PlaceOrderCommandHandler(CheckoutAcceptanceService checkout)
     : ICommandHandler<PlaceOrderCommand, OrderResponse>
 {
     public async Task<OrderResponse> HandleAsync(PlaceOrderCommand command, CancellationToken cancellationToken = default)
     {
-        var total = Money.Create(command.TotalAmount, command.Currency ?? "VND");
-        var placed = Order.Place(command.CustomerId, command.CatalogEventId, command.SeatIds, total, timeProvider.GetUtcNow());
+        var currency = command.Currency ?? "VND";
+        var total = Money.Create(command.TotalAmount, currency);
 
-        // No aggregate exists yet to Load — StartStream both creates the stream and stages its
-        // first event; SaveChangesAsync is what actually commits it to Postgres.
-        store.StartStream(placed.OrderId, placed);
-        await store.SaveChangesAsync(cancellationToken);
+        var acceptance = await checkout.AcceptAsync(
+            new CheckoutAcceptanceRequest(
+                command.CustomerId,
+                command.HoldId,
+                $"legacy:{command.HoldId:N}",
+                CheckoutRequestFingerprint.CreateLegacy(
+                    command.CustomerId, command.HoldId, command.CatalogEventId, total.Amount, total.Currency),
+                command.CatalogEventId,
+                command.SeatIds,
+                total,
+                command.PaymentMethod,
+                command.CustomerName,
+                command.CustomerEmail,
+                PriceSnapshotVersion: 0,
+                AllocationGeneration: 0),
+            cancellationToken);
 
-        // Best-effort, NOT a transactional outbox: MassTransit.Marten (Commit 4) only ships a
-        // saga repository, no Marten-backed equivalent of MassTransit.EntityFrameworkCore's
-        // AddEntityFrameworkOutbox/UseBusOutbox (confirmed via the same package reflection probe
-        // used to find MartenRepository — no Outbox-related type exists in it). A crash between
-        // the SaveChangesAsync above and this Publish leaves an orphaned Pending order that never
-        // starts a saga. Documented gap, not fixed here — the idiomatic Marten-native fix would
-        // be an async daemon subscription (durable, checkpointed, survives crashes) relaying
-        // OrderPlaced -> OrderSubmitted, mirroring the exact "Inline vs async projection"
-        // trade-off already deferred for MyOrdersProjection in Phase 4. Backlog, not blocking:
-        // Phase 5's DoD is about saga compensation (Commit 10), not this specific crash window.
-        await publisher.PublishAsync(new OrderSubmitted(
-            placed.OrderId,
-            command.CatalogEventId,
-            command.CustomerId,
-            command.HoldId,
-            command.SeatIds,
-            total.Amount,
-            command.PaymentMethod,
-            command.CustomerName,
-            command.CustomerEmail,
-            timeProvider.GetUtcNow()), cancellationToken);
-
-        return OrderResponseMapper.Map(Order.Load([placed]));
+        return acceptance.Order;
     }
 }
