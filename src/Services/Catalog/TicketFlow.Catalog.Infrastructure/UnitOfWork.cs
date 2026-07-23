@@ -6,6 +6,8 @@ namespace TicketFlow.Catalog.Infrastructure;
 
 public sealed class UnitOfWork(CatalogDbContext dbContext) : IUnitOfWork
 {
+    public void DiscardChanges() => dbContext.ChangeTracker.Clear();
+
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         try

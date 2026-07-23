@@ -46,6 +46,7 @@ builder.Services.AddTicketFlowMessaging(
 
         busConfigurator.AddConsumer<ProcessPaymentConsumer>();
         busConfigurator.AddConsumer<RefundPaymentConsumer>();
+        busConfigurator.AddConsumer<CancelPaymentForEventConsumer>();
     },
     configureRabbitMq: (context, rabbitConfigurator) =>
     {
@@ -69,6 +70,13 @@ builder.Services.AddTicketFlowMessaging(
             e.ConcurrentMessageLimit = 8;
             e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
             e.ConfigureConsumer<RefundPaymentConsumer>(context);
+        });
+
+        rabbitConfigurator.ReceiveEndpoint("payment-cancel-payment-for-event", e =>
+        {
+            e.ConcurrentMessageLimit = 8;
+            e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
+            e.ConfigureConsumer<CancelPaymentForEventConsumer>(context);
         });
     });
 

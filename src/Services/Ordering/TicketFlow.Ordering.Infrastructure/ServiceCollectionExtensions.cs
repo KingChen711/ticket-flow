@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Checkout;
+using TicketFlow.Ordering.Application.Sagas;
+using TicketFlow.Ordering.Application.Workflows;
 using TicketFlow.Ordering.Infrastructure.Messaging;
 
 namespace TicketFlow.Ordering.Infrastructure;
@@ -57,5 +59,13 @@ public static class ServiceCollectionExtensions
         // requests race past the service's own lookups.
         options.Schema.For<CheckoutOperation>().UniqueIndex(UniqueIndexType.Computed, x => x.HoldId);
         options.Schema.For<OrderDispatch>().Index(x => x.State);
+        // The cancellation campaign queries purchase sagas by event, outside MassTransit's saga
+        // repository. Declare the identity/index in Ordering's store configuration as well so
+        // those queries do not depend on consumer-registration order to teach Marten the shape.
+        options.Schema.For<PurchaseState>()
+            .Identity(x => x.CorrelationId)
+            .Index(x => x.CatalogEventId);
+        options.Schema.For<EventCancellationCampaign>().UseOptimisticConcurrency(true);
+        options.Schema.For<EventCancellationCampaign>().Index(x => x.EventId);
     }
 }

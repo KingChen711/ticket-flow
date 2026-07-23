@@ -85,6 +85,9 @@ public sealed class OrderMilestoneConsumer(OrderMilestoneWriter writer, TicketSa
     public async Task Consume(ConsumeContext<OrderCancelledIntegrationEvent> context) =>
         await writer.RecordAsync(
             new OrderMilestoneRequest(
-                context.Message.OrderId, OrderMilestone.Cancelled, Reason: context.Message.Reason),
+                context.Message.OrderId,
+                OrderMilestone.Cancelled,
+                Reason: context.Message.Reason,
+                CancellationWorkflowId: context.Message.CancellationWorkflowId),
             context.CancellationToken);
 }

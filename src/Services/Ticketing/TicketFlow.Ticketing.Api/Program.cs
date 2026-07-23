@@ -5,9 +5,9 @@ using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
 using TicketFlow.Observability;
 using TicketFlow.Ticketing.Api.Consumers;
-using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Api.Endpoints;
 using TicketFlow.Ticketing.Application;
+using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Infrastructure;
 using TicketFlow.Web;
 

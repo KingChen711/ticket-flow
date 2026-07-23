@@ -10,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(builder.Configuration, "notification");
 builder.Services.Configure<ReminderOptions>(builder.Configuration.GetSection("Reminder"));
-builder.Services.AddNotificationInfrastructure(builder.Configuration);
+builder.Services.AddNotificationInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", busConfigurator =>
 {
     busConfigurator.AddConsumer<CatalogEventPublishedConsumer>();
@@ -18,6 +18,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", b
     busConfigurator.AddConsumer<CatalogEventCancelledConsumer>();
     busConfigurator.AddConsumer<NotifyOrderCompletedConsumer>();
     busConfigurator.AddConsumer<SendUpcomingEventRemindersConsumer>();
+    busConfigurator.AddConsumer<NotifyOrderCancelledConsumer>();
 });
 
 var app = builder.Build();

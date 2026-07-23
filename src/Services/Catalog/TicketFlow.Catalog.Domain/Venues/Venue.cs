@@ -19,10 +19,18 @@ public sealed class Venue : AggregateRoot<Guid>
         Address = address;
     }
 
-    public static Venue Register(string name, Address address)
+    public static Venue Register(string name, Address address) =>
+        Register(Guid.NewGuid(), name, address);
+
+    /// <summary>
+    /// Workflow-friendly factory.  The onboarding workflow persists the id before creating the
+    /// aggregate, so a retry after an uncertain response can look up the exact same venue instead
+    /// of creating a second one.
+    /// </summary>
+    public static Venue Register(Guid id, string name, Address address)
     {
         var venue = new Venue(
-            Guid.NewGuid(),
+            id == Guid.Empty ? throw new ArgumentException("Venue id cannot be empty.", nameof(id)) : id,
             Guard.NotNullOrEmpty(name, nameof(name)),
             address ?? throw new ArgumentNullException(nameof(address)));
 

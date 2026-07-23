@@ -20,5 +20,6 @@ public sealed class TicketIssuanceJobConfiguration : IEntityTypeConfiguration<Ti
         builder.Property(j => j.State).HasConversion<string>().HasMaxLength(20).IsRequired();
         builder.Property(j => j.FailureReason).HasMaxLength(500);
         builder.HasIndex(j => j.State);
+        builder.Property<uint>("xmin").HasColumnName("xmin").IsRowVersion();
     }
 }

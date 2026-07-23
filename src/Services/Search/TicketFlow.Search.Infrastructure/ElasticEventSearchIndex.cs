@@ -49,35 +49,35 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
     public async Task ApplyPublishedAsync(SearchDocument document, CancellationToken cancellationToken = default)
     {
         var response = await client.UpdateAsync<SearchDocument, object>(indexName, document.EventId.ToString(), u => u
-            .Upsert(document)
-            .RetryOnConflict(RetryOnConflict)
-            .Script(s => s
-                .Source("""
-                    def stored = ctx._source.revision;
-                    if (ctx._source.tombstoned == true) {
-                        ctx.op = 'noop';
-                    } else if (stored == null || params.revision >= stored) {
-                        ctx._source.title = params.title;
-                        ctx._source.artist = params.artist;
-                        ctx._source.venueName = params.venueName;
-                        ctx._source.city = params.city;
-                        ctx._source.startsAt = params.startsAt;
-                        ctx._source.status = params.status;
-                        ctx._source.revision = params.revision;
-                    } else {
-                        ctx.op = 'noop';
-                    }
-                    """)
-                .Params(new Dictionary<string, object>
-                {
-                    ["title"] = document.Title,
-                    ["artist"] = document.Artist,
-                    ["venueName"] = document.VenueName,
-                    ["city"] = document.City,
-                    ["startsAt"] = document.StartsAt,
-                    ["status"] = document.Status,
-                    ["revision"] = document.Revision,
-                })),
+                .Upsert(document)
+                .RetryOnConflict(RetryOnConflict)
+                .Script(s => s
+                    .Source("""
+                            def stored = ctx._source.revision;
+                            if (ctx._source.tombstoned == true) {
+                                ctx.op = 'noop';
+                            } else if (stored == null || params.revision >= stored) {
+                                ctx._source.title = params.title;
+                                ctx._source.artist = params.artist;
+                                ctx._source.venueName = params.venueName;
+                                ctx._source.city = params.city;
+                                ctx._source.startsAt = params.startsAt;
+                                ctx._source.status = params.status;
+                                ctx._source.revision = params.revision;
+                            } else {
+                                ctx.op = 'noop';
+                            }
+                            """)
+                    .Params(new Dictionary<string, object>
+                    {
+                        ["title"] = document.Title,
+                        ["artist"] = document.Artist,
+                        ["venueName"] = document.VenueName,
+                        ["city"] = document.City,
+                        ["startsAt"] = document.StartsAt,
+                        ["status"] = document.Status,
+                        ["revision"] = document.Revision,
+                    })),
             cancellationToken);
 
         EnsureValid(response, $"apply Published to event '{document.EventId}'");
@@ -95,25 +95,25 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
         var placeholder = new SearchDocument(eventId, "", "", "", "", startsAt, "Published", revision);
 
         var response = await client.UpdateAsync<SearchDocument, object>(indexName, eventId.ToString(), u => u
-            .Upsert(placeholder)
-            .RetryOnConflict(RetryOnConflict)
-            .Script(s => s
-                .Source("""
-                    def stored = ctx._source.revision;
-                    if (ctx._source.tombstoned == true) {
-                        ctx.op = 'noop';
-                    } else if (stored == null || params.revision >= stored) {
-                        ctx._source.startsAt = params.startsAt;
-                        ctx._source.revision = params.revision;
-                    } else {
-                        ctx.op = 'noop';
-                    }
-                    """)
-                .Params(new Dictionary<string, object>
-                {
-                    ["startsAt"] = startsAt,
-                    ["revision"] = revision,
-                })),
+                .Upsert(placeholder)
+                .RetryOnConflict(RetryOnConflict)
+                .Script(s => s
+                    .Source("""
+                            def stored = ctx._source.revision;
+                            if (ctx._source.tombstoned == true) {
+                                ctx.op = 'noop';
+                            } else if (stored == null || params.revision >= stored) {
+                                ctx._source.startsAt = params.startsAt;
+                                ctx._source.revision = params.revision;
+                            } else {
+                                ctx.op = 'noop';
+                            }
+                            """)
+                    .Params(new Dictionary<string, object>
+                    {
+                        ["startsAt"] = startsAt,
+                        ["revision"] = revision,
+                    })),
             cancellationToken);
 
         EnsureValid(response, $"apply Rescheduled to event '{eventId}'");
@@ -126,23 +126,23 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
         // No revision guard — see IEventSearchIndex's doc comment: a Cancel is a domain-enforced
         // one-way door, so it is always safe to apply, and it must always win.
         var response = await client.UpdateAsync<SearchDocument, object>(indexName, eventId.ToString(), u => u
-            .Upsert(placeholder)
-            .RetryOnConflict(RetryOnConflict)
-            .Script(s => s
-                // Deliberately an if, not Math.max: Painless resolves Math.max over `def` operands
-                // to the double overload, so the revision came back as 4.0 and then failed to
-                // deserialize into a long — the document became unreadable through GetByIdAsync
-                // the moment it was cancelled. Comparing and assigning keeps the value the
-                // integer it arrived as.
-                .Source("""
-                    def stored = ctx._source.revision;
-                    ctx._source.tombstoned = true;
-                    ctx._source.status = 'Cancelled';
-                    if (stored == null || params.revision > stored) {
-                        ctx._source.revision = params.revision;
-                    }
-                    """)
-                .Params(new Dictionary<string, object> { ["revision"] = revision })),
+                .Upsert(placeholder)
+                .RetryOnConflict(RetryOnConflict)
+                .Script(s => s
+                    // Deliberately an if, not Math.max: Painless resolves Math.max over `def` operands
+                    // to the double overload, so the revision came back as 4.0 and then failed to
+                    // deserialize into a long — the document became unreadable through GetByIdAsync
+                    // the moment it was cancelled. Comparing and assigning keeps the value the
+                    // integer it arrived as.
+                    .Source("""
+                            def stored = ctx._source.revision;
+                            ctx._source.tombstoned = true;
+                            ctx._source.status = 'Cancelled';
+                            if (stored == null || params.revision > stored) {
+                                ctx._source.revision = params.revision;
+                            }
+                            """)
+                    .Params(new Dictionary<string, object> { ["revision"] = revision })),
             cancellationToken);
 
         EnsureValid(response, $"apply Cancelled to event '{eventId}'");
@@ -150,7 +150,8 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
 
     public async Task<SearchDocument?> GetByIdAsync(Guid eventId, CancellationToken cancellationToken = default)
     {
-        var response = await client.GetAsync<SearchDocument>(eventId.ToString(), g => g.Index(indexName), cancellationToken);
+        var response =
+            await client.GetAsync<SearchDocument>(eventId.ToString(), g => g.Index(indexName), cancellationToken);
 
         // A 404 for GetAsync is Elasticsearch's normal, valid answer to "no document with this
         // id" — IsValidResponse is true and Found is false. Only a transport failure or a genuine
@@ -168,13 +169,14 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
         return response.Source is { Tombstoned: true } ? null : response.Source;
     }
 
-    public async Task<SearchEventsResult> SearchAsync(SearchEventsQuery query, CancellationToken cancellationToken = default)
+    public async Task<SearchEventsResult> SearchAsync(SearchEventsQuery query,
+        CancellationToken cancellationToken = default)
     {
         var page = query.Page < 1 ? 1 : query.Page;
         var pageSize = query.PageSize is < 1 or > 100 ? 20 : query.PageSize;
 
         var response = await client.SearchAsync<SearchDocument>(s => s
-                .Index(indexName)
+                .Indices(indexName)
                 .From((page - 1) * pageSize)
                 .Size(pageSize)
                 .Query(q => q.Bool(b => b
@@ -193,10 +195,12 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
     /// <c>IsValidResponse == false</c> — reading <c>Total</c>/<c>Documents</c> off that response
     /// anyway silently returns an empty result indistinguishable from a genuinely empty index.
     /// </summary>
-    private static void EnsureValid(Elastic.Transport.Products.Elasticsearch.ElasticsearchResponse response, string operation)
+    private static void EnsureValid(Elastic.Transport.Products.Elasticsearch.ElasticsearchResponse response,
+        string operation)
     {
         if (!response.IsValidResponse)
-            throw new SearchIndexUnavailableException($"Elasticsearch rejected the request to {operation}: {response.DebugInformation}");
+            throw new SearchIndexUnavailableException(
+                $"Elasticsearch rejected the request to {operation}: {response.DebugInformation}");
     }
 
     // Bool query with no Must clause matches everything by default — so an empty array here

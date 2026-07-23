@@ -11,7 +11,9 @@ public sealed record CatalogSalePolicyChanged(
     DateTimeOffset SaleEndsAt,
     IReadOnlyList<PriceTierSnapshotV2> PriceTiers,
     long PriceSnapshotVersion,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    Guid? CancellationWorkflowId = null,
+    string? CancellationReason = null);
 
 public sealed record PriceTierSnapshotV2(
     Guid SectionId,

@@ -6,6 +6,7 @@ using TicketFlow.Reservation.Api.Consumers;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Domain.Holds;
 using TicketFlow.Reservation.Domain.SalePolicies;
+using TicketFlow.Contracts.Messaging.Workflows;
 
 namespace TicketFlow.Phase12.HardeningTests.Reservation;
 
@@ -55,6 +56,39 @@ public sealed class CatalogSalePolicyHoldLifecycleTests
         var notification = Assert.Single(fixture.Publisher.Published);
         Assert.Equal("Available", notification.Status);
         Assert.Equal(fixture.Quote.Generation, notification.Generation);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Cancellation_campaign_is_released_only_after_sale_close_and_replays_its_ack()
+    {
+        var fixture = CreateFixture();
+        await using var provider = fixture.Services.BuildServiceProvider(validateScopes: true);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        var workflowId = Guid.NewGuid();
+        var message = Message(
+            fixture.EventId,
+            fixture.SectionId,
+            "Cancelled",
+            version: 12,
+            fixture.Now) with
+        {
+            CancellationWorkflowId = workflowId,
+            CancellationReason = "Venue unavailable.",
+        };
+
+        await harness.Bus.Publish(message);
+        Assert.True(await harness.Published.Any<EventCancellationRequested>(x =>
+            x.Context.Message.WorkflowId == workflowId));
+        Assert.Equal(HoldQuoteState.Invalidated, fixture.Quote.State);
+
+        // Same revision is rejected by the snapshot CAS, but the durable cancellation ack must
+        // still be replayed after an uncertain response.
+        await harness.Bus.Publish(message);
+        Assert.True(await harness.Consumed.Any<CatalogSalePolicyChanged>());
+        Assert.True(harness.Published.Select<EventCancellationRequested>().Count() >= 2);
+        Assert.Equal(HoldQuoteState.Invalidated, fixture.Quote.State);
     }
 
     private static SalePolicyFixture CreateFixture()

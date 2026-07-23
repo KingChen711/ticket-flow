@@ -1,6 +1,7 @@
 using TicketFlow.Catalog.Application.Abstractions;
 using TicketFlow.Catalog.Application.EventDetails;
 using TicketFlow.Catalog.Application.Events;
+using TicketFlow.Catalog.Application.Workflows;
 
 namespace TicketFlow.Catalog.Api.Endpoints;
 
@@ -43,8 +44,23 @@ public static class EventEndpoints
         group.MapPost("/{id:guid}/publish", async (Guid id, EventService service, CancellationToken ct) =>
             await RunGuardedAsync(() => service.PublishAsync(id, ct))).RequireAuthorization("RequireOrganizer");
 
-        group.MapPost("/{id:guid}/cancel", async (Guid id, EventService service, CancellationToken ct) =>
-            await RunGuardedAsync(() => service.CancelAsync(id, ct))).RequireAuthorization("RequireOrganizer");
+        group.MapPost("/{id:guid}/cancel", async (
+            Guid id,
+            HttpRequest request,
+            EventCancellationWorkflowService service,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var reason = request.Query["reason"].FirstOrDefault();
+                var workflow = await service.StartAsync(id, reason, ct);
+                return Results.Accepted($"/catalog/workflows/event-cancellations/{workflow.WorkflowId}", workflow);
+            }
+            catch (ConcurrencyConflictException exception)
+            {
+                return Results.Conflict(new { error = exception.Message });
+            }
+        }).RequireAuthorization("RequireOrganizer");
 
         group.MapPost("/{id:guid}/price-tiers", async (Guid id, AddPriceTierRequest request, EventService service, CancellationToken ct) =>
             await RunGuardedAsync(() => service.AddPriceTierAsync(id, request, ct))).RequireAuthorization("RequireOrganizer");

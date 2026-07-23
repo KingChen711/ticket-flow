@@ -14,8 +14,11 @@ public sealed class Section : Entity<Guid>
     }
 
     internal static Section Create(string name, int capacity) =>
+        Create(Guid.NewGuid(), name, capacity);
+
+    internal static Section Create(Guid id, string name, int capacity) =>
         new(
-            Guid.NewGuid(),
+            id == Guid.Empty ? throw new ArgumentException("Section id cannot be empty.", nameof(id)) : id,
             Guard.NotNullOrEmpty(name, nameof(name)),
             capacity <= 0
                 ? throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Capacity must be greater than zero.")

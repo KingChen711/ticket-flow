@@ -27,6 +27,10 @@ public sealed class PaymentAttempt : Entity<Guid>
     public string Currency { get; private set; } = null!;
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? CompletedAt { get; private set; }
+    public DateTimeOffset? CancellationRequestedAt { get; private set; }
+    public Guid? CancellationWorkflowId { get; private set; }
+    public string? CancellationOperationKey { get; private set; }
+    public DateTimeOffset? CancellationCompletedAt { get; private set; }
 
     /// <summary>How many times reconciliation has asked the provider about an Unknown outcome.
     /// Drives the manual-review deadline rather than retrying forever in silence.</summary>
@@ -62,6 +66,46 @@ public sealed class PaymentAttempt : Entity<Guid>
             Currency = currency.ToUpperInvariant(),
             CreatedAt = now,
         };
+    }
+
+    public static PaymentAttempt CancelBeforeCharge(
+        Guid orderId,
+        string operationKey,
+        decimal amount,
+        string currency,
+        Guid workflowId,
+        string cancellationOperationKey,
+        DateTimeOffset now)
+    {
+        var attempt = Claim(orderId, operationKey, amount, currency, now);
+        attempt.RequestCancellation(workflowId, cancellationOperationKey, now);
+        attempt.Decline("Payment stopped because the event was cancelled.", now);
+        return attempt;
+    }
+
+    public void RequestCancellation(Guid workflowId, string operationKey, DateTimeOffset now)
+    {
+        if (workflowId == Guid.Empty)
+            throw new ArgumentException("Cancellation workflow id is required.", nameof(workflowId));
+        if (CancellationWorkflowId is { } existingWorkflow && existingWorkflow != workflowId)
+            throw new InvalidOperationException(
+                $"Payment attempt '{Id}' is already attached to cancellation workflow '{existingWorkflow}'.");
+        if (CancellationOperationKey is { } existingKey &&
+            !string.Equals(existingKey, operationKey, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Payment attempt '{Id}' is already attached to another cancellation operation.");
+
+        CancellationWorkflowId ??= workflowId;
+        CancellationOperationKey ??= Guard.NotNullOrEmpty(operationKey, nameof(operationKey)).Trim();
+        CancellationRequestedAt ??= now;
+    }
+
+    public void CompleteCancellation(Guid workflowId, DateTimeOffset now)
+    {
+        if (CancellationWorkflowId != workflowId)
+            throw new InvalidOperationException(
+                $"Payment attempt '{Id}' is not attached to cancellation workflow '{workflowId}'.");
+        CancellationCompletedAt ??= now;
     }
 
     public void Authorize(string gatewayReference, DateTimeOffset now)

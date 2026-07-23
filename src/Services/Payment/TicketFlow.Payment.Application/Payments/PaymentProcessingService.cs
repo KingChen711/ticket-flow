@@ -17,6 +17,25 @@ public sealed record RefundPaymentRequest(
     string Currency,
     string? OperationKey = null);
 
+public sealed record StopPaymentForEventRequest(
+    Guid OrderId,
+    Guid WorkflowId,
+    decimal Amount,
+    string Currency,
+    string OperationKey);
+
+public enum StopPaymentDecision
+{
+    Stopped,
+    RefundRequired,
+    Unknown,
+}
+
+public sealed record StopPaymentForEventResult(
+    StopPaymentDecision Decision,
+    Guid? PaymentId,
+    string? Reason);
+
 public enum PaymentDecision
 {
     Authorized,
@@ -108,6 +127,71 @@ public sealed class PaymentProcessingService(
         return await ResolveAsync(attempt, cancellationToken);
     }
 
+    /// <summary>
+    /// Serializes against charge processing, persists a no-charge tombstone when cancellation
+    /// wins first, and resolves an uncertain in-flight charge before deciding whether a refund
+    /// is required.
+    /// </summary>
+    public async Task<StopPaymentForEventResult> StopForEventAsync(
+        StopPaymentForEventRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.OrderId == Guid.Empty || request.WorkflowId == Guid.Empty)
+            throw new ArgumentException("Order id and workflow id are required.", nameof(request));
+        if (request.Amount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request), "Payment amount must be positive.");
+
+        await using var orderLock = await attempts.AcquireOrderLockAsync(request.OrderId, cancellationToken);
+        var attempt = await attempts.GetAttemptByOrderAsync(request.OrderId, cancellationToken);
+        if (attempt is null)
+        {
+            attempt = PaymentAttempt.CancelBeforeCharge(
+                request.OrderId,
+                $"{request.OperationKey}:tombstone",
+                request.Amount,
+                request.Currency,
+                request.WorkflowId,
+                request.OperationKey,
+                timeProvider.GetUtcNow());
+            attempts.AddAttempt(attempt);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return new StopPaymentForEventResult(StopPaymentDecision.Stopped, attempt.Id, null);
+        }
+
+        attempt.RequestCancellation(request.WorkflowId, request.OperationKey, timeProvider.GetUtcNow());
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (!attempt.IsTerminal)
+        {
+            // ResolveAsync switches to provider lookup when cancellation was requested. It will
+            // never originate a new charge from this point.
+            var resolved = await ResolveAsync(attempt, cancellationToken);
+            if (resolved.Decision == PaymentDecision.Unknown)
+                return new StopPaymentForEventResult(StopPaymentDecision.Unknown, attempt.Id, resolved.FailureReason);
+        }
+
+        return attempt.State == PaymentAttemptState.Authorized
+            ? new StopPaymentForEventResult(StopPaymentDecision.RefundRequired, attempt.Id, null)
+            : new StopPaymentForEventResult(StopPaymentDecision.Stopped, attempt.Id, attempt.FailureReason);
+    }
+
+    /// <summary>
+    /// Called only after PaymentStoppedForEvent has been placed in the EF bus outbox. The marker
+    /// and acknowledgement therefore commit together; reconciliation keeps selecting the attempt
+    /// until that durable hand-off succeeds.
+    /// </summary>
+    public async Task CompleteEventCancellationAsync(
+        Guid orderId,
+        Guid workflowId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var orderLock = await attempts.AcquireOrderLockAsync(orderId, cancellationToken);
+        var attempt = await attempts.GetAttemptByOrderAsync(orderId, cancellationToken)
+            ?? throw new InvalidOperationException($"Payment attempt for order '{orderId}' was not found.");
+        attempt.CompleteCancellation(workflowId, timeProvider.GetUtcNow());
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     /// <summary>Drives a claimed-but-undecided attempt to a decision, charging only if the
     /// provider has no record of this key yet.</summary>
     private async Task<PaymentDecisionResult> ResolveAsync(
@@ -121,12 +205,15 @@ public sealed class PaymentProcessingService(
         }
 
         GatewayChargeResult result;
-        if (attempt.State == PaymentAttemptState.Unknown)
+        if (attempt.State == PaymentAttemptState.Unknown || attempt.CancellationRequestedAt is not null)
         {
             // Never re-charge an ambiguous attempt. Ask first; a null answer proves nothing landed.
             attempt.RecordReconcileAttempt(timeProvider.GetUtcNow());
             var lookup = await SafeLookupChargeAsync(attempt.OperationKey, cancellationToken);
-            result = lookup ?? GatewayChargeResult.Declined("The provider has no record of this charge.");
+            result = lookup ?? GatewayChargeResult.Declined(
+                attempt.CancellationRequestedAt is null
+                    ? "The provider has no record of this charge."
+                    : "Payment stopped because the event was cancelled before the provider charged it.");
         }
         else
         {

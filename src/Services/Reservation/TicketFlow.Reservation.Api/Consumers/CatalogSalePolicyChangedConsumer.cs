@@ -1,5 +1,6 @@
 using MassTransit;
 using TicketFlow.Contracts.Messaging.Catalog;
+using TicketFlow.Contracts.Messaging.Workflows;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Domain.SalePolicies;
 
@@ -44,7 +45,9 @@ public sealed class CatalogSalePolicyChangedConsumer(
                      message.SaleEndsAt,
                      message.PriceSnapshotVersion,
                      message.OccurredAt,
-                     tiers))
+                     tiers) &&
+                 (message.CancellationWorkflowId is null ||
+                  string.Equals(policy.Status, "Published", StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
@@ -96,6 +99,15 @@ public sealed class CatalogSalePolicyChangedConsumer(
                 // the save inside the authority lock also makes direct consumer tests race-safe.
                 await unitOfWork.SaveChangesAsync(context.CancellationToken);
             }
+        }
+
+        if (message.CancellationWorkflowId is { } workflowId)
+        {
+            await context.Publish(new EventCancellationRequested(
+                workflowId,
+                message.EventId,
+                message.CancellationReason ?? "Event cancelled by organizer.",
+                message.OccurredAt));
         }
 
         await unitOfWork.SaveChangesAsync(context.CancellationToken);

@@ -1,5 +1,6 @@
 using MassTransit;
 using TicketFlow.Contracts.Messaging.Notification;
+using TicketFlow.Notification.Application;
 using TicketFlow.Notification.Application.Abstractions;
 
 namespace TicketFlow.Notification.Api.Consumers;
@@ -13,6 +14,7 @@ namespace TicketFlow.Notification.Api.Consumers;
 /// </summary>
 public sealed class NotifyOrderCompletedConsumer(
     IEventReminderReadModel readModel,
+    NotificationDeliveryService deliveries,
     ILogger<NotifyOrderCompletedConsumer> logger) : IConsumer<NotifyOrderCompleted>
 {
     public async Task Consume(ConsumeContext<NotifyOrderCompleted> context)
@@ -25,6 +27,16 @@ public sealed class NotifyOrderCompletedConsumer(
             message.UserId,
             message.CustomerName,
             message.CustomerEmail,
+            context.CancellationToken);
+
+        await deliveries.DeliverAsync(
+            new NotificationDeliveryRequest(
+                $"order-completed:{message.OrderId:N}",
+                $"order-completed:{message.OrderId:N}",
+                message.CustomerEmail,
+                "tickets-ready",
+                "Vé của bạn đã sẵn sàng",
+                $"{message.CustomerName}, {message.TicketPdfUrls.Count} vé cho order {message.OrderId} đã sẵn sàng."),
             context.CancellationToken);
 
         logger.LogInformation(

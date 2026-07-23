@@ -62,6 +62,12 @@ public sealed class PurchaseState : SagaStateMachineInstance
 
     public DateTimeOffset? CancelledAt { get; set; }
 
+    // ---- Event cancellation campaign (Commit 13) ----
+    public Guid? EventCancellationWorkflowId { get; set; }
+    public DateTimeOffset? EventCancellationRequestedAt { get; set; }
+    public DateTimeOffset? PaymentStopRequestedAt { get; set; }
+    public DateTimeOffset? PaymentStoppedAt { get; set; }
+
     // ---- Compensation facts ----
     public DateTimeOffset? RefundRequestedAt { get; set; }
     public DateTimeOffset? PaymentRefundedAt { get; set; }
@@ -90,5 +96,8 @@ public sealed class PurchaseState : SagaStateMachineInstance
     /// participant re-arm deadlines forever, which is the "state vô hạn im lặng" this commit exists
     /// to remove.
     /// </summary>
-    public bool IsTerminal => CompletedAt is not null || CancelledAt is not null || ManualReviewAt is not null;
+    public bool IsTerminal =>
+        CancelledAt is not null ||
+        ManualReviewAt is not null ||
+        (CompletedAt is not null && EventCancellationWorkflowId is null);
 }

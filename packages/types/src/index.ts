@@ -133,6 +133,20 @@ export interface SeatMapResponse {
   sections: SectionResponse[];
 }
 
+export interface EventOnboardingWorkflowResponse {
+  workflowId: string;
+  creationKey: string;
+  venueId: string;
+  eventId: string;
+  status: "Running" | "Failed" | "Completed" | "Compensating" | "CompensationFailed" | "Compensated";
+  lastCompletedStep: string;
+  failedStep: string | null;
+  lastError: string | null;
+  canResume: boolean;
+  canCompensate: boolean;
+  updatedAt: string;
+}
+
 // analytics-service — GET /analytics/revenue (organizer-dashboard)
 export interface EventRevenue {
   eventId: string;

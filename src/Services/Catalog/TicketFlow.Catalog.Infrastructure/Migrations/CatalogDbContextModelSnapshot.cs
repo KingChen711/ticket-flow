@@ -344,6 +344,187 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                     b.ToTable("venues", "catalog");
                 });
 
+            modelBuilder.Entity("TicketFlow.Catalog.Domain.Workflows.EventCancellationWorkflow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<int?>("OrderCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("order_count");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTimeOffset>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_event_cancellation_workflows");
+
+                    b.HasIndex("EventId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_event_cancellation_workflows_event_id");
+
+                    b.ToTable("event_cancellation_workflows", "catalog");
+                });
+
+            modelBuilder.Entity("TicketFlow.Catalog.Domain.Workflows.EventOnboardingWorkflow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("CreatesVenue")
+                        .HasColumnType("boolean")
+                        .HasColumnName("creates_venue");
+
+                    b.Property<string>("CreationKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("creation_key");
+
+                    b.Property<DateTimeOffset>("EndsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ends_at");
+
+                    b.Property<string>("EventArtist")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_artist");
+
+                    b.Property<string>("EventDescription")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("event_description");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("EventTitle")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("event_title");
+
+                    b.Property<string>("FailedStep")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("failed_step");
+
+                    b.Property<string>("LastCompletedStep")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("last_completed_step");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<Guid>("SeatMapId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("seat_map_id");
+
+                    b.Property<DateTimeOffset>("StartsAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("starts_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("VenueCity")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("venue_city");
+
+                    b.Property<string>("VenueCountry")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("venue_country");
+
+                    b.Property<Guid>("VenueId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("venue_id");
+
+                    b.Property<string>("VenueName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("venue_name");
+
+                    b.Property<string>("VenuePostalCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("venue_postal_code");
+
+                    b.Property<string>("VenueStreet")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("venue_street");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_event_onboarding_workflows");
+
+                    b.HasIndex("CreationKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_event_onboarding_workflows_creation_key");
+
+                    b.ToTable("event_onboarding_workflows", "catalog");
+                });
+
             modelBuilder.Entity("MassTransit.EntityFrameworkCoreIntegration.OutboxMessage", b =>
                 {
                     b.HasOne("MassTransit.EntityFrameworkCoreIntegration.OutboxState", null)
@@ -526,6 +707,70 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
 
                     b.Navigation("Address")
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("TicketFlow.Catalog.Domain.Workflows.EventOnboardingWorkflow", b =>
+                {
+                    b.OwnsMany("TicketFlow.Catalog.Domain.Workflows.EventOnboardingSection", "Sections", b1 =>
+                        {
+                            b1.Property<Guid>("WorkflowId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("workflow_id");
+
+                            b1.Property<int>("Position")
+                                .ValueGeneratedOnAdd()
+                                .HasColumnType("integer")
+                                .HasColumnName("position");
+
+                            NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b1.Property<int>("Position"));
+
+                            b1.Property<int>("Capacity")
+                                .HasColumnType("integer")
+                                .HasColumnName("capacity");
+
+                            b1.Property<string>("Currency")
+                                .IsRequired()
+                                .HasMaxLength(3)
+                                .HasColumnType("character varying(3)")
+                                .HasColumnName("currency");
+
+                            b1.Property<string>("Name")
+                                .IsRequired()
+                                .HasMaxLength(150)
+                                .HasColumnType("character varying(150)")
+                                .HasColumnName("name");
+
+                            b1.Property<decimal>("Price")
+                                .HasColumnType("numeric(12,2)")
+                                .HasColumnName("price");
+
+                            b1.Property<Guid>("PriceTierId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("price_tier_id");
+
+                            b1.Property<Guid>("SectionId")
+                                .HasColumnType("uuid")
+                                .HasColumnName("section_id");
+
+                            b1.HasKey("WorkflowId", "Position")
+                                .HasName("pk_event_onboarding_sections");
+
+                            b1.HasIndex("PriceTierId")
+                                .IsUnique()
+                                .HasDatabaseName("ix_event_onboarding_sections_price_tier_id");
+
+                            b1.HasIndex("SectionId")
+                                .IsUnique()
+                                .HasDatabaseName("ix_event_onboarding_sections_section_id");
+
+                            b1.ToTable("event_onboarding_sections", "catalog");
+
+                            b1.WithOwner()
+                                .HasForeignKey("WorkflowId")
+                                .HasConstraintName("fk_event_onboarding_sections_event_onboarding_workflows_workfl");
+                        });
+
+                    b.Navigation("Sections");
                 });
 #pragma warning restore 612, 618
         }

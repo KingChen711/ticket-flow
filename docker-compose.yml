@@ -84,7 +84,9 @@ services:
       dockerfile: src/Services/Notification/TicketFlow.Notification.Api/Dockerfile
     container_name: ticketflow-notification
     environment:
-      ASPNETCORE_ENVIRONMENT: Docker
+      # Local Compose is an explicit test environment; every production-like environment is
+      # required to configure the real HTTP delivery provider.
+      ASPNETCORE_ENVIRONMENT: Testing
     ports:
       - "8005:8005"
     depends_on:

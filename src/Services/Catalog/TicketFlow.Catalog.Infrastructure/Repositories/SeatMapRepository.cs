@@ -13,4 +13,6 @@ public sealed class SeatMapRepository(CatalogDbContext dbContext) : ISeatMapRepo
         dbContext.SeatMaps.FirstOrDefaultAsync(s => s.EventId == eventId, cancellationToken);
 
     public void Add(SeatMap seatMap) => dbContext.SeatMaps.Add(seatMap);
+
+    public void Remove(SeatMap seatMap) => dbContext.SeatMaps.Remove(seatMap);
 }

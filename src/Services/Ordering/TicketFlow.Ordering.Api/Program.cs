@@ -71,6 +71,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
 
     // Commit 9: keeps the Kafka analytics write off the saga's critical path.
     cfg.AddConsumer<SaleRelayConsumer>();
+    cfg.AddConsumer<EventCancellationCampaignConsumer>();
 }, configureKafka: rider =>
 {
     // Producer-only — Ordering never consumes from Kafka. Confirmed via a real probe: this

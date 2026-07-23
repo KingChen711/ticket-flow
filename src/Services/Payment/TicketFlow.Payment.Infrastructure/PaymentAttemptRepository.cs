@@ -62,7 +62,8 @@ public sealed class PaymentAttemptRepository(PaymentDbContext dbContext) : IPaym
         await dbContext.PaymentAttempts
             .Where(attempt =>
                 attempt.State == PaymentAttemptState.Unknown ||
-                attempt.State == PaymentAttemptState.Pending)
+                attempt.State == PaymentAttemptState.Pending ||
+                (attempt.CancellationRequestedAt != null && attempt.CancellationCompletedAt == null))
             .OrderBy(attempt => attempt.CreatedAt)
             .Take(maxCount)
             .ToListAsync(cancellationToken);

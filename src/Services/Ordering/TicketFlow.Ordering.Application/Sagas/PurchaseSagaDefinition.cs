@@ -3,6 +3,7 @@ using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Contracts.Messaging.Reservation;
 using TicketFlow.Contracts.Messaging.Ticketing;
+using TicketFlow.Contracts.Messaging.Workflows;
 
 namespace TicketFlow.Ordering.Application.Sagas;
 
@@ -39,6 +40,10 @@ public sealed class PurchaseSagaDefinition : SagaDefinition<PurchaseState>
         sagaConfigurator.Message<PaymentRefunded>(x =>
             x.UsePartitioner(partitioner, message => message.Message.OrderId));
         sagaConfigurator.Message<SeatsReleased>(x =>
+            x.UsePartitioner(partitioner, message => message.Message.OrderId));
+        sagaConfigurator.Message<CancelOrderForEvent>(x =>
+            x.UsePartitioner(partitioner, message => message.Message.OrderId));
+        sagaConfigurator.Message<PaymentStoppedForEvent>(x =>
             x.UsePartitioner(partitioner, message => message.Message.OrderId));
 
         // Commit 9: missing-instance redelivery is configured per event on the state machine

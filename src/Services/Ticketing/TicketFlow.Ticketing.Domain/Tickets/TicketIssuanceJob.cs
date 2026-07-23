@@ -11,6 +11,9 @@ public enum TicketIssuanceJobState
 
     /// <summary>Refused for a reason no retry can change — the only state that may fail the saga.</summary>
     Failed,
+
+    /// <summary>Cancellation tombstone; no late IssueTickets delivery may create a valid ticket.</summary>
+    Cancelled,
 }
 
 /// <summary>
@@ -55,10 +58,25 @@ public sealed class TicketIssuanceJob : Entity<Guid>
             CreatedAt = now,
         };
 
+    public static TicketIssuanceJob CancelBeforeIssue(
+        Guid orderId,
+        Guid eventId,
+        Guid customerId,
+        string reason,
+        DateTimeOffset now)
+    {
+        var job = Claim(orderId, eventId, customerId, now);
+        job.MarkCancelled(reason, now);
+        return job;
+    }
+
     public void RecordAttempt() => Attempts++;
 
     public void MarkIssued(DateTimeOffset now)
     {
+        if (State == TicketIssuanceJobState.Cancelled)
+            throw new InvalidOperationException($"Ticket issuance for order '{OrderId}' was cancelled.");
+
         State = TicketIssuanceJobState.Issued;
         CompletedAt = now;
         FailureReason = null;
@@ -72,6 +90,16 @@ public sealed class TicketIssuanceJob : Entity<Guid>
     public void MarkFailed(string reason, DateTimeOffset now)
     {
         State = TicketIssuanceJobState.Failed;
+        CompletedAt = now;
+        FailureReason = reason.Length > 500 ? reason[..500] : reason;
+    }
+
+    public void MarkCancelled(string reason, DateTimeOffset now)
+    {
+        if (State == TicketIssuanceJobState.Cancelled)
+            return;
+
+        State = TicketIssuanceJobState.Cancelled;
         CompletedAt = now;
         FailureReason = reason.Length > 500 ? reason[..500] : reason;
     }

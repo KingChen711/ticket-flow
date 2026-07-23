@@ -1,7 +1,9 @@
 using MassTransit;
 using MassTransit.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Ticketing;
+using TicketFlow.Contracts.Messaging.Workflows;
 using TicketFlow.Messaging;
 using TicketFlow.Phase12.HardeningTests.Support;
 using TicketFlow.Ticketing.Api.Consumers;
@@ -88,6 +90,59 @@ public sealed class TicketArtifactBoundaryTests
         // A refusal that retrying cannot fix must reach the saga so compensation can run — the
         // mirror image of the transient case, and the reason the two are told apart at all.
         Assert.Single(harness.Published.Select<TicketingFailed>());
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Cancellation_tombstone_prevents_late_ticket_issuance_and_acknowledges_zero_tickets()
+    {
+        var render = new ControlledSideEffect<string>(() => "should-not-render.pdf");
+        await using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<ITicketRepository, EmptyTicketRepositoryFake>()
+            .AddSingleton<ITicketIssuanceJobRepository, RecordingIssuanceJobRepositoryFake>()
+            .AddSingleton<TicketFlow.Ticketing.Application.Abstractions.IUnitOfWork, NoopTicketUnitOfWorkFake>()
+            .AddSingleton<ITicketPdfRenderer>(new ControlledTicketRendererFake(render))
+            .AddSingleton(TimeProvider.System)
+            .AddMassTransitTestHarness(configuration =>
+            {
+                configuration.AddConsumer<RevokeTicketsConsumer>();
+                configuration.AddConsumer<IssueTicketsConsumer>();
+            })
+            .BuildServiceProvider(validateScopes: true);
+
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        var orderId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var workflowId = Guid.NewGuid();
+
+        await harness.Bus.Publish(new OrderCancelledIntegrationEvent(
+            orderId,
+            userId,
+            "Event cancelled.",
+            DateTimeOffset.UtcNow,
+            eventId,
+            workflowId,
+            "Buyer",
+            "buyer@example.com"));
+        Assert.True(await harness.Published.Any<TicketsRevokedForEventCancellation>(x =>
+            x.Context.Message.WorkflowId == workflowId &&
+            x.Context.Message.OrderId == orderId &&
+            x.Context.Message.TicketCount == 0));
+
+        await harness.Bus.Publish(new IssueTickets(
+            orderId,
+            userId,
+            eventId,
+            [Guid.NewGuid()],
+            "Buyer",
+            "buyer@example.com"));
+        Assert.True(await harness.Consumed.Any<IssueTickets>(x => x.Context.Message.OrderId == orderId));
+
+        Assert.Equal(0, render.Attempts);
+        Assert.Empty(harness.Published.Select<TicketsIssued>());
     }
 
     private static IssueTickets Command(Guid orderId) => new(

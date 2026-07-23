@@ -44,6 +44,15 @@ public sealed class IssueTicketsConsumer(
         var message = context.Message;
         ContractVersionMetrics.RecordInbound(nameof(IssueTickets), message.PriceSnapshotVersion);
 
+        var job = await jobs.GetByOrderAsync(message.OrderId, context.CancellationToken);
+        if (job is { State: TicketIssuanceJobState.Cancelled })
+        {
+            logger.LogInformation(
+                "[ticketing] ignoring late IssueTickets for cancelled order {OrderId}; cancellation tombstone is durable.",
+                message.OrderId);
+            return;
+        }
+
         var existing = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
         if (existing.Count > 0)
         {
@@ -59,7 +68,6 @@ public sealed class IssueTicketsConsumer(
             return;
         }
 
-        var job = await jobs.GetByOrderAsync(message.OrderId, context.CancellationToken);
         if (job is { State: TicketIssuanceJobState.Failed })
         {
             // Already refused for good; re-running would only fail the same way.

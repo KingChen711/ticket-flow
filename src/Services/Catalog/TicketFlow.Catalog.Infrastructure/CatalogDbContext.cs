@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using TicketFlow.Catalog.Domain.SeatMaps;
 using TicketFlow.Catalog.Domain.Venues;
+using TicketFlow.Catalog.Domain.Workflows;
 using Event = TicketFlow.Catalog.Domain.Events.Event;
 
 namespace TicketFlow.Catalog.Infrastructure;
@@ -11,6 +12,8 @@ public sealed class CatalogDbContext(DbContextOptions<CatalogDbContext> options)
     public DbSet<Event> Events => Set<Event>();
     public DbSet<Venue> Venues => Set<Venue>();
     public DbSet<SeatMap> SeatMaps => Set<SeatMap>();
+    public DbSet<EventOnboardingWorkflow> EventOnboardingWorkflows => Set<EventOnboardingWorkflow>();
+    public DbSet<EventCancellationWorkflow> EventCancellationWorkflows => Set<EventCancellationWorkflow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

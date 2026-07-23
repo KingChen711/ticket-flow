@@ -41,5 +41,6 @@ app.MapVenueEndpoints();
 app.MapEventEndpoints();
 app.MapSeatMapEndpoints();
 app.MapCatalogAdminEndpoints();
+app.MapWorkflowEndpoints();
 
 app.Run();

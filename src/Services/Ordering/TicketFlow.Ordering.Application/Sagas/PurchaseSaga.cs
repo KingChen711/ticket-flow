@@ -5,6 +5,7 @@ using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Payment;
 using TicketFlow.Contracts.Messaging.Reservation;
 using TicketFlow.Contracts.Messaging.Ticketing;
+using TicketFlow.Contracts.Messaging.Workflows;
 
 namespace TicketFlow.Ordering.Application.Sagas;
 
@@ -71,6 +72,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
     public Event<TicketingFailed> TicketingFailedEvent { get; private set; } = null!;
     public Event<PaymentRefunded> PaymentRefundedEvent { get; private set; } = null!;
     public Event<SeatsReleased> SeatsReleasedEvent { get; private set; } = null!;
+    public Event<CancelOrderForEvent> EventCancellationRequestedEvent { get; private set; } = null!;
+    public Event<PaymentStoppedForEvent> PaymentStoppedForEventEvent { get; private set; } = null!;
 
     /// <summary>
     /// How long a participant may stay silent before the saga acts. Long enough that a slow
@@ -106,6 +109,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
         Event(() => TicketingFailedEvent, x => CorrelateAndRedeliver(x, m => m.Message.OrderId));
         Event(() => PaymentRefundedEvent, x => CorrelateAndRedeliver(x, m => m.Message.OrderId));
         Event(() => SeatsReleasedEvent, x => CorrelateAndRedeliver(x, m => m.Message.OrderId));
+        Event(() => EventCancellationRequestedEvent, x => CorrelateAndRedeliver(x, m => m.Message.OrderId));
+        Event(() => PaymentStoppedForEventEvent, x => CorrelateAndRedeliver(x, m => m.Message.OrderId));
 
         Event(() => DeadlineExpiredEvent, x => x.CorrelateById(context => context.Message.OrderId));
         Event(() => ResumeRequestedEvent, x => x.CorrelateById(context => context.Message.OrderId));
@@ -170,7 +175,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.AllocationGeneration = context.Message.Generation;
                     context.Saga.AllocationReference = context.Message.AllocationReference;
                 })
-                .ThenAsync(AdvanceAsync),
+                .ThenAsync(DriveAsync),
             When(PaymentProcessedEvent)
                 .Then(context =>
                 {
@@ -180,7 +185,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.PaymentAuthorizedAt ??= DateTimeOffset.UtcNow;
                     context.Saga.PaymentId ??= context.Message.PaymentId;
                 })
-                .ThenAsync(AdvanceAsync),
+                .ThenAsync(DriveAsync),
             When(TicketsIssuedEvent)
                 .Then(context =>
                 {
@@ -191,7 +196,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     if (context.Saga.TicketPdfUrls.Count == 0)
                         context.Saga.TicketPdfUrls = [.. context.Message.TicketPdfUrls];
                 })
-                .ThenAsync(AdvanceAsync));
+                .ThenAsync(DriveAsync));
 
         DuringAny(
             // Hold expired/missing before checkout completed — nothing charged, nothing to
@@ -213,8 +218,21 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 
         DuringAny(
             When(DeadlineExpiredEvent).ThenAsync(OnDeadlineAsync),
-            When(ResumeRequestedEvent).ThenAsync(OnResumeAsync));
+            When(ResumeRequestedEvent).ThenAsync(OnResumeAsync),
+            When(EventCancellationRequestedEvent).ThenAsync(OnEventCancellationAsync),
+            When(PaymentStoppedForEventEvent)
+                .Then(context =>
+                {
+                    if (context.Saga.EventCancellationWorkflowId == context.Message.WorkflowId)
+                        context.Saga.PaymentStoppedAt ??= context.Message.StoppedAt;
+                })
+                .ThenAsync(DriveAsync));
     }
+
+    private static Task DriveAsync(BehaviorContext<PurchaseState> context) =>
+        context.Saga.CancellationReason is not null
+            ? CompensateAsync(context)
+            : AdvanceAsync(context);
 
     /// <summary>
     /// The whole decision table, evaluated from recorded facts only. Reading it top to bottom is
@@ -339,11 +357,34 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
     private static async Task CompensateAsync(BehaviorContext<PurchaseState> context)
     {
         var saga = context.Saga;
-        if (saga.IsTerminal || saga.CancellationReason is null)
+        if (saga.CancelledAt is not null || saga.CancellationReason is null)
             return;
 
+        // A cancellation tombstone is required whenever ProcessPayment was ever dispatched. It
+        // serializes against that charge in Payment and either prevents it, resolves uncertainty,
+        // or refunds it before this saga releases seats.
+        if (saga.EventCancellationWorkflowId is { } workflowId &&
+            saga.PaymentRequestedAt is not null &&
+            saga.PaymentStoppedAt is null)
+        {
+            if (saga.PaymentStopRequestedAt is null)
+            {
+                saga.PaymentStopRequestedAt = DateTimeOffset.UtcNow;
+                await context.Publish(new CancelPaymentForEvent(
+                    saga.CorrelationId,
+                    workflowId,
+                    saga.Amount,
+                    saga.Currency,
+                    $"event-cancel:{workflowId:N}:{saga.CorrelationId:N}:payment"));
+            }
+
+            await TransitionAsync(context, "CompensatingRefund");
+            return;
+        }
+
         // Only a charge that actually happened needs reversing.
-        if (saga.PaymentAuthorizedAt is not null && saga.PaymentRefundedAt is null)
+        if (saga.EventCancellationWorkflowId is null &&
+            saga.PaymentAuthorizedAt is not null && saga.PaymentRefundedAt is null)
         {
             if (saga.RefundRequestedAt is null)
             {
@@ -370,7 +411,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     saga.CatalogEventId,
                     saga.HoldId,
                     saga.SeatIds,
-                    $"{saga.IdempotencyKey}:release",
+                    saga.EventCancellationWorkflowId is { } cancellationWorkflowId
+                        ? $"event-cancel:{cancellationWorkflowId:N}:{saga.CorrelationId:N}:release"
+                        : $"{saga.IdempotencyKey}:release",
                     saga.AllocationGeneration,
                     saga.UserId));
             }
@@ -391,9 +434,55 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
             saga.CorrelationId,
             saga.UserId,
             saga.CancellationReason ?? "Compensation completed.",
-            saga.CancelledAt.Value));
+            saga.CancelledAt.Value,
+            saga.CatalogEventId,
+            saga.EventCancellationWorkflowId,
+            saga.CustomerName,
+            saga.CustomerEmail));
 
         await TransitionAsync(context, "Cancelled");
+    }
+
+    private static async Task OnEventCancellationAsync(
+        BehaviorContext<PurchaseState, CancelOrderForEvent> context)
+    {
+        var saga = context.Saga;
+        var message = context.Message;
+        if (saga.CatalogEventId != message.EventId)
+            throw new InvalidOperationException(
+                $"Order '{saga.CorrelationId}' belongs to event '{saga.CatalogEventId}', not '{message.EventId}'.");
+
+        if (saga.CancelledAt is not null)
+        {
+            // Re-emit the acknowledgement: a campaign retry may be recovering from a crash after
+            // this saga committed cancellation but before the campaign recorded the message.
+            await context.Publish(new OrderCancelledIntegrationEvent(
+                saga.CorrelationId,
+                saga.UserId,
+                saga.CancellationReason ?? message.Reason,
+                saga.CancelledAt.Value,
+                saga.CatalogEventId,
+                message.WorkflowId,
+                saga.CustomerName,
+                saga.CustomerEmail));
+            return;
+        }
+
+        if (saga.EventCancellationWorkflowId is not null &&
+            saga.EventCancellationWorkflowId != message.WorkflowId)
+        {
+            throw new InvalidOperationException(
+                $"Order '{saga.CorrelationId}' is already attached to cancellation workflow '{saga.EventCancellationWorkflowId}'.");
+        }
+
+        saga.EventCancellationWorkflowId = message.WorkflowId;
+        saga.EventCancellationRequestedAt ??= message.RequestedAt;
+        saga.CancellationReason ??= message.Reason;
+        saga.ManualReviewAt = null;
+        saga.ManualReviewReason = null;
+        saga.DeadlineStrikes = 0;
+
+        await CompensateAsync(context);
     }
 
     /// <summary>
@@ -443,6 +532,8 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
             saga.TicketsRequestedAt = null;
         if (saga.PaymentRefundedAt is null)
             saga.RefundRequestedAt = null;
+        if (saga.PaymentStoppedAt is null)
+            saga.PaymentStopRequestedAt = null;
         if (saga.SeatsReleasedAt is null)
             saga.ReleaseRequestedAt = null;
 
@@ -552,7 +643,10 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                 saga.TicketsRequestedAt = null;
                 break;
             case "CompensatingRefund":
-                saga.RefundRequestedAt = null;
+                if (saga.EventCancellationWorkflowId is null)
+                    saga.RefundRequestedAt = null;
+                else
+                    saga.PaymentStopRequestedAt = null;
                 break;
             case "CompensatingSeats":
                 saga.ReleaseRequestedAt = null;

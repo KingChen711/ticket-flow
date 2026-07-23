@@ -65,7 +65,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: ASPNETCORE_ENVIRONMENT
-              value: "Docker"
+              value: {{ default "Docker" $svc.environment | quote }}
             # Every service gets the K8s browser issuer even though only the six services that
             # call AddTicketFlowAuth consume it.  This keeps the template generic and prevents a
             # host-issued token from working at the gateway but failing on a downstream owner.

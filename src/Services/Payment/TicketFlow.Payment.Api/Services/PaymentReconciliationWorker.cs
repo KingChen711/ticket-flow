@@ -70,6 +70,20 @@ public sealed class PaymentReconciliationWorker(
 
         foreach (var attempt in await repository.GetUnresolvedAttemptsAsync(options.BatchSize, cancellationToken))
         {
+            if (attempt.CancellationWorkflowId is not null && attempt.CancellationCompletedAt is null)
+            {
+                if (!ShouldEscalate(attempt.ReconcileAttempts, "event-cancellation charge", attempt.OrderId))
+                {
+                    await ReconcileEventCancellationAsync(
+                        attempt,
+                        repository,
+                        payments,
+                        publisher,
+                        cancellationToken);
+                }
+                continue;
+            }
+
             if (ShouldEscalate(attempt.ReconcileAttempts, "charge", attempt.OrderId))
                 continue;
 
@@ -146,6 +160,78 @@ public sealed class PaymentReconciliationWorker(
                     refund.OperationKey),
                 cancellationToken);
         }
+    }
+
+    private async Task ReconcileEventCancellationAsync(
+        PaymentAttempt attempt,
+        IPaymentAttemptRepository repository,
+        PaymentProcessingService payments,
+        IPublishEndpoint publisher,
+        CancellationToken cancellationToken)
+    {
+        var workflowId = attempt.CancellationWorkflowId!.Value;
+        var operationKey = attempt.CancellationOperationKey
+            ?? throw new InvalidOperationException(
+                $"Cancellation metadata for order '{attempt.OrderId}' has no operation key.");
+        var stop = await payments.StopForEventAsync(
+            new StopPaymentForEventRequest(
+                attempt.OrderId,
+                workflowId,
+                attempt.Amount,
+                attempt.Currency,
+                operationKey),
+            cancellationToken);
+        if (stop.Decision == StopPaymentDecision.Unknown)
+        {
+            PaymentOperationMetrics.RecordReconcile("event_cancellation", "still_unknown");
+            return;
+        }
+
+        var refunded = false;
+        if (stop.Decision == StopPaymentDecision.RefundRequired)
+        {
+            var existingRefund = await repository.GetRefundByOrderAsync(attempt.OrderId, cancellationToken);
+            if (existingRefund is not null &&
+                ShouldEscalate(existingRefund.ReconcileAttempts, "event-cancellation refund", attempt.OrderId))
+                return;
+
+            var refund = await payments.RefundAsync(
+                new RefundPaymentRequest(
+                    attempt.OrderId,
+                    stop.PaymentId!.Value,
+                    attempt.Amount,
+                    attempt.Currency,
+                    $"{operationKey}:refund"),
+                cancellationToken);
+            if (refund.Decision == PaymentDecision.Unknown)
+            {
+                PaymentOperationMetrics.RecordReconcile("event_cancellation", "refund_unknown");
+                return;
+            }
+            if (refund.Decision != PaymentDecision.Authorized)
+            {
+                logger.LogError(
+                    "[payment] provider refused cancellation refund for order {OrderId}: {Reason}",
+                    attempt.OrderId,
+                    refund.FailureReason);
+                return;
+            }
+
+            refunded = true;
+        }
+
+        await publisher.Publish(new PaymentStoppedForEvent(
+            attempt.OrderId,
+            workflowId,
+            stop.PaymentId,
+            refunded,
+            timeProvider.GetUtcNow(),
+            operationKey), cancellationToken);
+        await payments.CompleteEventCancellationAsync(
+            attempt.OrderId,
+            workflowId,
+            cancellationToken);
+        PaymentOperationMetrics.RecordReconcile("event_cancellation", refunded ? "refunded" : "stopped");
     }
 
     private bool ShouldEscalate(int reconcileAttempts, string kind, Guid orderId)

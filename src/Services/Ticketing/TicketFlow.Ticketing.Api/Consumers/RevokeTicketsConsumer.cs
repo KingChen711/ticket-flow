@@ -1,40 +1,78 @@
 using MassTransit;
 using TicketFlow.Contracts.Messaging.Ordering;
+using TicketFlow.Contracts.Messaging.Workflows;
+using TicketFlow.Messaging;
 using TicketFlow.Ticketing.Application.Abstractions;
+using TicketFlow.Ticketing.Domain.Tickets;
 
 namespace TicketFlow.Ticketing.Api.Consumers;
 
 /// <summary>
-/// Revokes an order's tickets when the order is cancelled (Commit 10).
+/// Persists a per-order cancellation tombstone before acknowledging revocation. The issuance
+/// consumer reads the same unique job row, so a late IssueTickets either loses the insert race or
+/// its xmin update and can never commit a valid ticket after this operation wins.
 /// </summary>
-/// <remarks>
-/// Until now nothing ever withdrew a ticket. A refunded order's PDF stayed valid and would admit
-/// its holder at the gate — the money went back and the seat was given away too. Revoking rather
-/// than deleting is deliberate: staff need to see "revoked", not "no such ticket", so a refund is
-/// distinguishable from a forgery.
-/// </remarks>
 public sealed class RevokeTicketsConsumer(
     ITicketRepository repository,
+    ITicketIssuanceJobRepository jobs,
     IUnitOfWork unitOfWork,
     TimeProvider timeProvider,
     ILogger<RevokeTicketsConsumer> logger) : IConsumer<OrderCancelledIntegrationEvent>
 {
     public async Task Consume(ConsumeContext<OrderCancelledIntegrationEvent> context)
     {
-        var tickets = await repository.GetByOrderIdAsync(context.Message.OrderId, context.CancellationToken);
-        if (tickets.Count == 0)
-            return;
+        var message = context.Message;
+        var now = timeProvider.GetUtcNow();
+        var eventId = message.CatalogEventId ?? Guid.Empty;
+        var job = await jobs.GetByOrderAsync(message.OrderId, context.CancellationToken);
+        if (job is null)
+        {
+            job = TicketIssuanceJob.CancelBeforeIssue(
+                message.OrderId,
+                eventId,
+                message.UserId,
+                message.Reason,
+                now);
+            jobs.Add(job);
+        }
+        else
+        {
+            job.MarkCancelled(message.Reason, now);
+        }
 
-        // Revoke is idempotent, so a redelivery costs nothing and needs no separate guard.
+        var tickets = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
         foreach (var ticket in tickets)
-            ticket.Revoke(context.Message.Reason, timeProvider.GetUtcNow());
+            ticket.Revoke(message.Reason, now);
 
-        await unitOfWork.SaveChangesAsync(context.CancellationToken);
+        if (message.CancellationWorkflowId is { } workflowId)
+        {
+            if (eventId == Guid.Empty)
+                throw new PermanentMessageFaultException(
+                    $"Event cancellation '{workflowId}' for order '{message.OrderId}' has no CatalogEventId.");
+
+            await context.Publish(new TicketsRevokedForEventCancellation(
+                workflowId,
+                eventId,
+                message.OrderId,
+                tickets.Count,
+                now));
+        }
+
+        try
+        {
+            // Ticket/job changes and the acknowledgement share Ticketing's EF bus-outbox commit.
+            await unitOfWork.SaveChangesAsync(context.CancellationToken);
+        }
+        catch (Exception exception) when (jobs.IsUniqueViolation(exception))
+        {
+            throw new OutOfOrderMessageException(
+                $"Ticket issuance and cancellation raced for order '{message.OrderId}'; retry against the durable winner.");
+        }
 
         logger.LogInformation(
-            "[ticketing] revoked {Count} ticket(s) for cancelled order {OrderId}: {Reason}",
+            "[ticketing] fenced issuance and revoked {Count} ticket(s) for cancelled order {OrderId}: {Reason}",
             tickets.Count,
-            context.Message.OrderId,
-            context.Message.Reason);
+            message.OrderId,
+            message.Reason);
     }
 }

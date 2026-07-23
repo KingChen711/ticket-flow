@@ -20,6 +20,10 @@ public sealed class PaymentAttemptConfiguration : IEntityTypeConfiguration<Payme
         builder.Property(a => a.FailureReason).HasMaxLength(500);
         builder.Property(a => a.ReconcileAttempts).IsRequired();
         builder.Property(a => a.CreatedAt).IsRequired();
+        builder.Property(a => a.CancellationRequestedAt);
+        builder.Property(a => a.CancellationWorkflowId);
+        builder.Property(a => a.CancellationOperationKey).HasMaxLength(200);
+        builder.Property(a => a.CancellationCompletedAt);
         builder.HasIndex(a => a.OperationKey).IsUnique();
 
         // Commit 6 makes this UNIQUE. It is the actual double-charge guard: the attempt row is

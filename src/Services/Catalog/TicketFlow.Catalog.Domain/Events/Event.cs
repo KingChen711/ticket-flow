@@ -34,10 +34,19 @@ public sealed class Event : AggregateRoot<Guid>
         AggregateVersion = 1;
     }
 
-    public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule)
+    public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule) =>
+        Create(Guid.NewGuid(), title, description, artist, venueId, schedule);
+
+    public static Event Create(
+        Guid id,
+        string title,
+        string description,
+        string artist,
+        Guid venueId,
+        EventSchedule schedule)
     {
         var @event = new Event(
-            Guid.NewGuid(),
+            id == Guid.Empty ? throw new ArgumentException("Event id cannot be empty.", nameof(id)) : id,
             Guard.NotNullOrEmpty(title, nameof(title)),
             description ?? string.Empty,
             Guard.NotNullOrEmpty(artist, nameof(artist)),
@@ -55,6 +64,9 @@ public sealed class Event : AggregateRoot<Guid>
     /// cross-aggregate rule, validated by the application layer before calling this method.
     /// </summary>
     public void AddPriceTier(Guid sectionId, Money price)
+        => AddPriceTier(Guid.NewGuid(), sectionId, price);
+
+    public void AddPriceTier(Guid priceTierId, Guid sectionId, Money price)
     {
         if (Status != EventStatus.Draft)
             throw new InvalidOperationException("Price tiers can only be added while the event is in draft.");
@@ -62,7 +74,10 @@ public sealed class Event : AggregateRoot<Guid>
         if (_priceTiers.Any(p => p.SectionId == sectionId))
             throw new InvalidOperationException($"A price tier for section '{sectionId}' already exists.");
 
-        _priceTiers.Add(PriceTier.Create(sectionId, price));
+        if (_priceTiers.Any(p => p.Id == priceTierId))
+            throw new InvalidOperationException($"Price tier '{priceTierId}' already exists.");
+
+        _priceTiers.Add(PriceTier.Create(priceTierId, sectionId, price));
         AggregateVersion++;
         PriceSnapshotVersion++;
     }

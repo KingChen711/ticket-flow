@@ -20,7 +20,8 @@ public sealed record OrderMilestoneRequest(
     OrderMilestone Milestone,
     Guid? PaymentId = null,
     IReadOnlyList<string>? TicketPdfUrls = null,
-    string? Reason = null);
+    string? Reason = null,
+    Guid? CancellationWorkflowId = null);
 
 public enum OrderMilestoneOutcome
 {
@@ -135,7 +136,8 @@ public sealed class OrderMilestoneWriter(IOrderStore store, TimeProvider timePro
             OrderMilestone.SeatsReleased when !terminal && order.Status != OrderStatus.SeatsReleased =>
                 [new OrderSeatsReleased(id, now)],
 
-            OrderMilestone.Cancelled when !terminal =>
+            OrderMilestone.Cancelled when !terminal ||
+                                            (order.Status == OrderStatus.Confirmed && request.CancellationWorkflowId is not null) =>
                 [new OrderCancelled(id, request.Reason ?? "Compensation completed.", now)],
 
             _ => [],

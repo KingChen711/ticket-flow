@@ -251,6 +251,23 @@ namespace TicketFlow.Payment.Infrastructure.Migrations
                         .HasColumnType("numeric(12,2)")
                         .HasColumnName("amount");
 
+                    b.Property<DateTimeOffset?>("CancellationCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancellation_completed_at");
+
+                    b.Property<string>("CancellationOperationKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("cancellation_operation_key");
+
+                    b.Property<DateTimeOffset?>("CancellationRequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancellation_requested_at");
+
+                    b.Property<Guid?>("CancellationWorkflowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancellation_workflow_id");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");

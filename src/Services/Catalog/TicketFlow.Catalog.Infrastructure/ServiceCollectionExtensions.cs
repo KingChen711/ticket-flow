@@ -7,6 +7,7 @@ using TicketFlow.Catalog.Application.EventDetails;
 using TicketFlow.Catalog.Infrastructure.EventDetails;
 using TicketFlow.Catalog.Infrastructure.Messaging;
 using TicketFlow.Catalog.Infrastructure.Repositories;
+using TicketFlow.Catalog.Infrastructure.Workflows;
 using TicketFlow.Messaging;
 
 namespace TicketFlow.Catalog.Infrastructure;
@@ -24,6 +25,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventRepository, EventRepository>();
         services.AddScoped<IVenueRepository, VenueRepository>();
         services.AddScoped<ISeatMapRepository, SeatMapRepository>();
+        services.AddScoped<IEventOnboardingWorkflowRepository, EventOnboardingWorkflowRepository>();
+        services.AddScoped<IEventCancellationWorkflowRepository, EventCancellationWorkflowRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
 
@@ -36,6 +39,12 @@ public static class ServiceCollectionExtensions
         {
             client.BaseAddress = new Uri(reservationBaseUrl);
             client.Timeout = TimeSpan.FromSeconds(3);
+        });
+
+        services.AddHttpClient<IReservationInventoryClient, HttpReservationInventoryClient>(client =>
+        {
+            client.BaseAddress = new Uri(reservationBaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(30);
         });
 
         var recommendationBaseUrl = configuration["Recommendation:BaseUrl"]
@@ -54,6 +63,7 @@ public static class ServiceCollectionExtensions
         // both.
         services.AddTicketFlowMessaging(configuration, "catalog", busConfigurator =>
         {
+            busConfigurator.AddConsumer<EventCancellationCompletedConsumer>();
             busConfigurator.AddEntityFrameworkOutbox<CatalogDbContext>(outboxConfigurator =>
             {
                 outboxConfigurator.UsePostgres();

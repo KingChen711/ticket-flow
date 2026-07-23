@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import type { VenueResponse } from "@ticketflow/types";
+import { useActionState, useEffect, useState } from "react";
+import type { EventOnboardingWorkflowResponse, VenueResponse } from "@ticketflow/types";
 import { createEventAction } from "./actions";
 
 interface SectionRow {
@@ -13,13 +13,32 @@ interface SectionRow {
 
 let nextKey = 0;
 
-export function NewEventForm({ venues }: { venues: VenueResponse[] }) {
+export function NewEventForm({
+  venues,
+  creationKey,
+  initialWorkflow,
+}: {
+  venues: VenueResponse[];
+  creationKey: string;
+  initialWorkflow: EventOnboardingWorkflowResponse | null;
+}) {
+  const [actionState, formAction, pending] = useActionState(createEventAction, {
+    workflow: initialWorkflow,
+    error: initialWorkflow?.lastError ?? null,
+  });
   const [venueMode, setVenueMode] = useState<"existing" | "new">(
     venues.length > 0 ? "existing" : "new",
   );
   const [sections, setSections] = useState<SectionRow[]>([
     { key: nextKey++, name: "General", capacity: "50", price: "450000" },
   ]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("creationKey") === creationKey) return;
+    url.searchParams.set("creationKey", creationKey);
+    window.history.replaceState(null, "", url);
+  }, [creationKey]);
 
   function addSection() {
     setSections((prev) => [...prev, { key: nextKey++, name: "", capacity: "", price: "" }]);
@@ -34,7 +53,31 @@ export function NewEventForm({ venues }: { venues: VenueResponse[] }) {
   }
 
   return (
-    <form action={createEventAction} className="flex flex-col gap-6">
+    <form action={formAction} className="flex flex-col gap-6">
+      <input type="hidden" name="creationKey" value={creationKey} />
+      {actionState.workflow && (
+        <input type="hidden" name="workflowId" value={actionState.workflow.workflowId} />
+      )}
+      {actionState.workflow?.canResume && (
+        <div role="alert" className="rounded border border-amber-400 bg-amber-50 p-3 text-sm">
+          <p className="font-semibold">
+            Creation paused
+            {actionState.workflow.failedStep ? ` at ${actionState.workflow.failedStep}` : " after an interrupted step"}
+          </p>
+          {(actionState.workflow.lastError ?? actionState.error) && (
+            <p>{actionState.workflow.lastError ?? actionState.error}</p>
+          )}
+          <p className="mt-1 text-gray-600">
+            Completed through {actionState.workflow.lastCompletedStep}. Submit again to resume the same workflow;
+            no venue or event will be duplicated.
+          </p>
+        </div>
+      )}
+      {actionState.error && !actionState.workflow && (
+        <p role="alert" className="rounded border border-red-400 bg-red-50 p-3 text-sm text-red-700">
+          {actionState.error}
+        </p>
+      )}
       <fieldset className="flex flex-col gap-2 rounded border p-4">
         <legend className="px-1 text-sm font-semibold">Venue</legend>
         {venues.length > 0 && (
@@ -147,8 +190,12 @@ export function NewEventForm({ venues }: { venues: VenueResponse[] }) {
         </button>
       </fieldset>
 
-      <button type="submit" className="w-fit rounded bg-black px-4 py-2 text-white">
-        Create &amp; publish event
+      <button disabled={pending} type="submit" className="w-fit rounded bg-black px-4 py-2 text-white disabled:opacity-50">
+        {pending
+          ? "Working…"
+          : actionState.workflow?.canResume
+            ? `Resume ${actionState.workflow.failedStep ?? "workflow"}`
+            : "Create & publish event"}
       </button>
     </form>
   );

@@ -1,4 +1,5 @@
 using TicketFlow.Reservation.Application.Seats;
+using TicketFlow.Reservation.Infrastructure;
 
 namespace TicketFlow.Reservation.Api.Endpoints;
 
@@ -17,6 +18,15 @@ public static class InventoryEndpoints
         {
             var seatCount = await service.ProvisionAsync(new ProvisionInventoryRequest(eventId, body.Sections), ct);
             return Results.Created($"/events/{eventId}/availability", new { eventId, seatCount });
+        }).WithTags("Inventory");
+
+        app.MapDelete("/events/{eventId:guid}/inventory", async (
+            Guid eventId,
+            InventoryCleanupService cleanup,
+            CancellationToken ct) =>
+        {
+            await cleanup.CleanupAsync(eventId, ct);
+            return Results.NoContent();
         }).WithTags("Inventory");
     }
 }

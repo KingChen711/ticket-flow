@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
             options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
 
         services.AddScoped<ISeatRepository, SeatRepository>();
+        services.AddScoped<InventoryCleanupService>();
         services.AddScoped<IEventSalePolicyRepository, EventSalePolicyRepository>();
         services.AddScoped<IHoldQuoteRepository, HoldQuoteRepository>();
         services.AddScoped<ISeatAllocationRepository, SeatAllocationRepository>();

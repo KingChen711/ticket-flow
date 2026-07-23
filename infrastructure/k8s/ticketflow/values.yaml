@@ -103,6 +103,9 @@ services:
   notification:
     image: ticket-flow-notification
     port: 8005
+    # This chart targets the local Docker Desktop cluster. Production values must override this
+    # with Production and provide Delivery__Provider/BaseUrl/ApiKey via a Secret.
+    environment: Testing
 
   search:
     image: ticket-flow-search
