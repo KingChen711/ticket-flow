@@ -66,6 +66,11 @@
     <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Infrastructure\TicketFlow.Catalog.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Application\TicketFlow.Catalog.Application.csproj" />
     <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Domain\TicketFlow.Catalog.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Application\TicketFlow.Identity.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Domain\TicketFlow.Identity.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Infrastructure\TicketFlow.Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Recommendation\TicketFlow.Recommendation.Application\TicketFlow.Recommendation.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Recommendation\TicketFlow.Recommendation.Infrastructure\TicketFlow.Recommendation.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

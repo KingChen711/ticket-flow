@@ -12,7 +12,7 @@ public static class UserEndpoints
         {
             var user = await service.RegisterAsync(request, ct);
             return Results.Created($"/users/{user.Id}", user);
-        }).WithTags("Users");
+        }).WithTags("Users").RequireRateLimiting("registration");
 
         group.MapGet("/", async (UserService service, CancellationToken ct) =>
             Results.Ok(await service.ListAsync(ct))).RequireAuthorization("RequireAdmin");

@@ -94,6 +94,7 @@ public sealed class HardeningEnvironmentFixture : IAsyncLifetime
     public ElasticsearchClient SearchClient { get; private set; } = null!;
     public string SearchIndexName => "phase12-search-durability";
     public IMongoDatabase ReminderDatabase { get; private set; } = null!;
+    public IMongoDatabase RecommendationDatabase { get; private set; } = null!;
     public IDocumentStore MartenStore => _provider!.GetRequiredService<IDocumentStore>();
     public IPublishEndpoint PublishEndpoint => _bus!;
     public MessageProbeSink Messages => _provider!.GetRequiredService<MessageProbeSink>();
@@ -122,7 +123,9 @@ public sealed class HardeningEnvironmentFixture : IAsyncLifetime
         // it here would mean testing a Mongo client configured differently from the one that runs
         // — the same fixture/production divergence that hid two real bugs in Commit 8 and 9.
         MongoSerializationConfig.EnsureConfigured();
-        ReminderDatabase = new MongoClient(_mongo.GetConnectionString()).GetDatabase("phase12_notification_durability");
+        var mongoClient = new MongoClient(_mongo.GetConnectionString());
+        ReminderDatabase = mongoClient.GetDatabase("phase12_notification_durability");
+        RecommendationDatabase = mongoClient.GetDatabase("phase12_recommendation_concurrency");
         ReminderReadModel = new MongoEventReminderReadModel(ReminderDatabase);
 
         var services = new ServiceCollection();

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -7,22 +8,44 @@ using TicketFlow.Identity.Domain.Users;
 
 namespace TicketFlow.Identity.Infrastructure.Keycloak;
 
-// Talks to Keycloak's Admin REST API via the ticketflow-identity-admin service account
-// (client-credentials). Two real findings from probing this API before writing this class
-// (docs/phase-7-plan.md Commit 3):
-//   1. POST /users ignores a client-supplied "id" — Keycloak always assigns its own UUID,
-//      returned only via the response's Location header. The caller (UserService) must use
-//      THAT id for the local User row, not a pre-minted Guid.
-//   2. A "credentials" array inside the POST /users body is silently ignored by this endpoint
-//      (unlike realm-export.json's declarative import, which DOES honor it) — the password has
-//      to be set via a separate PUT .../reset-password call, or the account can be created (201)
-//      but is permanently unable to log in ("Account is not fully set up", no clear error at
-//      creation time).
-// No admin-token caching — register isn't a hot path, so a fresh client-credentials token per
-// call keeps this simple; revisit if identity's admin API traffic ever grows.
+/// <summary>
+/// Thin, step-oriented Keycloak Admin API client. UserService persists a checkpoint between these
+/// calls and owns recovery/compensation; this client never tries to hide a distributed workflow.
+/// </summary>
 public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOptions options) : IKeycloakAdminClient
 {
-    public async Task<Guid> CreateUserAsync(string email, string displayName, string password, Role role,
+    private const string RegistrationKeyAttribute = "ticketflowRegistrationKey";
+
+    public async Task<Guid?> FindUserByNormalizedEmailAsync(
+        string normalizedEmail,
+        Guid registrationKey,
+        CancellationToken cancellationToken = default)
+    {
+        var token = await GetAdminTokenAsync(cancellationToken);
+        var byUsername = await FindUsersAsync("username", normalizedEmail, token, cancellationToken);
+        var byEmail = await FindUsersAsync("email", normalizedEmail, token, cancellationToken);
+
+        var exactMatches = byUsername.Concat(byEmail)
+            .Where(user =>
+                (string.Equals(user.Username, normalizedEmail, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(user.Email, normalizedEmail, StringComparison.OrdinalIgnoreCase)) &&
+                HasRegistrationKey(user, registrationKey))
+            .DistinctBy(user => user.Id)
+            .ToList();
+
+        return exactMatches.Count switch
+        {
+            0 => null,
+            1 => exactMatches[0].Id,
+            _ => throw new InvalidOperationException(
+                $"Keycloak returned multiple exact users for normalized email '{normalizedEmail}'."),
+        };
+    }
+
+    public async Task<Guid> CreateUserAsync(
+        string normalizedEmail,
+        string displayName,
+        Guid registrationKey,
         CancellationToken cancellationToken = default)
     {
         var token = await GetAdminTokenAsync(cancellationToken);
@@ -30,33 +53,40 @@ public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOpti
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, $"/admin/realms/{options.Realm}/users");
         createRequest.Content = JsonContent.Create(new
         {
-            username = email,
-            email,
+            username = normalizedEmail,
+            email = normalizedEmail,
             firstName = displayName,
             enabled = true,
-            emailVerified = true,
+            emailVerified = false,
+            requiredActions = new[] { "VERIFY_EMAIL" },
+            attributes = new Dictionary<string, string[]>
+            {
+                [RegistrationKeyAttribute] = [registrationKey.ToString("D")],
+            },
         });
         createRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
         using var createResponse = await httpClient.SendAsync(createRequest, cancellationToken);
+        if (createResponse.StatusCode == HttpStatusCode.Conflict)
+            throw new KeycloakUserAlreadyExistsException(normalizedEmail);
+
         createResponse.EnsureSuccessStatusCode();
 
         var location = createResponse.Headers.Location
                        ?? throw new InvalidOperationException(
                            "Keycloak did not return a Location header for the created user.");
-        var userId = Guid.Parse(location.Segments[^1]);
+        return Guid.Parse(location.Segments[^1]);
+    }
 
-        try
-        {
-            await SetPasswordAsync(userId, password, token, cancellationToken);
-            await AssignRoleAsync(userId, role, token, cancellationToken);
-        }
-        catch
-        {
-            await DeleteUserAsync(userId, cancellationToken);
-            throw;
-        }
-
-        return userId;
+    public async Task ConfigureUserAsync(
+        Guid keycloakUserId,
+        string password,
+        Role role,
+        CancellationToken cancellationToken = default)
+    {
+        var token = await GetAdminTokenAsync(cancellationToken);
+        await SetPasswordAsync(keycloakUserId, password, token, cancellationToken);
+        await AssignRoleAsync(keycloakUserId, role, token, cancellationToken);
     }
 
     public async Task DeleteUserAsync(Guid keycloakUserId, CancellationToken cancellationToken = default)
@@ -67,10 +97,34 @@ public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOpti
             new HttpRequestMessage(HttpMethod.Delete, $"/admin/realms/{options.Realm}/users/{keycloakUserId}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+
+        // Compensation is idempotent: an already-absent remote user is the desired outcome.
+        if (response.StatusCode != HttpStatusCode.NotFound)
+            response.EnsureSuccessStatusCode();
     }
 
-    private async Task SetPasswordAsync(Guid userId, string password, string token, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<KeycloakUserRepresentation>> FindUsersAsync(
+        string field,
+        string value,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        var encoded = Uri.EscapeDataString(value);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/admin/realms/{options.Realm}/users?{field}={encoded}&exact=true");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<KeycloakUserRepresentation>>(cancellationToken)
+               ?? [];
+    }
+
+    private async Task SetPasswordAsync(
+        Guid userId,
+        string password,
+        string token,
+        CancellationToken cancellationToken)
     {
         using var request =
             new HttpRequestMessage(HttpMethod.Put, $"/admin/realms/{options.Realm}/users/{userId}/reset-password");
@@ -80,7 +134,11 @@ public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOpti
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task AssignRoleAsync(Guid userId, Role role, string token, CancellationToken cancellationToken)
+    private async Task AssignRoleAsync(
+        Guid userId,
+        Role role,
+        string token,
+        CancellationToken cancellationToken)
     {
         var roleName = role.ToString().ToLowerInvariant();
 
@@ -91,7 +149,8 @@ public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOpti
         roleResponse.EnsureSuccessStatusCode();
         var roleRepresentation = await roleResponse.Content.ReadAsStringAsync(cancellationToken);
 
-        using var assignRequest = new HttpRequestMessage(HttpMethod.Post,
+        using var assignRequest = new HttpRequestMessage(
+            HttpMethod.Post,
             $"/admin/realms/{options.Realm}/users/{userId}/role-mappings/realm");
         assignRequest.Content = new StringContent($"[{roleRepresentation}]", Encoding.UTF8, "application/json");
         assignRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -113,8 +172,20 @@ public sealed class KeycloakAdminClient(HttpClient httpClient, KeycloakAdminOpti
         response.EnsureSuccessStatusCode();
 
         var payload = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken);
-        return payload!.AccessToken;
+        return payload?.AccessToken
+               ?? throw new InvalidOperationException("Keycloak token response did not contain access_token.");
     }
+
+    private static bool HasRegistrationKey(KeycloakUserRepresentation user, Guid registrationKey) =>
+        user.Attributes is not null &&
+        user.Attributes.TryGetValue(RegistrationKeyAttribute, out var values) &&
+        values.Contains(registrationKey.ToString("D"), StringComparer.OrdinalIgnoreCase);
+
+    private sealed record KeycloakUserRepresentation(
+        Guid Id,
+        string? Username,
+        string? Email,
+        Dictionary<string, string[]>? Attributes);
 
     private sealed record TokenResponse(
         [property: JsonPropertyName("access_token")]

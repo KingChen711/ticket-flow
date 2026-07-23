@@ -1,3 +1,5 @@
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using TicketFlow.Identity.Api.Endpoints;
@@ -14,6 +16,20 @@ builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddIdentityApplication();
 builder.Services.AddIdentityInfrastructure(builder.Configuration);
 builder.Services.AddOpenApi();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("registration", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+});
 
 var app = builder.Build();
 
@@ -28,6 +44,7 @@ if (!app.Environment.IsProduction())
 
 app.UseTicketFlowWeb();
 app.UseTicketFlowObservability();
+app.UseRateLimiter();
 
 app.MapOpenApi();
 app.MapScalarApiReference();

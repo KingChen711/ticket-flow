@@ -402,11 +402,25 @@ Rà lại Commit 7–9 bằng cách đọc code thật, không tin phần mô t�
 
 `Phase12ExpectedFailure` giờ **rỗng — 0 case còn lại**: `dotnet test --filter "Category=Phase12ExpectedFailure"` trả `No test matches`. Toàn bộ 23 blocker của baseline Commit 1 đã được promote, không cái nào bị `Skip` hay xoá. Điều đó cũng làm thoả điều kiện của rule 4 trong [`docs/phase-12-hardening-baseline.md`](phase-12-hardening-baseline.md) — nhưng việc đưa hardening project vào `TicketFlow.slnx`/CI vẫn để cho Commit 17, vì nó cần Docker trong CI và thuộc nhóm F. Regression `TicketFlow.slnx` xanh **86/86**.
 
-### Commit 12 — `feat(identity,recommendation): durable registration + concurrency-safe user history`
+### Commit 12 — `feat(identity,recommendation): durable registration + concurrency-safe user history` ✅ DONE
 - Identity registration workflow `Pending/Completed/CompensationPending`, stable registration key, query Keycloak theo normalized username/email sau uncertain create; cleanup dùng independent bounded token và không mask original error.
 - Keycloak user bắt đầu `emailVerified=false`, có verify required action; password policy + rate limit/abuse protection.
 - Recommendation dùng `UserId` làm `_id` hoặc unique index; duplicate-key retry merge purchase đúng một lần.
 - **Verify:** cancel request ở từng Keycloak step, lost create response, DB failure + cleanup failure, concurrent first purchases và email-squatting/weak-password cases.
+
+**Kết quả thực tế (2026-07-23).**
+
+**Registration giờ là workflow bền vững, không còn dual-write mù.** `UserRegistration` được commit `Pending` trước khi gọi Keycloak, mang stable `RegistrationKey`, checkpoint `CreateAttemptedAt`/`KeycloakUserId`, và kết thúc ở `Completed` hoặc `CompensationPending`. Password tuyệt đối không ghi DB; retry phải gửi lại password dưới cùng registration key. Unique normalized email chặn hai key tranh cùng email, còn `xmin` buộc request thua reload checkpoint rồi quyết định lại thay vì last-write-wins.
+
+**Lost response không còn tạo user mồ côi hoặc chiếm nhầm account có sẵn.** User Keycloak được gắn attribute `ticketflowRegistrationKey`; sau một create bất định, Identity query exact normalized username/email nhưng chỉ nhận user có đúng ownership marker đó. Vì thế hai request cùng key có thể hội tụ vào một remote user, trong khi một account Keycloak tồn tại trước đó dù trùng email cũng không bị lấy làm account của registration mới.
+
+**Compensation độc lập với request token.** Cancellation ở create/configure/local-commit vẫn dùng bounded recovery token riêng để query hoặc xoá user. Nếu cleanup hỏng, workflow ghi `CompensationPending`; lỗi cleanup được log nhưng exception gốc vẫn được rethrow với nguyên stack, không còn tình trạng cleanup failure che mất DB/Keycloak failure ban đầu. Migration `Phase12DurableUserRegistration` tạo bảng coordinator theo kiểu expand-only; design-time factory mới cũng ngăn EF tooling khởi động nhầm HTTP/observability khi sinh migration.
+
+**Keycloak và abuse boundary.** User mới bắt đầu `emailVerified=false` với required action `VERIFY_EMAIL`. Realm bật verify-email, password policy 12 ký tự + upper/lower/digit/special + không chứa username, brute-force protection; API validate cùng policy trước side effect và endpoint `/register` có fixed-window rate limit trả 429.
+
+**Recommendation race đã khép ở database boundary.** Unique `UserId` index vẫn là invariant tương thích với document cũ. Hai first-purchase upsert cùng lúc: winner insert, loser bắt duplicate-key rồi retry update không-upsert để `$addToSet` merge đúng một lần. `LastPurchasedAt` dùng `$max`, nên redelivery cũ cũng không kéo lịch sử lùi thời gian.
+
+**Gate đã chạy:** 12/12 case Identity/Keycloak xanh (lost create response; replay cùng key; cancellation tại create/configure/local-commit; cleanup failure không mask lỗi DB; 6 weak-password case; exact-email recovery có ownership marker). Mongo/Postgres thật xanh cho 32 first purchases đồng thời, mỗi event redeliver hai lần nhưng chỉ còn một user document; hai registration key tranh cùng normalized email chỉ một winner. Toàn bộ `Phase12Harness` xanh **140/140** (126 → 140). Regression `TicketFlow.slnx` xanh **88/88**.
 
 ### Commit 13 — `feat(workflows): event cancellation + resumable onboarding + notification delivery outbox`
 - Event cancellation tạo durable workflow/campaign ID, đóng sale trước rồi xử lý từng order theo state: expire/release hold, stop pending process, refund paid order, revoke issued ticket và notify customer. Mỗi order operation idempotent, retry không refund/release hai lần.

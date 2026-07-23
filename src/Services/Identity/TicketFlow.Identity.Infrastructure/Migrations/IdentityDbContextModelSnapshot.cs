@@ -46,6 +46,67 @@ namespace TicketFlow.Identity.Infrastructure.Migrations
                     b.ToTable("users", "identity");
                 });
 
+            modelBuilder.Entity("TicketFlow.Identity.Domain.Users.UserRegistration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("registration_key");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTimeOffset?>("CreateAttemptedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("create_attempted_at");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("display_name");
+
+                    b.Property<Guid?>("KeycloakUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("keycloak_user_id");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("normalized_email");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_user_registrations");
+
+                    b.HasIndex("NormalizedEmail")
+                        .IsUnique()
+                        .HasDatabaseName("ux_user_registrations_normalized_email");
+
+                    b.ToTable("user_registrations", "identity");
+                });
+
             modelBuilder.Entity("TicketFlow.Identity.Domain.Users.User", b =>
                 {
                     b.OwnsOne("TicketFlow.Identity.Domain.Users.Email", "Email", b1 =>

@@ -3,6 +3,16 @@
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
+  "verifyEmail": true,
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername(undefined)",
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
   "accessTokenLifespan": 3600,
   "roles": {
     "realm": [

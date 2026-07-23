@@ -3,6 +3,9 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using TicketFlow.Catalog.Infrastructure;
+using TicketFlow.Identity.Application.Abstractions;
+using TicketFlow.Identity.Domain.Users;
+using TicketFlow.Identity.Infrastructure;
 using TicketFlow.Payment.Infrastructure;
 using TicketFlow.Reservation.Domain.Holds;
 using TicketFlow.Reservation.Infrastructure;
@@ -13,6 +16,47 @@ namespace TicketFlow.Phase12.HardeningTests.Infrastructure;
 [Collection(HardeningEnvironmentCollection.Name)]
 public sealed class Phase12MigrationCompatibilityTests(HardeningEnvironmentFixture environment)
 {
+    [Fact]
+    [Trait("Category", HardeningTraits.Harness)]
+    public async Task Identity_allows_only_one_registration_owner_for_a_normalized_email()
+    {
+        var databaseName = $"phase12_identity_race_{Guid.NewGuid():N}";
+        var connectionString = new NpgsqlConnectionStringBuilder(environment.PostgresConnectionString)
+        {
+            Database = databaseName,
+        }.ConnectionString;
+
+        await CreateDatabaseAsync(environment.PostgresConnectionString, databaseName);
+        try
+        {
+            await using (var migrator = CreateIdentityContext(connectionString))
+                await migrator.Database.MigrateAsync();
+
+            await using var firstContext = CreateIdentityContext(connectionString);
+            await using var secondContext = CreateIdentityContext(connectionString);
+            var now = DateTimeOffset.UtcNow;
+            firstContext.UserRegistrations.Add(UserRegistration.Start(
+                Guid.NewGuid(), "squatting@example.com", "First", now));
+            secondContext.UserRegistrations.Add(UserRegistration.Start(
+                Guid.NewGuid(), "squatting@example.com", "Second", now));
+
+            var outcomes = await Task.WhenAll(
+                SaveRegistrationAsync(firstContext),
+                SaveRegistrationAsync(secondContext));
+
+            Assert.Equal(1, outcomes.Count(error => error is null));
+            Assert.Single(outcomes, error => error is RegistrationPersistenceConflictException);
+
+            await using var verifier = CreateIdentityContext(connectionString);
+            Assert.Equal(1, await verifier.UserRegistrations.CountAsync(
+                registration => registration.NormalizedEmail == "squatting@example.com"));
+        }
+        finally
+        {
+            await DropDatabaseAsync(environment.PostgresConnectionString, databaseName);
+        }
+    }
+
     [Fact]
     [Trait("Category", HardeningTraits.Harness)]
     public async Task Empty_database_migrates_to_the_phase12_head()
@@ -30,16 +74,19 @@ public sealed class Phase12MigrationCompatibilityTests(HardeningEnvironmentFixtu
             await using var payment = CreatePaymentContext(connectionString);
             await using var ticketing = CreateTicketingContext(connectionString);
             await using var catalog = CreateCatalogContext(connectionString);
+            await using var identity = CreateIdentityContext(connectionString);
 
             await reservation.Database.MigrateAsync();
             await payment.Database.MigrateAsync();
             await ticketing.Database.MigrateAsync();
             await catalog.Database.MigrateAsync();
+            await identity.Database.MigrateAsync();
 
             Assert.Empty(await reservation.Database.GetPendingMigrationsAsync());
             Assert.Empty(await payment.Database.GetPendingMigrationsAsync());
             Assert.Empty(await ticketing.Database.GetPendingMigrationsAsync());
             Assert.Empty(await catalog.Database.GetPendingMigrationsAsync());
+            Assert.Empty(await identity.Database.GetPendingMigrationsAsync());
         }
         finally
         {
@@ -64,21 +111,25 @@ public sealed class Phase12MigrationCompatibilityTests(HardeningEnvironmentFixtu
             await using var payment = CreatePaymentContext(connectionString);
             await using var ticketing = CreateTicketingContext(connectionString);
             await using var catalog = CreateCatalogContext(connectionString);
+            await using var identity = CreateIdentityContext(connectionString);
 
             await MigrateToAsync(reservation, "20260713113512_InitialReservation");
             await MigrateToAsync(payment, "20260715015511_PaymentInboxOutbox");
             await MigrateToAsync(ticketing, "20260717020639_AddTicketCheckIn");
             await MigrateToAsync(catalog, "20260714011437_CatalogOutbox");
+            await MigrateToAsync(identity, "20260716123449_DropPasswordHash");
 
             await reservation.Database.MigrateAsync();
             await payment.Database.MigrateAsync();
             await ticketing.Database.MigrateAsync();
             await catalog.Database.MigrateAsync();
+            await identity.Database.MigrateAsync();
 
             Assert.Empty(await reservation.Database.GetPendingMigrationsAsync());
             Assert.Empty(await payment.Database.GetPendingMigrationsAsync());
             Assert.Empty(await ticketing.Database.GetPendingMigrationsAsync());
             Assert.Empty(await catalog.Database.GetPendingMigrationsAsync());
+            Assert.Empty(await identity.Database.GetPendingMigrationsAsync());
 
             await AssertOldColumnsRemainReadableAsync(connectionString);
         }
@@ -168,8 +219,25 @@ public sealed class Phase12MigrationCompatibilityTests(HardeningEnvironmentFixtu
         new DbContextOptionsBuilder<CatalogDbContext>()
             .UseNpgsql(connectionString).UseSnakeCaseNamingConvention().Options);
 
+    private static IdentityDbContext CreateIdentityContext(string connectionString) => new(
+        new DbContextOptionsBuilder<IdentityDbContext>()
+            .UseNpgsql(connectionString).UseSnakeCaseNamingConvention().Options);
+
     private static Task MigrateToAsync(DbContext context, string migrationId) =>
         context.Database.GetService<IMigrator>().MigrateAsync(migrationId);
+
+    private static async Task<Exception?> SaveRegistrationAsync(IdentityDbContext context)
+    {
+        try
+        {
+            await new TicketFlow.Identity.Infrastructure.UnitOfWork(context).SaveChangesAsync();
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
+    }
 
     private static async Task AssertOldColumnsRemainReadableAsync(string connectionString)
     {
@@ -182,6 +250,8 @@ public sealed class Phase12MigrationCompatibilityTests(HardeningEnvironmentFixtu
                      "SELECT id, order_id, amount, currency, status, gateway_ref FROM payment.payment_transactions LIMIT 0",
                      "SELECT id, order_id, seat_id, qr_payload, pdf_object_key, issued_at, checked_in_at FROM ticketing.tickets LIMIT 0",
                      "SELECT id, title, description, artist, venue_id, schedule_starts_at, schedule_ends_at, status FROM catalog.events LIMIT 0",
+                     "SELECT id, display_name, roles, email FROM identity.users LIMIT 0",
+                     "SELECT registration_key, normalized_email, status, keycloak_user_id FROM identity.user_registrations LIMIT 0",
                  })
         {
             await using var command = new NpgsqlCommand(query, connection);

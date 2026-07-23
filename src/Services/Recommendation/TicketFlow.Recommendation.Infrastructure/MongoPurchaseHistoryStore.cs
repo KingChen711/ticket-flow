@@ -22,10 +22,33 @@ public sealed class MongoPurchaseHistoryStore(IMongoDatabase database) : IPurcha
         // 3 upserts (2 distinct events + 1 redelivery) left exactly 2 elements in the array.
         var update = Builders<PurchaseHistoryBsonDocument>.Update
             .AddToSet(d => d.PurchasedEventIds, eventId)
-            .Set(d => d.LastPurchasedAt, purchasedAt)
+            .Max(d => d.LastPurchasedAt, purchasedAt)
             .SetOnInsert(d => d.UserId, userId);
 
-        await collection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, cancellationToken);
+        try
+        {
+            await collection.UpdateOneAsync(
+                filter,
+                update,
+                new UpdateOptions { IsUpsert = true },
+                cancellationToken);
+        }
+        catch (MongoWriteException exception) when (
+            exception.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // Two first purchases for one new user can both observe "no document" and attempt an
+            // upsert insert. ux_purchase_history_user_id chooses the winner; the loser must merge
+            // into that document without upsert instead of losing its event or poisoning the
+            // MassTransit delivery. $addToSet keeps the retry business-idempotent.
+            var retry = await collection.UpdateOneAsync(
+                filter,
+                update,
+                new UpdateOptions { IsUpsert = false },
+                cancellationToken);
+
+            if (retry.MatchedCount != 1)
+                throw;
+        }
     }
 
     public async Task<PurchaseHistoryDocument?> GetAsync(Guid userId, CancellationToken cancellationToken = default)
