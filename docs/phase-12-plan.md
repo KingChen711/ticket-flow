@@ -262,13 +262,47 @@ Trait `Phase12ExpectedFailure`: **11 đỏ / 4 xanh trên 15** (trước Commit 
 
 `Phase12ExpectedFailure` còn **6 đỏ / 3 xanh trên 9** (trước Commit 8: 11 đỏ / 3 xanh trên 14): −6 permutation saga đã khép, +1 khoảng trống Commit 9 nêu trên. Regression `TicketFlow.slnx` xanh **86/86**.
 
-### Commit 9 — `feat(ordering): saga deadlines, canonical completion, transport relays & recovery tooling` ⭐
+### Commit 9 — `feat(ordering): saga deadlines, canonical completion, transport relays & recovery tooling` ⭐ ✅ DONE
 - Mỗi state `Awaiting*`/`Compensating*` có scheduled deadline và explicit transition: retry safely, compensate, `Unknown`, hoặc `ManualReview`; không state vô hạn im lặng.
 - Đảm bảo saga/process state + outgoing command outbox commit trước broker send; missing-instance response được scheduled redelivery thay vì drop.
 - Persist canonical `OrderCompleted` + stable `CompletedAt` trước; RabbitMQ notification và Kafka analytics relay độc lập với checkpoint/dedup.
 - Thêm operator query/CLI/API tối thiểu để list stuck/unknown, inspect operation history, retry relay/reconcile an toàn; DLQ có alert và runbook redrive.
 - **[Delta review 2026-07-20]** Thay retry policy toàn cục 3×2s (`TicketFlow.Messaging` áp cho MỌI consumer) bằng policy phân theo loại lỗi: transient infra (backoff dài hơn), out-of-order guard throw (redelivery phải giãn đủ để milestone trước kịp đến — 3×2s hiện tại gần như chắc chắn đẩy `OrderCompletedConsumer` vào `_error` queue phải redrive tay), permanent (DLQ ngay). Partition theo `OrderId` ở Commit 8 xóa phần lớn out-of-order, nhưng policy vẫn phải đúng cho phần còn lại.
 - **Verify:** participant silence, Rabbit/Kafka outage, process restart và duplicate timeout đều hội tụ; Kafka down không ngăn paid+ticketed order thành `Confirmed`; không phát analytics sale hai lần.
+
+**Kết quả thực tế (2026-07-23).**
+
+**Deadline.** Mỗi state `Awaiting*`/`Compensating*` giờ có deadline 5 phút. Hết hạn mà participant im lặng thì saga **gửi lại chính lệnh đang chờ** — an toàn vì mọi lệnh participant đều idempotent (Commit 5–7) — tối đa 3 lần, rồi chuyển sang `ManualReview` và **dừng hẳn**. `ManualReview` là terminal với state machine nhưng không phải với đơn hàng: nó nghĩa là automation đã dừng và có người chịu trách nhiệm. Điểm này quan trọng: **deadline không bao giờ tự huỷ đơn**. Huỷ vì im lặng sẽ nhả ghế của một giao dịch có thể đã thanh toán — đúng loại lỗi mà Commit 6 sinh ra để chống.
+
+**Thiết kế token thay vì cancel.** Deadline mang một `Token`; saga giữ token của lần chờ hiện tại. Deadline có token không khớp là cũ (participant đã trả lời, hoặc đã re-arm) và bị bỏ qua. Chọn cách này vì **cancel là một cuộc đua**: message có thể đã bay đi khi câu trả lời về. Nhận diện deadline cũ lúc nó đến thì quyết định được; ngăn nó được gửi thì không. Toàn bộ arm/cancel gom vào `TransitionAsync` — điểm duy nhất mọi nhánh đi qua — nên không nhánh nào quên được.
+
+**Kafka rời khỏi critical path.** Saga từng gọi thẳng Kafka producer trong lúc hoàn tất đơn: Kafka chết là activity throw và đơn **đã trả tiền, đã có vé** không bao giờ thành `Confirmed`. Giờ nó publish `RelaySaleRecorded` qua RabbitMQ (đi qua in-memory outbox của saga, nên chỉ gửi sau khi saga state commit), và `SaleRelayConsumer` xử lý với retry/DLQ riêng. Consumer dùng claim-before-produce như Payment Commit 6, nhưng **chỉ đánh dấu hoàn tất sau khi Kafka nhận** — bản đầu tôi viết sai chỗ này: claim xong mà produce hỏng thì retry sẽ thấy "đã claim" rồi bỏ qua, **mất luôn sale**. Đảm bảo trung thực: không bao giờ hai sale do delivery đồng thời hay produce hỏng, nhưng crash đúng khe hẹp giữa produce thành công và lúc đánh dấu sẽ phát lại một lần. Đóng khe đó cần idempotent producer key mà topic analytics không có; ghi ra còn hơn ngụ ý exactly-once.
+
+**Retry policy phân loại.** Thay 3×2s toàn cục bằng hai tầng khác cơ chế: retry ngay (200ms/500ms/2s, in-process, giữ consumer) chỉ cho sự cố hạ tầng thoáng qua; delayed redelivery (5s → 5m, trả message về broker, nhả consumer) cho message **đến sớm** — thứ mà 6 giây retry không bao giờ đủ để milestone trước kịp tới, nên policy cũ đẩy thẳng nó vào `_error` phải redrive tay. `PermanentMessageFaultException` bị loại khỏi cả hai: retry một fault vĩnh viễn chỉ làm chậm cái DLQ entry mà operator cần để nhận ra vấn đề.
+
+**Missing-instance redelivery** (khép nốt test đỏ còn lại của Commit 8). Chỉ `Initially` tạo được instance, nên câu trả lời participant vượt mặt `OrderSubmitted` khớp không correlation nào và bị vứt. Giờ `OnMissingInstance(...).Redeliver(...)` lên lịch gửi lại (1s → 30s) rồi mới `Fault()`, nên `OrderId` lạ thật vẫn vào DLQ chứ không lặp vô hạn.
+
+**Operator API + runbook.** `GET /ops/orders/stuck`, `GET /ops/orders/{id}`, `POST /ops/orders/{id}/resume`, kèm [docs/runbook-stuck-orders.md](runbook-stuck-orders.md). Cố ý hẹp: **không có force-complete, không có force-cancel** — cả hai đều cho phép operator khẳng định một kết quả mà participant chưa từng xác nhận. Thao tác ghi duy nhất là gửi lại lệnh saga vốn đã nợ. Runbook có một bước bắt buộc trước khi retry đơn kẹt ở thanh toán: **kiểm tra `PaymentAttempt` trước** — nếu `Unknown` thì tiền có thể đã trừ, phải chờ reconcile.
+
+**Một phát hiện hạ tầng thật.** `AddDelayedMessageScheduler` cần plugin `rabbitmq_delayed_message_exchange`, mà image `rabbitmq:3-management` **không có**. Không có nó, redelivery im lặng không làm gì và message bị vứt y như cũ — test trên broker thật thất bại đúng như vậy trước khi đổi. Đã chuyển `docker-compose.infra.yml` và Helm values sang `masstransit/rabbitmq` (chính image đó + plugin, xác nhận bằng `rabbitmq-plugins list`: v4.3.1).
+
+**Gate đã chạy:** `Phase12Harness` xanh **96/96** (88 → 96). Thêm 7 case deadline (participant im lặng thì lệnh được gửi lại; deadline cũ bị bỏ qua chứ không tính là im lặng; hết lượt thử thì escalate sang ManualReview mà **không** huỷ đơn, không nhả ghế; đơn ManualReview ngừng arm deadline mới; operator resume đưa đơn trở lại automation; resume **không** mở lại đơn đã hoàn tất; hoàn tất đơn thì bàn sale cho relay chứ không produce inline) và 1 case missing-instance redelivery **trên RabbitMQ thật** — cố ý không chạy in-memory, vì cơ chế nằm ở plugin delayed-message-exchange mà harness in-memory không có, nên bản in-memory sẽ chẳng chứng minh được gì.
+
+`Phase12ExpectedFailure` còn **5 đỏ / 3 xanh trên 8** (trước Commit 9: 6 đỏ / 3 xanh trên 9) — **không còn cái nào thuộc nhóm C**; 5 cái còn lại là Catalog lifecycle (3) và Ticketing (2), thuộc nhóm D. Regression `TicketFlow.slnx` xanh **86/86**.
+
+**Ba lỗi trong test tôi tự gây ra, ghi lại vì đều là bẫy chung.** (1) `harness.InactivityTask` là **one-shot**: đã complete rồi thì mọi await sau trả về ngay, nên test bắn deadline liên tiếp đọc saga trước khi message được xử lý và thấy strike đứng yên ở 1 — phải chờ theo tín hiệu thật (strike tăng). (2) Harness in-memory không đăng ký `PurchaseSagaDefinition`, tức đo một saga endpoint không ai chạy — cùng loại divergence đã che hai bug thật trong suite này. (3) `UseScheduledRedelivery` xử lý **exception**, không xử lý missing-instance; đúng API là `OnMissingInstance` trên event của saga — tôi đã viết nhầm và phải sửa lại.
+
+---
+
+### Audit nhóm C (2026-07-23)
+
+Rà lại Commit 7–9 bằng cách đọc code thật, không tin phần mô tả trong doc.
+
+**Xác nhận đã đúng:** không còn `Interval(3, TimeSpan.FromSeconds(2))` ở đâu trong `src/`; saga không còn tham chiếu `ISaleRecordedPublisher`/`SaleRecorded`; mọi milestone consumer đã gộp về một `OrderMilestoneConsumer` duy nhất.
+
+**Một lỗ hổng thật audit bắt được — đã sửa.** `ConfirmOrderCommandHandler` và `CancelOrderCommandHandler` (đường admin override) **vẫn `Load` rồi `Append` mù** vào order stream — đúng cái race Commit 8 đã xoá khỏi các milestone consumer, chỉ khác là ở đường admin nên không consumer test nào chạm tới. Một operator confirm trong lúc saga đang hoàn tất cùng đơn đó có thể append **hai terminal event**. Đã chuyển cả hai sang `FetchForWritingAsync`; thua race giờ hiện ra thành guard của `Order.Confirm` từ chối, chứ không thành transition thứ hai.
+
+**Một test cũ được sửa cho khớp thiết kế mới, không phải để nó xanh.** `PurchaseSagaTests.Happy_path_...` khẳng định `SetCompletedWhenFinalized` xoá instance và saga publish `SaleRecorded` trực tiếp — cả hai đều đã cố ý thay đổi ở Commit 8/9. Assertion mới: instance ở lại state `Completed` (instance đã xoá thì không nhận ra bản trùng), và sale đi qua `RelaySaleRecorded` với `_saleRecorded.Published` rỗng — tức chứng minh đúng điều Commit 9 cần: **saga không còn chạm Kafka**.
 
 ---
 

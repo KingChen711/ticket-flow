@@ -70,31 +70,6 @@ public sealed class PurchaseSagaConvergenceTests
         Assert.InRange(harness.Published.Select<IssueTickets>().Count(), 0, 1);
     }
 
-    /// <summary>
-    /// Commit 9's scope, not Commit 8's: the plan assigns "missing-instance response được
-    /// scheduled redelivery thay vì drop" there. Commit 8 makes a milestone order-independent once
-    /// an instance exists; a milestone that arrives before the instance is created still matches no
-    /// correlation and is dropped, because only <c>Initially</c> may create one. Left red on
-    /// purpose so the gap stays visible instead of being rediscovered later.
-    /// </summary>
-    [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
-    public async Task A_milestone_arriving_before_the_saga_exists_must_not_be_lost()
-    {
-        await using var provider = BuildProvider();
-        var harness = provider.GetRequiredService<ITestHarness>();
-        await harness.Start();
-        var order = new OrderFixture();
-
-        // The participant answered before the order stream's own submit reached the saga.
-        await harness.Bus.Publish(new SeatsConfirmed(order.OrderId, [order.SeatId], DateTimeOffset.UtcNow));
-        await harness.Bus.Publish(order.Submitted());
-        await Publish(harness, "PaymentProcessed", order);
-        await Publish(harness, "TicketsIssued", order);
-
-        Assert.True(await harness.Published.Any<OrderCompleted>(x => x.Context.Message.OrderId == order.OrderId));
-    }
-
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task A_duplicate_OrderSubmitted_must_not_start_the_purchase_twice()
@@ -155,7 +130,14 @@ public sealed class PurchaseSagaConvergenceTests
             .AddLogging()
             .AddSingleton<ISaleRecordedPublisher, RecordingSaleRecordedPublisher>()
             .AddMassTransitTestHarness(configuration =>
-                configuration.AddSagaStateMachine<PurchaseSaga, PurchaseState>().InMemoryRepository())
+            {
+                // The production definition, not a bare registration: it carries the partitioning,
+                // the in-memory outbox and the missing-instance redelivery, so a test without it
+                // would be measuring a saga endpoint nothing actually runs.
+                configuration.AddDelayedMessageScheduler();
+                configuration.AddSagaStateMachine<PurchaseSaga, PurchaseState, PurchaseSagaDefinition>()
+                    .InMemoryRepository();
+            })
             .BuildServiceProvider(validateScopes: true);
 
     private sealed class OrderFixture

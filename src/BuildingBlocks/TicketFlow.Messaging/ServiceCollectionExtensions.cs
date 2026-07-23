@@ -63,6 +63,18 @@ public static class ServiceCollectionExtensions
         {
             busConfigurator.SetEndpointNameFormatter(new KebabCaseEndpointNameFormatter(serviceName, includeNamespace: false));
 
+            // Commit 9: backs the saga deadlines, the missing-instance redelivery and the
+            // delayed-redelivery ladder below. The RabbitMQ delayed-message-exchange plugin does
+            // the scheduling, so a pending timeout survives a process restart — an in-memory
+            // scheduler would lose every outstanding deadline on deploy, precisely when a stuck
+            // saga needs one.
+            //
+            // The plugin is NOT in the stock rabbitmq:3-management image; docker-compose.infra.yml
+            // and the Helm values therefore run masstransit/rabbitmq, which is that image with this
+            // one plugin enabled. Verified against a live broker: without it the early-milestone
+            // redelivery silently does nothing and the message is dropped exactly as before.
+            busConfigurator.AddDelayedMessageScheduler();
+
             configure?.Invoke(busConfigurator);
 
             busConfigurator.UsingRabbitMq((context, rabbitConfigurator) =>
@@ -73,8 +85,30 @@ public static class ServiceCollectionExtensions
                     hostConfigurator.Password(password);
                 });
 
+                rabbitConfigurator.UseDelayedMessageScheduler();
+
+                // Commit 9. Order matters: UseDelayedRedelivery must be configured BEFORE
+                // UseMessageRetry so the fast in-process retries are exhausted first and only then
+                // is the message scheduled back onto the broker.
+                //
+                // An out-of-order message is not a fault to retry hard — it is early. It gets the
+                // long scheduled ladder (5s → 5m) and is excluded from the fast one, because six
+                // seconds of immediate retries could never let the milestone it waits for arrive,
+                // and the old flat 3×2s therefore sent it straight to _error for a manual redrive.
+                // A permanent fault is excluded from both: retrying it only delays the DLQ entry an
+                // operator needs in order to notice.
+                rabbitConfigurator.UseDelayedRedelivery(redelivery =>
+                {
+                    redelivery.Ignore<PermanentMessageFaultException>();
+                    redelivery.Intervals(TicketFlowFaultPolicy.DelayedRedeliveryIntervals);
+                });
+
                 rabbitConfigurator.UseMessageRetry(retryConfigurator =>
-                    retryConfigurator.Interval(3, TimeSpan.FromSeconds(2)));
+                {
+                    retryConfigurator.Ignore<PermanentMessageFaultException>();
+                    retryConfigurator.Ignore<OutOfOrderMessageException>();
+                    retryConfigurator.Intervals(TicketFlowFaultPolicy.ImmediateRetryIntervals);
+                });
 
                 // Runs BEFORE ConfigureEndpoints so a caller can hand-configure specific
                 // consumers' endpoints (e.g. Payment's Commit 7 needs UseEntityFrameworkOutbox on

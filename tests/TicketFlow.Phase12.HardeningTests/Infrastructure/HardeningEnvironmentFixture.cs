@@ -30,7 +30,7 @@ public sealed class HardeningEnvironmentFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16").Build();
     private readonly RedisContainer _redis = new RedisBuilder("redis:7").Build();
-    private readonly RabbitMqContainer _rabbitMq = new RabbitMqBuilder("rabbitmq:3-management").Build();
+    private readonly RabbitMqContainer _rabbitMq = new RabbitMqBuilder("masstransit/rabbitmq:latest").Build();
 
     private ServiceProvider? _provider;
     private IBusControl? _bus;
@@ -74,9 +74,15 @@ public sealed class HardeningEnvironmentFixture : IAsyncLifetime
             configuration.AddConsumer<IssueTicketsProbeConsumer>();
             configuration.AddConsumer<OrderCompletedProbeConsumer>();
 
+            // Must mirror AddTicketFlowMessaging: the deadline and the missing-instance redelivery
+            // both schedule through this, so a fixture without it would test a bus the services
+            // never run — the same divergence that already hid two real bugs in this suite.
+            configuration.AddDelayedMessageScheduler();
+
             configuration.UsingRabbitMq((context, rabbit) =>
             {
                 rabbit.Host(new Uri(RabbitMqConnectionString));
+                rabbit.UseDelayedMessageScheduler();
                 rabbit.ConfigureEndpoints(context);
             });
         });

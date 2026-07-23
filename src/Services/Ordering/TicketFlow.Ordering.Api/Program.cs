@@ -31,7 +31,9 @@ builder.Services.AddTicketFlowObservability(
         // Commit 7: a replayed checkout and a backlogged outbox are both invisible in logs.
         .AddMeter(CheckoutOperationMetrics.MeterName)
         // Commit 8: an ignored milestone and a re-decided version race are both silent by design.
-        .AddMeter(OrderMilestoneMetrics.MeterName));
+        .AddMeter(OrderMilestoneMetrics.MeterName)
+        // Commit 9: a silent participant produces no log line of its own.
+        .AddMeter(PurchaseSagaMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddOrderingApplication();
@@ -66,6 +68,9 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =
     // writer. The six per-message consumers this replaces each owned a queue, so six of them
     // could be inside one order's stream at the same time.
     cfg.AddConsumer<OrderMilestoneConsumer>();
+
+    // Commit 9: keeps the Kafka analytics write off the saga's critical path.
+    cfg.AddConsumer<SaleRelayConsumer>();
 }, configureKafka: rider =>
 {
     // Producer-only — Ordering never consumes from Kafka. Confirmed via a real probe: this
@@ -84,5 +89,6 @@ app.MapScalarApiReference();
 
 app.MapCheckSeatsEndpoint();
 app.MapOrderEndpoints();
+app.MapOperatorEndpoints();
 
 app.Run();

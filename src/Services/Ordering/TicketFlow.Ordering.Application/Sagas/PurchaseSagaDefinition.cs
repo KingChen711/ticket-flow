@@ -41,6 +41,14 @@ public sealed class PurchaseSagaDefinition : SagaDefinition<PurchaseState>
         sagaConfigurator.Message<SeatsReleased>(x =>
             x.UsePartitioner(partitioner, message => message.Message.OrderId));
 
-        sagaConfigurator.UseInMemoryOutbox(context);
+        // Commit 9: missing-instance redelivery is configured per event on the state machine
+        // itself (see PurchaseSaga.CorrelateAndRedeliver) — it is a correlation concern, not a
+        // fault-handling one, so it does not belong in the endpoint's retry pipeline.
+        endpointConfigurator.UseMessageRetry(retry => retry.Immediate(1));
+        endpointConfigurator.UseInMemoryOutbox(context);
+
+        // Points ScheduleSend at this endpoint, so the saga's own deadline comes back to it.
+        endpointConfigurator.UseMessageScheduler(endpointConfigurator.InputAddress);
+
     }
 }

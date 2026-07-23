@@ -14,7 +14,10 @@ infra:
     image: redis:7
 
   rabbitmq:
-    image: rabbitmq:3-management
+    # Same plugin requirement as docker-compose.infra.yml (Commit 9): the saga's deadlines and
+    # missing-instance redelivery schedule through rabbitmq_delayed_message_exchange, which the
+    # stock image does not ship.
+    image: masstransit/rabbitmq:latest
     user: ticketflow
     password: ticketflow
 

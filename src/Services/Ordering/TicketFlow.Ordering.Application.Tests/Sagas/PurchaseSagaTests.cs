@@ -81,18 +81,21 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         Assert.True(await _harness.Published.Any<OrderCompleted>(x => x.Context.Message.OrderId == orderId));
         Assert.True(await _harness.Published.Any<NotifyOrderCompleted>(x => x.Context.Message.OrderId == orderId));
 
-        // SetCompletedWhenFinalized() removes the instance — no longer found in any known state.
+        // Commit 8 dropped SetCompletedWhenFinalized: a removed instance cannot recognise a
+        // duplicate, so a completed order now stays as a terminal instance instead of vanishing.
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Completed));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.AwaitingTickets));
 
-        // The analytics fact (Kafka, Commit 6): exactly one SaleRecorded for this completed order,
-        // fields mapped correctly from saga state. Also locks in that the .ThenAsync(...) publish
-        // actually runs on the happy path — the bug where placing it right before .Finalize() made
-        // it silently skip would surface here as zero captured records.
-        var sale = Assert.Single(_saleRecorded.Published);
+        // The analytics fact: exactly one for this completed order, fields mapped from saga state.
+        // Commit 9 moved it off the critical path, so it is now a RabbitMQ message picked up by
+        // SaleRelayConsumer rather than an inline Kafka produce — a Kafka outage must not stop a
+        // paid, ticketed order from completing.
+        var sale = Assert.Single(_harness.Published.Select<RelaySaleRecorded>()).Context.Message;
         Assert.Equal(orderId, sale.OrderId);
         Assert.Equal(catalogEventId, sale.EventId);
         Assert.Equal(seatIds.Count, sale.SeatCount);
         Assert.Equal(250.00m, sale.Amount);
+        Assert.Empty(_saleRecorded.Published);
     }
 
     [Fact]

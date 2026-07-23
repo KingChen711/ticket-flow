@@ -28,7 +28,12 @@ services:
       retries: 10
 
   rabbitmq:
-    image: rabbitmq:3-management
+    # Commit 9 needs the rabbitmq_delayed_message_exchange plugin, which the stock
+    # rabbitmq:3-management image does not ship — without it the saga cannot schedule a deadline
+    # and a silent participant would once again hang an order forever. This image is
+    # rabbitmq:3-management with that one plugin already enabled (verified: `rabbitmq-plugins list`
+    # reports rabbitmq_delayed_message_exchange v4.3.1).
+    image: masstransit/rabbitmq:latest
     container_name: ticketflow-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ticketflow

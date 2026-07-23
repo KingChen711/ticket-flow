@@ -68,9 +68,27 @@ public sealed class PurchaseState : SagaStateMachineInstance
     public DateTimeOffset? ReleaseRequestedAt { get; set; }
     public DateTimeOffset? SeatsReleasedAt { get; set; }
 
+    // ---- Deadlines and escalation (Commit 9) ----
+
+    /// <summary>Token for the scheduled deadline, so MassTransit can cancel it when the wait ends.</summary>
+    public Guid? DeadlineTokenId { get; set; }
+
+    /// <summary>How many times a deadline fired and the saga retried the same participant.</summary>
+    public int DeadlineStrikes { get; set; }
+
+    /// <summary>Set when a deadline exhausted its retries and a human has to decide.</summary>
+    public DateTimeOffset? ManualReviewAt { get; set; }
+
+    public string? ManualReviewReason { get; set; }
+
     /// <summary>
     /// A terminal order ignores every further milestone. Without this a late TicketsIssued for a
     /// cancelled order would walk it back into an active state.
+    ///
+    /// ManualReview is terminal for the state machine but NOT for the order: it means automation
+    /// has stopped and an operator owns it. Treating it as non-terminal would let the same silent
+    /// participant re-arm deadlines forever, which is the "state vô hạn im lặng" this commit exists
+    /// to remove.
     /// </summary>
-    public bool IsTerminal => CompletedAt is not null || CancelledAt is not null;
+    public bool IsTerminal => CompletedAt is not null || CancelledAt is not null || ManualReviewAt is not null;
 }
