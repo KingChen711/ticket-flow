@@ -137,6 +137,57 @@ public sealed class EventService(
         return Map(@event);
     }
 
+    /// <summary>
+    /// Recovery tool (Commit 11): re-publishes every Published/Cancelled event's CURRENT canonical
+    /// state, so a read model that fell behind (a redelivery it never got, an index rebuilt from
+    /// scratch, a consumer that was down) can catch back up without anyone hand-editing Search or
+    /// Notification's storage directly.
+    /// </summary>
+    /// <remarks>
+    /// Safe to run at any time, including against consumers already caught up, because it changes
+    /// nothing about how a replayed message is judged: it carries the event's real, current
+    /// <c>AggregateVersion</c> — the exact same revision-guarded path every live message already
+    /// goes through (Commit 11's Search/Notification consumers). A replay can only ever match or
+    /// lose to what a consumer already has; it can never resurrect a Cancelled event, and an old
+    /// v1 message stuck at revision 0 can never win against a replay carrying the real version.
+    /// </remarks>
+    public async Task<int> ReplayAsync(CancellationToken cancellationToken = default)
+    {
+        var events = await eventRepository.ListAsync(cancellationToken);
+        var replayed = 0;
+
+        foreach (var @event in events.Where(e => e.Status is EventStatus.Published or EventStatus.Cancelled))
+        {
+            var now = timeProvider.GetUtcNow();
+
+            if (@event.Status == EventStatus.Cancelled)
+            {
+                await integrationEventPublisher.PublishAsync(
+                    new CatalogEventCancelled(@event.Id, @event.AggregateVersion, now), cancellationToken);
+            }
+            else
+            {
+                var venue = await venueRepository.GetByIdAsync(@event.VenueId, cancellationToken);
+                if (venue is null)
+                    continue;
+
+                await integrationEventPublisher.PublishAsync(
+                    new CatalogEventPublished(
+                        @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
+                        @event.Artist, venue.Name, venue.Address.City,
+                        @event.AggregateVersion, now),
+                    cancellationToken);
+            }
+
+            await PublishSalePolicyAsync(@event, now, cancellationToken);
+            replayed++;
+        }
+
+        // Nothing above touches Event rows; this only flushes the outbox messages just staged.
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return replayed;
+    }
+
     private async Task<Event> GetRequiredAsync(Guid id, CancellationToken cancellationToken) =>
         await eventRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException($"Event '{id}' was not found.");

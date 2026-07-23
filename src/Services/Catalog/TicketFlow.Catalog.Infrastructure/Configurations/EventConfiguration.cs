@@ -37,6 +37,11 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
             priceTier.Property(p => p.Id).ValueGeneratedNever();
             priceTier.Property(p => p.SectionId).IsRequired();
 
+            // Backstop for Event.AddPriceTier's own duplicate-section check (Commit 11) — same
+            // load-then-decide race as SeatMap.AddSection: two concurrent AddPriceTier calls for
+            // two different sections can each miss the other's not-yet-saved tier.
+            priceTier.HasIndex("EventId", nameof(PriceTier.SectionId)).IsUnique();
+
             priceTier.OwnsOne(p => p.Price, money =>
             {
                 money.Property(m => m.Amount).HasColumnName("amount").HasColumnType("numeric(12,2)").IsRequired();

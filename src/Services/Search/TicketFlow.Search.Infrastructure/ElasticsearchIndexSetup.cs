@@ -31,6 +31,8 @@ public static class ElasticsearchIndexSetup
                         { "city", new KeywordProperty() },
                         { "startsAt", new DateProperty() },
                         { "status", new KeywordProperty() },
+                        { "revision", new LongNumberProperty() },
+                        { "tombstoned", new BooleanProperty() },
                     })),
             cancellationToken);
     }

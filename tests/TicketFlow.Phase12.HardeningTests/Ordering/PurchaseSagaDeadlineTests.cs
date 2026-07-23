@@ -100,7 +100,15 @@ public sealed class PurchaseSagaDeadlineTests
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is not null,
             SettleTimeout));
-        var sentBefore = harness.Published.Select<ProcessPayment>().Count();
+        // Waited for, not sampled. The count is deterministic — the initial ProcessPayment plus one
+        // re-send per strike, since the strike after MaxDeadlineStrikes escalates instead of
+        // re-sending — but FireDeadlineAsync returns as soon as the saved strike count moves, and
+        // the in-memory outbox releases that strike's re-send just after. Sampling here could read
+        // the count before the last re-send lands and then see it arrive during the assert below,
+        // which is what made this fail only in a full-suite run.
+        var sentBefore = 1 + PurchaseSaga.MaxDeadlineStrikes;
+        Assert.True(await AsyncTest.WaitUntilAsync(
+            () => harness.Published.Select<ProcessPayment>().Count() == sentBefore, SettleTimeout));
 
         await harness.Bus.Publish(new PurchaseDeadlineExpired(order.OrderId, "ManualReview", Guid.NewGuid()));
         Assert.True(await harness.Consumed.Any<PurchaseDeadlineExpired>(
@@ -121,12 +129,17 @@ public sealed class PurchaseSagaDeadlineTests
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is not null,
             SettleTimeout));
-        var sentBefore = harness.Published.Select<ProcessPayment>().Count();
+        // Same deterministic count, waited for rather than sampled, for the same reason as above.
+        var sentBefore = 1 + PurchaseSaga.MaxDeadlineStrikes;
+        Assert.True(await AsyncTest.WaitUntilAsync(
+            () => harness.Published.Select<ProcessPayment>().Count() == sentBefore, SettleTimeout));
 
         await harness.Bus.Publish(new ResumePurchase(order.OrderId, "operator-1"));
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is null,
             SettleTimeout));
+        Assert.True(await AsyncTest.WaitUntilAsync(
+            () => harness.Published.Select<ProcessPayment>().Count() == sentBefore + 1, SettleTimeout));
 
         var state = await LoadAsync(harness, order.OrderId);
         Assert.Null(state.ManualReviewAt);

@@ -8,19 +8,35 @@ namespace TicketFlow.Notification.Application.Abstractions;
 /// free to store these as one or two Mongo collections — application code only needs the shape
 /// below, not the storage layout.
 /// </summary>
+/// <remarks>
+/// Commit 11 made the three schedule-writing methods revision-guarded and self-creating, for the
+/// same reason as Search's IEventSearchIndex (see its doc comment): the old shape did an
+/// unconditional write for Published and an update-only (no create) write for
+/// Rescheduled/Cancelled, so an out-of-order Published could resurrect a cancelled event's
+/// schedule, and a Rescheduled/Cancelled that overtook Published found no document to update and
+/// silently lost the fact. Every apply now creates the document if missing and is rejected by a
+/// revision that is not at least as high as what is already stored — except Cancel, which is a
+/// permanent tombstone: Catalog's domain forbids ever un-cancelling an event, so once recorded
+/// here it wins forever regardless of the revision on a later message.
+/// </remarks>
 public interface IEventReminderReadModel
 {
-    Task UpsertEventScheduleAsync(
+    Task ApplyPublishedAsync(
         Guid catalogEventId,
         string title,
         string artist,
         string venueName,
         DateTimeOffset startsAt,
+        long revision,
         CancellationToken cancellationToken = default);
 
-    Task UpdateEventStartsAtAsync(Guid catalogEventId, DateTimeOffset startsAt, CancellationToken cancellationToken = default);
+    Task ApplyRescheduledAsync(
+        Guid catalogEventId,
+        DateTimeOffset startsAt,
+        long revision,
+        CancellationToken cancellationToken = default);
 
-    Task MarkEventCancelledAsync(Guid catalogEventId, CancellationToken cancellationToken = default);
+    Task ApplyCancelledAsync(Guid catalogEventId, long revision, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Upsert by OrderId (one recipient per order, not per seat — a customer buying 3 seats for

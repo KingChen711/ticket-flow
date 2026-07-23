@@ -102,3 +102,9 @@ Regression cũ được chạy trực tiếp theo bảy test project để trán
 3. Giữ test executable, không đổi thành `Skip`; cập nhật ma trận baseline/evidence trong commit remediation.
 4. Chỉ đưa hardening project vào solution/CI gate mặc định khi toàn bộ expected-failure case đã được promote hoặc CI có job filter tách rõ red-baseline khỏi regression.
 5. Khi plan sai với code/probe thật, áp dụng nguyên tắc phản biện ở đầu `phase-12-plan.md`: ghi evidence/trade-off và cập nhật plan thay vì ép implementation theo giả định cũ.
+
+## Trạng thái baseline sau Commit 11 (2026-07-23)
+
+Baseline đỏ đã **đóng hoàn toàn**: `dotnet test --filter "Category=Phase12ExpectedFailure"` trả `No test matches`. Cả 23 blocker đỏ ban đầu đã được promote sang `Phase12Harness` (126/126 xanh), không case nào bị `Skip` hay xoá — bảng "Baseline đỏ đã tái hiện" ở trên giữ nguyên làm bằng chứng characterization *trước* remediation, không phải trạng thái hiện hành.
+
+Điều đó thoả điều kiện của rule 4, nhưng việc đưa project vào `TicketFlow.slnx`/CI gate mặc định vẫn để cho **Commit 17** (nhóm F): nó cần Docker trong CI cùng với phần persistent-infra/CI của commit đó, và gộp sớm chỉ làm nhoè ranh giới regression 86/86 hiện tại.

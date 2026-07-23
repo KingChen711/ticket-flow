@@ -1,3 +1,4 @@
+using TicketFlow.Catalog.Application.Abstractions;
 using TicketFlow.Catalog.Application.EventDetails;
 using TicketFlow.Catalog.Application.Events;
 
@@ -37,15 +38,33 @@ public static class EventEndpoints
         // "Update" in Phase 1 only covers rescheduling — Event exposes no other mutator for
         // Title/Description/Artist (see Event.cs); editing those isn't modeled yet.
         group.MapPut("/{id:guid}", async (Guid id, RescheduleEventRequest request, EventService service, CancellationToken ct) =>
-            Results.Ok(await service.RescheduleAsync(id, request, ct))).RequireAuthorization("RequireOrganizer");
+            await RunGuardedAsync(() => service.RescheduleAsync(id, request, ct))).RequireAuthorization("RequireOrganizer");
 
         group.MapPost("/{id:guid}/publish", async (Guid id, EventService service, CancellationToken ct) =>
-            Results.Ok(await service.PublishAsync(id, ct))).RequireAuthorization("RequireOrganizer");
+            await RunGuardedAsync(() => service.PublishAsync(id, ct))).RequireAuthorization("RequireOrganizer");
 
         group.MapPost("/{id:guid}/cancel", async (Guid id, EventService service, CancellationToken ct) =>
-            Results.Ok(await service.CancelAsync(id, ct))).RequireAuthorization("RequireOrganizer");
+            await RunGuardedAsync(() => service.CancelAsync(id, ct))).RequireAuthorization("RequireOrganizer");
 
         group.MapPost("/{id:guid}/price-tiers", async (Guid id, AddPriceTierRequest request, EventService service, CancellationToken ct) =>
-            Results.Ok(await service.AddPriceTierAsync(id, request, ct))).RequireAuthorization("RequireOrganizer");
+            await RunGuardedAsync(() => service.AddPriceTierAsync(id, request, ct))).RequireAuthorization("RequireOrganizer");
+    }
+
+    /// <summary>
+    /// Commit 11: a concurrent mutation of the same Event loses the optimistic-concurrency race
+    /// (EF's <c>xmin</c> token) and must not be silently retried against stale in-memory state —
+    /// the loser's decision may already be wrong given what the winner just did. 409 tells the
+    /// caller to reload the event and re-decide, not to blindly resend the same command.
+    /// </summary>
+    private static async Task<IResult> RunGuardedAsync(Func<Task<EventResponse>> action)
+    {
+        try
+        {
+            return Results.Ok(await action());
+        }
+        catch (ConcurrencyConflictException exception)
+        {
+            return Results.Conflict(new { error = exception.Message });
+        }
     }
 }

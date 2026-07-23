@@ -7,9 +7,9 @@ using TicketFlow.Search.Application.Events;
 namespace TicketFlow.Search.Api.Consumers;
 
 /// <summary>
-/// Real indexing (Commit 2) — replaces the Phase 3 log-only stub. Idempotent by construction:
-/// UpsertAsync always writes to the same ES document _id (EventId), so a redelivered or
-/// re-published CatalogEventPublished overwrites in place rather than creating a duplicate.
+/// Real indexing (Commit 2) — replaces the Phase 3 log-only stub. Revision-guarded since Commit 11
+/// (see IEventSearchIndex's doc comment): a redelivered or out-of-order CatalogEventPublished can
+/// no longer resurrect an event this index already knows was cancelled.
 /// </summary>
 public sealed class CatalogEventPublishedConsumer(IEventSearchIndex searchIndex) : IConsumer<CatalogEventPublished>
 {
@@ -17,10 +17,10 @@ public sealed class CatalogEventPublishedConsumer(IEventSearchIndex searchIndex)
     {
         ContractVersionMetrics.RecordInbound(nameof(CatalogEventPublished), context.Message.AggregateVersion);
         var message = context.Message;
-        return searchIndex.UpsertAsync(
+        return searchIndex.ApplyPublishedAsync(
             new SearchDocument(
                 message.CatalogEventId, message.Title, message.Artist, message.VenueName, message.City,
-                message.StartsAt, "Published"),
+                message.StartsAt, "Published", message.AggregateVersion),
             context.CancellationToken);
     }
 }

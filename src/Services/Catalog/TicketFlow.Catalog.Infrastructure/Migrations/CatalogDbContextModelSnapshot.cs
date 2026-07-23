@@ -400,8 +400,9 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                             b1.HasKey("Id")
                                 .HasName("pk_event_price_tiers");
 
-                            b1.HasIndex("EventId")
-                                .HasDatabaseName("ix_event_price_tiers_event_id");
+                            b1.HasIndex("EventId", "SectionId")
+                                .IsUnique()
+                                .HasDatabaseName("ix_event_price_tiers_event_id_section_id");
 
                             b1.ToTable("event_price_tiers", "catalog");
 
@@ -469,8 +470,9 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                             b1.HasKey("Id")
                                 .HasName("pk_seat_map_sections");
 
-                            b1.HasIndex("SeatMapId")
-                                .HasDatabaseName("ix_seat_map_sections_seat_map_id");
+                            b1.HasIndex("SeatMapId", "Name")
+                                .IsUnique()
+                                .HasDatabaseName("ix_seat_map_sections_seat_map_id_name");
 
                             b1.ToTable("seat_map_sections", "catalog");
 
