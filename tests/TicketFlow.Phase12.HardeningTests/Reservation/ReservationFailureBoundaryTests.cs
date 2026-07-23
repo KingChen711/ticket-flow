@@ -168,7 +168,9 @@ public sealed class ReservationFailureBoundaryTests
             seat.Id, eventId, holdB, orderB, ownerId, 9, 11, 100_000m, "VND", now);
         var allocations = new FakeSeatAllocationRepository([allocation]);
         var holds = new FakeSeatHoldStore();
-        holds.SeedSold([seat.Id]);
+        // The cache carries order B's ownership token too, not just "this seat is sold" — so the
+        // stale compensation has to be refused at the cache layer as well as in Postgres.
+        holds.SeedConfirmed(eventId, holdB, orderB, ownerId, 9, [seat.Id]);
         var publisher = new RecordingSeatAvailabilityEventPublisher();
         var service = CreateService(
             new FakeSeatRepository([seat]),
@@ -211,7 +213,7 @@ public sealed class ReservationFailureBoundaryTests
             seat.Id, eventId, holdId, orderId, ownerId, generation, 11, 100_000m, "VND", now);
         var allocations = new FakeSeatAllocationRepository([allocation]);
         var holds = new FakeSeatHoldStore();
-        holds.SeedSold([seat.Id]);
+        holds.SeedConfirmed(eventId, holdId, orderId, ownerId, generation, [seat.Id]);
         var publisher = new RecordingSeatAvailabilityEventPublisher();
         var service = CreateService(
             new FakeSeatRepository([seat]),
@@ -687,7 +689,25 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
         _heldSeatIds = seatIds;
     }
 
-    public void SeedSold(IEnumerable<Guid> seatIds) => _soldSeatIds.UnionWith(seatIds);
+    /// <summary>
+    /// Seeds a sold seat together with the allocation tuple that owns it, exactly as a real
+    /// confirmation writes it into the <c>S|hold|order|owner|generation</c> token. The previous
+    /// SeedSold recorded seat ids alone, so the cache had no notion of WHO owned a sold seat and
+    /// could not tell an owner's compensation from a stale one — the gap that let the ownership
+    /// tests here pass on the Postgres check alone.
+    /// </summary>
+    public void SeedConfirmed(
+        Guid eventId,
+        Guid holdId,
+        Guid orderId,
+        Guid ownerUserId,
+        long generation,
+        IReadOnlyList<Guid> seatIds)
+    {
+        _typedConfirmation = new ConfirmHoldStoreRequest(
+            eventId, holdId, orderId, ownerUserId, generation, seatIds);
+        _soldSeatIds.UnionWith(seatIds);
+    }
 
     public void SeedTypedHold(
         Guid eventId,
@@ -793,13 +813,60 @@ internal sealed class FakeSeatHoldStore : ISeatHoldStore
         Task.FromResult<IReadOnlyDictionary<Guid, SeatStatus>>(
             seatIds.ToDictionary(id => id, id => _soldSeatIds.Contains(id) ? SeatStatus.Sold : SeatStatus.Available));
 
-    public Task RemoveFromSoldAsync(
-        Guid eventId,
-        IReadOnlyList<Guid> seatIds,
+    public Task<ReleaseHoldStoreResult> ReleaseAsync(
+        ReleaseHoldStoreRequest request,
         CancellationToken cancellationToken = default)
     {
-        _soldSeatIds.ExceptWith(seatIds);
-        return Task.CompletedTask;
+        if (_typedHold is null || _typedHold.EventId != request.EventId ||
+            _typedHold.HoldId != request.HoldId || _typedHold.OwnerUserId != request.OwnerUserId ||
+            _typedHold.Generation != request.Generation ||
+            !_typedHold.SeatIds.ToHashSet().SetEquals(request.SeatIds))
+        {
+            return Task.FromResult(new ReleaseHoldStoreResult(ReleaseHoldStoreOutcome.AlreadyReleased));
+        }
+
+        _typedHold = null;
+        return Task.FromResult(new ReleaseHoldStoreResult(ReleaseHoldStoreOutcome.Applied));
+    }
+
+    /// <summary>
+    /// Mirrors ReleaseAllocationScript's compare-and-set rather than freeing the seats outright.
+    /// This method did not exist here until the Nhóm B audit: the interface's default adapter
+    /// forwarded to an unconditional sold-set removal, so the three ownership tests in this file
+    /// were carried entirely by the Postgres-side check and would still have passed if the cache
+    /// had handed a resold seat back to the wrong order.
+    /// </summary>
+    public Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+        ReleaseAllocationStoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var owned = _typedConfirmation is not null &&
+            _typedConfirmation.EventId == request.EventId &&
+            _typedConfirmation.HoldId == request.HoldId &&
+            _typedConfirmation.OrderId == request.OrderId &&
+            _typedConfirmation.OwnerUserId == request.OwnerUserId &&
+            _typedConfirmation.Generation == request.Generation;
+
+        if (!owned)
+        {
+            // A seat still in the sold set under a different token is stale, never freed; one that
+            // is no longer sold at all is simply an already-applied replay.
+            var stale = request.SeatIds.Where(_soldSeatIds.Contains).OrderBy(id => id).ToArray();
+            return Task.FromResult(new ReleaseAllocationStoreResult(
+                stale.Length > 0
+                    ? ReleaseAllocationStoreOutcome.OwnershipChanged
+                    : ReleaseAllocationStoreOutcome.AlreadyReleased,
+                [],
+                stale,
+                stale.Length > 0 ? "One or more seats are owned by a newer allocation." : null));
+        }
+
+        _typedConfirmation = null;
+        _soldSeatIds.ExceptWith(request.SeatIds);
+        return Task.FromResult(new ReleaseAllocationStoreResult(
+            ReleaseAllocationStoreOutcome.Applied,
+            request.SeatIds.OrderBy(id => id).ToArray(),
+            []));
     }
 
     private static bool SameTuple(ConfirmHoldStoreRequest left, ConfirmHoldStoreRequest right) =>

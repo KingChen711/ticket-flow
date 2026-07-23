@@ -7,6 +7,18 @@ namespace TicketFlow.Reservation.Application.Abstractions;
 /// control lives (atomic Lua, see the Infrastructure implementation in Nhóm B). Ports only in
 /// this commit; the Redis-backed implementation lands in Commit 4–6.
 /// </summary>
+/// <remarks>
+/// The authority-aware (owner + generation) members below carry no default body on purpose. They
+/// were introduced in Commit 4/5 as default interface methods that fell back to the pre-Phase-12
+/// primitives, so that rolling deployments and existing test doubles kept compiling. The Nhóm B
+/// audit found what that cost: because <c>ReleaseAllocationAsync</c>'s adapter forwarded to an
+/// unconditional sold-set removal, EVERY test double silently reversed a confirmed allocation with
+/// no ownership check at all — including the decorator that wraps a real Redis store — so
+/// ReleaseAllocationScript, the compare-and-set Commit 5 exists to provide, was executed by no
+/// test in the repository. A missing override has to be a compile error; the fallback made it
+/// invisible instead. Production has overridden all of these since Commit 5, so the compatibility
+/// window they were written for is closed (mục 10's contract step).
+/// </remarks>
 public interface ISeatHoldStore
 {
     /// <summary>Register the valid seat ids for an event so holds can validate against them.</summary>
@@ -28,15 +40,9 @@ public interface ISeatHoldStore
     /// ownership token. A replay after the cache entry expired is successful and must not touch a
     /// newer holder.
     /// </summary>
-    async Task<ReleaseHoldStoreResult> ReleaseAsync(
+    Task<ReleaseHoldStoreResult> ReleaseAsync(
         ReleaseHoldStoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var released = await ReleaseAsync(request.EventId, request.HoldId, cancellationToken);
-        return released.Count == 0
-            ? new ReleaseHoldStoreResult(ReleaseHoldStoreOutcome.AlreadyReleased)
-            : new ReleaseHoldStoreResult(ReleaseHoldStoreOutcome.Applied);
-    }
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Move the seats held under <paramref name="holdId"/> into the sold set (Redis side) and
@@ -48,63 +54,26 @@ public interface ISeatHoldStore
     /// <summary>Effective live status per seat (Available / Held / Sold) computed from Redis.</summary>
     Task<IReadOnlyDictionary<Guid, SeatStatus>> GetLiveStatusesAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Removes seat ids from the durable Sold set (Redis side) — compensates a CONFIRMED sale
-    /// (Commit 9), unlike ReleaseAsync which only releases an active, not-yet-confirmed hold (see
-    /// Seat.MarkAvailable's doc comment for why these are genuinely different operations).
-    /// </summary>
-    Task RemoveFromSoldAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// V2 authority-aware hold. The default adapter keeps rolling deployments and existing test
-    /// doubles source-compatible; the Redis implementation must override it before v1 keys are
-    /// retired so owner and generation participate in the Lua compare-and-set.
-    /// </summary>
-    async Task<HoldStoreResult> TryHoldAsync(
+    /// <summary>V2 authority-aware hold: owner and generation participate in the Lua compare-and-set.</summary>
+    Task<HoldStoreResult> TryHoldAsync(
         HoldStoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var unavailable = await TryHoldAsync(
-            request.EventId,
-            request.SeatIds,
-            request.HoldId,
-            request.Ttl,
-            cancellationToken);
-
-        return unavailable.Count == 0
-            ? HoldStoreResult.Succeeded()
-            : HoldStoreResult.Unavailable(unavailable);
-    }
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// V2 exact-set confirmation. An implementation must distinguish an idempotent replay of the
     /// same owner/generation/order from an expired hold or a conflicting allocation.
     /// </summary>
-    async Task<ConfirmHoldStoreResult> ConfirmAsync(
+    Task<ConfirmHoldStoreResult> ConfirmAsync(
         ConfirmHoldStoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var seatIds = await ConfirmAsync(request.EventId, request.HoldId, cancellationToken);
-        return seatIds.Count == 0
-            ? new ConfirmHoldStoreResult(ConfirmHoldStoreOutcome.MissingOrExpired, [])
-            : new ConfirmHoldStoreResult(ConfirmHoldStoreOutcome.Applied, seatIds);
-    }
+        CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// V2 owner-scoped reversal of a confirmed allocation. The default adapter falls back to the
-    /// blunt v1 sold-set removal so existing test doubles keep compiling; the Redis implementation
-    /// overrides it with a compare-and-set that leaves a newer owner's seat untouched.
+    /// V2 owner-scoped reversal of a confirmed allocation: a compare-and-set that leaves a seat
+    /// already resold to a newer owner untouched and reports it as stale.
     /// </summary>
-    async Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+    Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
         ReleaseAllocationStoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        await RemoveFromSoldAsync(request.EventId, request.SeatIds, cancellationToken);
-        return new ReleaseAllocationStoreResult(
-            ReleaseAllocationStoreOutcome.Applied,
-            request.SeatIds,
-            []);
-    }
+        CancellationToken cancellationToken = default);
 
     /// <summary>Restore one authoritative allocation into the cache after a recoverable drift.</summary>
     Task RestoreAsync(

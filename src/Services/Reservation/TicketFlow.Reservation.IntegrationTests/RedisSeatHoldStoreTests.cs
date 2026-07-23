@@ -210,6 +210,95 @@ public sealed class RedisSeatHoldStoreTests(RedisFixture fixture) : IClassFixtur
         Assert.All(seats, seatId => Assert.Equal(SeatStatus.Held, newerStillHeld[seatId]));
     }
 
+    /// <summary>
+    /// ReleaseAllocationAsync is the cache half of owner-scoped compensation (Commit 5) and, until
+    /// the Nhóm B audit, the only store method with no test at all — every test double inherited
+    /// the interface's default adapter, which forwards to the blunt pre-Phase-12 sold-set removal,
+    /// so nothing ever executed ReleaseAllocationScript. The ABA case below is the exact scenario
+    /// that adapter gets wrong: a late compensation for order A, arriving after seat A was resold
+    /// to order B, must leave B's paid seat sold.
+    /// </summary>
+    [Fact]
+    public async Task TypedReleaseAllocation_LeavesASeatResoldToAnotherOrderUntouched()
+    {
+        var store = CreateStore();
+        var eventId = Guid.NewGuid();
+        var firstHoldId = Guid.NewGuid();
+        var firstOrderId = Guid.NewGuid();
+        var firstOwnerId = Guid.NewGuid();
+        var seatId = Guid.NewGuid();
+        await store.LoadInventoryAsync(eventId, [seatId]);
+
+        // Order A holds and confirms the seat.
+        Assert.Equal(HoldStoreOutcome.Held, (await store.TryHoldAsync(new HoldStoreRequest(
+            eventId, [seatId], firstHoldId, firstOwnerId, 5, TimeSpan.FromMinutes(5)))).Outcome);
+        Assert.Equal(ConfirmHoldStoreOutcome.Applied, (await store.ConfirmAsync(new ConfirmHoldStoreRequest(
+            eventId, firstHoldId, firstOrderId, firstOwnerId, 5, [seatId]))).Outcome);
+
+        // A's allocation is reversed, and the seat is then resold to order B.
+        var release = new ReleaseAllocationStoreRequest(
+            eventId, firstHoldId, firstOrderId, firstOwnerId, 5, [seatId]);
+        Assert.Equal(ReleaseAllocationStoreOutcome.Applied, (await store.ReleaseAllocationAsync(release)).Outcome);
+
+        var secondHoldId = Guid.NewGuid();
+        var secondOrderId = Guid.NewGuid();
+        var secondOwnerId = Guid.NewGuid();
+        Assert.Equal(HoldStoreOutcome.Held, (await store.TryHoldAsync(new HoldStoreRequest(
+            eventId, [seatId], secondHoldId, secondOwnerId, 6, TimeSpan.FromMinutes(5)))).Outcome);
+        Assert.Equal(ConfirmHoldStoreOutcome.Applied, (await store.ConfirmAsync(new ConfirmHoldStoreRequest(
+            eventId, secondHoldId, secondOrderId, secondOwnerId, 6, [seatId]))).Outcome);
+
+        // The duplicate compensation for A now arrives. The seat carries B's token, so it is
+        // reported stale rather than freed — a blunt SREM here would hand away a paid seat.
+        var late = await store.ReleaseAllocationAsync(release);
+
+        Assert.Equal(ReleaseAllocationStoreOutcome.OwnershipChanged, late.Outcome);
+        Assert.Empty(late.ReleasedSeatIds);
+        Assert.Equal([seatId], late.StaleSeatIds);
+        var statuses = await store.GetLiveStatusesAsync(eventId, [seatId]);
+        Assert.Equal(SeatStatus.Sold, statuses[seatId]);
+    }
+
+    [Fact]
+    public async Task TypedReleaseAllocation_RequiresTheExactOwnerAndGeneration_AndReplaysAsAlreadyReleased()
+    {
+        var store = CreateStore();
+        var eventId = Guid.NewGuid();
+        var holdId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var seats = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        await store.LoadInventoryAsync(eventId, seats);
+
+        Assert.Equal(HoldStoreOutcome.Held, (await store.TryHoldAsync(new HoldStoreRequest(
+            eventId, seats, holdId, ownerId, 11, TimeSpan.FromMinutes(5)))).Outcome);
+        Assert.Equal(ConfirmHoldStoreOutcome.Applied, (await store.ConfirmAsync(new ConfirmHoldStoreRequest(
+            eventId, holdId, orderId, ownerId, 11, seats))).Outcome);
+
+        var request = new ReleaseAllocationStoreRequest(eventId, holdId, orderId, ownerId, 11, seats);
+        var wrongOwner = await store.ReleaseAllocationAsync(request with { OwnerUserId = Guid.NewGuid() });
+        var wrongGeneration = await store.ReleaseAllocationAsync(request with { Generation = 12 });
+        var wrongOrder = await store.ReleaseAllocationAsync(request with { OrderId = Guid.NewGuid() });
+
+        // Every mismatch is stale, never a release — and the seats stay sold throughout.
+        Assert.Equal(ReleaseAllocationStoreOutcome.OwnershipChanged, wrongOwner.Outcome);
+        Assert.Equal(ReleaseAllocationStoreOutcome.OwnershipChanged, wrongGeneration.Outcome);
+        Assert.Equal(ReleaseAllocationStoreOutcome.OwnershipChanged, wrongOrder.Outcome);
+        var stillSold = await store.GetLiveStatusesAsync(eventId, seats);
+        Assert.All(seats, seatId => Assert.Equal(SeatStatus.Sold, stillSold[seatId]));
+
+        var applied = await store.ReleaseAllocationAsync(request);
+        var replay = await store.ReleaseAllocationAsync(request);
+
+        Assert.Equal(ReleaseAllocationStoreOutcome.Applied, applied.Outcome);
+        Assert.Equal(seats.OrderBy(id => id), applied.ReleasedSeatIds);
+        // Redelivery of the same compensation is a no-op, not a second reversal.
+        Assert.Equal(ReleaseAllocationStoreOutcome.AlreadyReleased, replay.Outcome);
+        Assert.Empty(replay.ReleasedSeatIds);
+        var afterRelease = await store.GetLiveStatusesAsync(eventId, seats);
+        Assert.All(seats, seatId => Assert.Equal(SeatStatus.Available, afterRelease[seatId]));
+    }
+
     [Fact]
     public async Task Flush_then_versioned_rebuild_restores_sold_active_held_and_expired_as_available()
     {

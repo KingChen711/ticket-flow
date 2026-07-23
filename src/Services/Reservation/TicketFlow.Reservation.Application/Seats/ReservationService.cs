@@ -482,23 +482,6 @@ public sealed class ReservationService(
         return await ReleaseQuoteAsync(quote, cancellationToken);
     }
 
-    /// <summary>Trusted internal release path. HTTP callers must use ReleaseOwnedHoldAsync.</summary>
-    public async Task<bool> ReleaseAsync(
-        Guid eventId,
-        Guid holdId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var authorityLock = await receiptRepository.AcquireLockAsync(
-            "confirm-hold",
-            holdId.ToString("N"),
-            cancellationToken);
-        var quote = await holdQuoteRepository.GetAsync(holdId, cancellationToken);
-        if (quote is null || quote.EventId != eventId)
-            return false;
-
-        return await ReleaseQuoteAsync(quote, cancellationToken);
-    }
-
     /// <summary>
     /// Owner-scoped compensation (Commit 5). Replaces the old <c>ReleaseAsync + UnsellAsync</c>
     /// pair, which took only event/hold/seat ids and therefore could not tell "my seats" from

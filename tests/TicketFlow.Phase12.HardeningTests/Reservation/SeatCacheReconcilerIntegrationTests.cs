@@ -609,11 +609,27 @@ public sealed class SeatCacheReconcilerIntegrationTests(HardeningEnvironmentFixt
             CancellationToken cancellationToken = default) =>
             inner.GetLiveStatusesAsync(eventId, seatIds, cancellationToken);
 
-        public Task RemoveFromSoldAsync(
-            Guid eventId,
-            IReadOnlyList<Guid> seatIds,
+        // Every authority-aware call forwards to the real store; a decorator that quietly answered
+        // one of them itself would be measuring the decorator, not Redis.
+        public Task<HoldStoreResult> TryHoldAsync(
+            HoldStoreRequest request,
             CancellationToken cancellationToken = default) =>
-            inner.RemoveFromSoldAsync(eventId, seatIds, cancellationToken);
+            inner.TryHoldAsync(request, cancellationToken);
+
+        public Task<ReleaseHoldStoreResult> ReleaseAsync(
+            ReleaseHoldStoreRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ReleaseAsync(request, cancellationToken);
+
+        public Task<ConfirmHoldStoreResult> ConfirmAsync(
+            ConfirmHoldStoreRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ConfirmAsync(request, cancellationToken);
+
+        public Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+            ReleaseAllocationStoreRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ReleaseAllocationAsync(request, cancellationToken);
 
         public Task RestoreAsync(
             RestoreSeatAllocationRequest request,

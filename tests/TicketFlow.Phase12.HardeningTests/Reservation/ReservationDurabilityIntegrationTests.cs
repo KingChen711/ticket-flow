@@ -733,9 +733,12 @@ internal sealed class ObservedSeatHoldStore(ISeatHoldStore inner) : ISeatHoldSto
         CancellationToken cancellationToken = default) =>
         inner.GetLiveStatusesAsync(eventId, seatIds, cancellationToken);
 
-    public Task RemoveFromSoldAsync(
-        Guid eventId,
-        IReadOnlyList<Guid> seatIds,
+    // Forwarding this is the whole point: before the Nhóm B audit this decorator did not declare
+    // it, so the interface's old default adapter ran instead and reversed allocations with an
+    // unconditional sold-set removal — against a real Redis inner store, meaning these
+    // "real infrastructure" tests never executed ReleaseAllocationScript at all.
+    public Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+        ReleaseAllocationStoreRequest request,
         CancellationToken cancellationToken = default) =>
-        inner.RemoveFromSoldAsync(eventId, seatIds, cancellationToken);
+        inner.ReleaseAllocationAsync(request, cancellationToken);
 }

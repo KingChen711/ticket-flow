@@ -131,9 +131,16 @@ internal sealed class RollbackAwareHoldStore : ISeatHoldStore
                 ? SeatStatus.Held
                 : SeatStatus.Available));
 
-    public Task RemoveFromSoldAsync(
-        Guid eventId,
-        IReadOnlyList<Guid> seatIds,
+    // These tests only cover the hold path, so confirmation and compensation are out of scope for
+    // this double. Throwing says so; returning a manufactured success would let a future test
+    // silently "prove" a confirm/compensate invariant against a store that models neither.
+    public Task<ConfirmHoldStoreResult> ConfirmAsync(
+        ConfirmHoldStoreRequest request,
         CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
+        throw new NotSupportedException("RollbackAwareHoldStore models the hold path only.");
+
+    public Task<ReleaseAllocationStoreResult> ReleaseAllocationAsync(
+        ReleaseAllocationStoreRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("RollbackAwareHoldStore models the hold path only.");
 }

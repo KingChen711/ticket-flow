@@ -372,18 +372,6 @@ public sealed class RedisSeatHoldStore(IConnectionMultiplexer redis) : ISeatHold
         }
     }
 
-    public async Task RemoveFromSoldAsync(
-        Guid eventId,
-        IReadOnlyList<Guid> seatIds,
-        CancellationToken cancellationToken = default)
-    {
-        if (seatIds.Count == 0)
-            return;
-
-        var values = seatIds.Select(id => (RedisValue)id.ToString()).ToArray();
-        await Db.SetRemoveAsync(RedisKeys.SoldSet(eventId), values);
-    }
-
     public async Task<IReadOnlyDictionary<Guid, SeatStatus>> GetLiveStatusesAsync(
         Guid eventId,
         IReadOnlyList<Guid> seatIds,
