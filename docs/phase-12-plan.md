@@ -308,12 +308,32 @@ Rà lại Commit 7–9 bằng cách đọc code thật, không tin phần mô t�
 
 ## Nhóm D — Ticketing, projection và các workflow còn lại
 
-### Commit 10 — `feat(ticketing): durable issuance + owner-scoped access + atomic event check-in` ⭐
+### Commit 10 — `feat(ticketing): durable issuance + owner-scoped access + atomic event check-in` ⭐ ✅ DONE
 - Persist `TicketIssuanceJob` unique `OrderId` trước render; object key deterministic theo ticket/issuance version; transient Lambda/MinIO/DB error throw để retry, terminal failure chỉ sau policy/reconcile.
 - Lưu `CustomerId`, `EventId`, QR credential/version, revocation state. Ticket list/PDF query scope theo JWT subject; admin override explicit.
 - Check-in dùng atomic conditional update `WHERE CheckedInAt IS NULL AND EventId = expected AND RevokedAt IS NULL`; gate user phải được assign event/gate.
 - Reconciliation dọn orphan PDF, hoàn tất row thiếu, không emit `TicketingFailed` chỉ vì unique race với issuer khác.
 - **Verify:** partial multi-ticket render, duplicate issue, owner khác download, wrong-event scanner, refunded/revoked ticket và 100 scan đồng thời đều có kết quả xác định; đúng một scan `Valid`.
+
+**Kết quả thực tế (2026-07-23).**
+
+**Check-in nguyên tử.** Endpoint cũ làm read → mutate → `SaveChanges`, không có điều kiện nào ở tầng DB: hai scanner ở hai cổng cùng đọc `CheckedInAt == null` và **cả hai cùng nghe "Valid"** — đúng cách một vé cho hai người vào. Giờ dùng một `UPDATE ... WHERE` duy nhất qua `ExecuteUpdateAsync`, nêu đủ mọi điều kiện (chưa check-in, đúng event, chưa thu hồi); **số dòng thay đổi chính là câu trả lời**: 1 nghĩa là caller này thắng, 0 nghĩa là ai đó đã làm vé không còn hợp lệ. `EvaluateScan` chỉ chạy trước để có thông báo cụ thể — "vé của sự kiện khác" và "vé đã bị thu hồi" là hai câu chuyện khác nhau ở cổng soát vé, không thể gộp thành một chữ "invalid".
+
+**Issuance bền vững.** Guard duy nhất trước đây là "order này đã có vé chưa?", mà điều đó chỉ đúng **sau khi** chạy thành công — hai delivery đến cùng lúc đều thấy chưa có gì và **đều render + upload toàn bộ PDF**. Giờ `TicketIssuanceJob` unique theo `OrderId` được insert và commit **trước khi render**, nên kẻ thua cuộc bị database từ chối trước khi kịp gọi renderer. Object key vẫn deterministic theo `(OrderId, SeatId)` nên retry ghi đè đúng object thay vì để lại orphan.
+
+**Phân loại lỗi — chỗ này tốn tiền thật.** `catch (Exception)` cũ publish `TicketingFailed` cho *mọi* lỗi, nên một cú hiccup của MinIO hay Lambda cold-start timeout sẽ bảo saga **hoàn tiền khách và nhả ghế** — cho một đơn mà PDF rất có thể đã upload xong. Giờ chỉ `PermanentMessageFaultException` mới fail đơn; mọi thứ khác throw để redeliver, job giữ nguyên `Pending`. Cùng một sự phân biệt Commit 6 đã vạch giữa "thẻ bị từ chối" và "mất response".
+
+**Thu hồi vé khi hoàn tiền.** Trước đây **không có gì** thu hồi vé cả: đơn đã hoàn tiền vẫn có PDF hợp lệ và vẫn vào cổng được — tiền trả lại mà ghế cũng mất. `RevokeTicketsConsumer` xử lý `OrderCancelledIntegrationEvent`. Thu hồi chứ **không xoá**: nhân viên cần thấy "đã thu hồi", không phải "không có vé này", để phân biệt hoàn tiền với vé giả.
+
+**Owner-scoped access.** Trước đây bất kỳ user đã đăng nhập nào cũng liệt kê được vé của *bất kỳ* order nào chỉ bằng cách đoán id — endpoint chưa bao giờ hỏi order đó của ai. Giờ scope theo `sub` claim, admin bypass, trả **404 chứ không 403** (403 sẽ xác nhận order tồn tại và thuộc về người khác — bản thân nó là một rò rỉ). Vé cũ không có `CustomerId` vẫn đọc được: khoá cứng chúng lại sẽ khiến chính khách đã mua không lấy được vé của mình.
+
+**Một điều chỉnh nhỏ với lý do:** `ValidateTicketRequest` giờ **bắt buộc** có `EventId`. Không có nó server không thể phân biệt vé tối nay với vé tháng sau, và một scanner chĩa nhầm cổng sẽ vui vẻ cho cả hai vào.
+
+**Gate đã chạy:** `Phase12Harness` xanh **103/103** (96 → 103). Thêm 4 case check-in **trên Postgres thật** (2 scan đồng thời chỉ một Valid; **100 scan đồng thời vẫn đúng một Valid**; vé của event khác bị từ chối và **không** bị đánh dấu check-in; vé đã thu hồi không bao giờ được vào) và 3 case issuance (mất response sau khi upload **không** còn publish `TicketingFailed`; lỗi renderer transient được retry chứ không fail đơn; từ chối vĩnh viễn thì fail đơn đúng một lần).
+
+`Phase12ExpectedFailure` còn **3 đỏ / 3 xanh trên 6** (trước Commit 10: 5 đỏ / 3 xanh trên 8) — cả 3 đều là `CatalogLifecycleOrderingTests`, tức **toàn bộ phần Ticketing đã khép**, chỉ còn nhóm D phần Catalog (Commit 11). Regression `TicketFlow.slnx` xanh **86/86**.
+
+**Một flake do chính tôi tạo ra, đã sửa đúng cách.** `A_manual_review_order_must_stop_arming_further_deadlines` (Commit 9) xanh khi chạy riêng 3/3 nhưng đỏ trong lần chạy cả suite — timeout 5s quá chặt khi 103 test dùng chung một máy. Đã nới thành 30s kèm ghi chú: đây là chờ một quyết định saga làm ngay lập tức, nên hệ thống đúng vẫn thoả tức thì; phần dư chỉ để chịu tải. Sửa timeout, **không** nới lỏng assertion.
 
 ### Commit 11 — `feat(catalog,search,notification): optimistic lifecycle + revision-aware projections`
 - Catalog dùng concurrency token/`xmin`, unique `(EventId, SectionId)` và section-name constraints; concurrent Publish/Cancel/Reschedule trả conflict/retry thay vì last-write-wins.

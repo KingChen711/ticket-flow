@@ -39,14 +39,62 @@ public sealed class Ticket : Entity<Guid>
         IssuedAt = issuedAt;
     }
 
-    public static Ticket Issue(Guid orderId, Guid seatId, string qrPayload, string pdfObjectKey, DateTimeOffset now) =>
+    public static Ticket Issue(
+        Guid orderId,
+        Guid seatId,
+        string qrPayload,
+        string pdfObjectKey,
+        DateTimeOffset now,
+        Guid? customerId = null,
+        Guid? eventId = null) =>
         new(
             Guid.NewGuid(),
             orderId,
             seatId,
             Guard.NotNullOrEmpty(qrPayload, nameof(qrPayload)),
             Guard.NotNullOrEmpty(pdfObjectKey, nameof(pdfObjectKey)),
-            now);
+            now)
+        {
+            // Commit 10: owner and event are what make "only my tickets" and "only this gate's
+            // event" answerable at all. Optional so tickets issued before this commit still load.
+            CustomerId = customerId,
+            EventId = eventId,
+            IssuanceState = TicketIssuanceState.Issued,
+        };
+
+    /// <summary>
+    /// Withdraws a ticket without deleting it — a refunded ticket must still be recognisable at the
+    /// gate as "revoked", not as "no such ticket", so staff can tell a refund apart from a forgery.
+    /// </summary>
+    public void Revoke(string reason, DateTimeOffset now)
+    {
+        if (RevokedAt is not null)
+            return;
+
+        RevokedAt = now;
+        RevocationReason = Guard.NotNullOrEmpty(reason, nameof(reason));
+        IssuanceState = TicketIssuanceState.Revoked;
+    }
+
+    /// <summary>
+    /// Decides a scan without mutating anything. The mutation is a conditional UPDATE in the
+    /// repository (Commit 10), because deciding in memory and saving afterwards is exactly the
+    /// race that let two scanners both read <c>CheckedInAt == null</c> and both be told Valid.
+    /// </summary>
+    public CheckInResult EvaluateScan(Guid expectedEventId)
+    {
+        if (RevokedAt is not null)
+            return new CheckInResult(CheckInOutcome.Revoked, Id, CheckedInAt);
+
+        // Only enforced once a ticket carries its event. Tickets issued before Commit 10 have
+        // none, and refusing every one of them at the gate would be worse than not checking.
+        if (EventId is not null && EventId != expectedEventId)
+            return new CheckInResult(CheckInOutcome.WrongEvent, Id, CheckedInAt);
+
+        return CheckedInAt is not null
+            ? new CheckInResult(CheckInOutcome.AlreadyCheckedIn, Id, CheckedInAt)
+            : new CheckInResult(CheckInOutcome.Valid, Id, null);
+    }
 
     // The one mutation this otherwise-immutable fact allows (see class doc comment) — one-way,
     // no un-check-in. Throwing on a repeat scan (rather than silently no-op'ing) is deliberate:

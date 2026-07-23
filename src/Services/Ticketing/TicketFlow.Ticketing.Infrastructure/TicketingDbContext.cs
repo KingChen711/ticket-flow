@@ -8,6 +8,8 @@ public sealed class TicketingDbContext(DbContextOptions<TicketingDbContext> opti
 {
     public DbSet<Ticket> Tickets => Set<Ticket>();
 
+    public DbSet<TicketIssuanceJob> IssuanceJobs => Set<TicketIssuanceJob>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("ticketing");

@@ -19,6 +19,7 @@ public static class ServiceCollectionExtensions
             options.UseNpgsql(connectionString).UseSnakeCaseNamingConvention());
 
         services.AddScoped<ITicketRepository, TicketRepository>();
+        services.AddScoped<ITicketIssuanceJobRepository, TicketIssuanceJobRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<ITicketPdfRenderer, LambdaTicketRenderClient>();
 

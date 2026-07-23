@@ -5,6 +5,7 @@ using TicketFlow.Contracts.Messaging;
 using TicketFlow.Messaging;
 using TicketFlow.Observability;
 using TicketFlow.Ticketing.Api.Consumers;
+using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Api.Endpoints;
 using TicketFlow.Ticketing.Application;
 using TicketFlow.Ticketing.Infrastructure;
@@ -16,7 +17,11 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
     "ticketing",
-    configureMetrics: m => m.AddMeter(ContractVersionMetrics.MeterName));
+    configureMetrics: m => m
+        .AddMeter(ContractVersionMetrics.MeterName)
+        // Commit 10: a transient issuance fault is silent by design (it throws and is retried),
+        // so without this a renderer failing every time looks like one that works.
+        .AddMeter(TicketIssuanceMetrics.MeterName));
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddTicketingApplication();
@@ -33,6 +38,10 @@ builder.Services.AddTicketFlowMessaging(
         });
 
         busConfigurator.AddConsumer<IssueTicketsConsumer>();
+
+        // Commit 10: a refunded order's tickets must stop working. Before this nothing ever
+        // withdrew one — the money went back and the seat was given away too.
+        busConfigurator.AddConsumer<RevokeTicketsConsumer>();
     },
     configureRabbitMq: (context, rabbitConfigurator) =>
     {

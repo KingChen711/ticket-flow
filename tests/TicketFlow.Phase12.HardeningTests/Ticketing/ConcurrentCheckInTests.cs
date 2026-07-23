@@ -11,8 +11,77 @@ namespace TicketFlow.Phase12.HardeningTests.Ticketing;
 public sealed class ConcurrentCheckInTests(HardeningEnvironmentFixture environment)
 {
     [Fact]
-    [Trait(HardeningTraits.Name, HardeningTraits.ExpectedFailure)]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Two_concurrent_scans_must_return_exactly_one_Valid()
+    {
+        var eventId = Guid.NewGuid();
+        var (connectionString, ticket) = await SeedTicketAsync(eventId);
+
+        const int scannerCount = 2;
+        var readBarrier = new AsyncRendezvous(scannerCount);
+        var results = await Task.WhenAll(Enumerable.Range(0, scannerCount)
+            .Select(_ => ScanLikeProductionEndpointAsync(connectionString, ticket.QrPayload, eventId, readBarrier)));
+
+        // The barrier guarantees both scanners read CheckedInAt == null before either writes, so
+        // the only thing that can separate them is the conditional UPDATE itself.
+        Assert.Equal(1, results.Count(result => result == "Valid"));
+        Assert.Equal(scannerCount - 1, results.Count(result => result == "AlreadyCheckedIn"));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_hundred_concurrent_scans_must_still_admit_exactly_one()
+    {
+        var eventId = Guid.NewGuid();
+        var (connectionString, ticket) = await SeedTicketAsync(eventId);
+
+        const int scannerCount = 100;
+        var readBarrier = new AsyncRendezvous(scannerCount);
+        var results = await Task.WhenAll(Enumerable.Range(0, scannerCount)
+            .Select(_ => ScanLikeProductionEndpointAsync(connectionString, ticket.QrPayload, eventId, readBarrier)));
+
+        Assert.Equal(1, results.Count(result => result == "Valid"));
+        Assert.Equal(scannerCount - 1, results.Count(result => result == "AlreadyCheckedIn"));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_ticket_for_another_event_must_be_refused_not_admitted()
+    {
+        var ticketEventId = Guid.NewGuid();
+        var (connectionString, ticket) = await SeedTicketAsync(ticketEventId);
+
+        // A scanner at the wrong door: the ticket is genuine, just not for tonight.
+        var result = await ScanLikeProductionEndpointAsync(
+            connectionString, ticket.QrPayload, Guid.NewGuid(), new AsyncRendezvous(1));
+
+        Assert.Equal("WrongEvent", result);
+
+        await using var context = CreateContext(connectionString);
+        var stored = await context.Tickets.SingleAsync(t => t.Id == ticket.Id);
+        Assert.Null(stored.CheckedInAt);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_revoked_ticket_must_never_be_admitted()
+    {
+        var eventId = Guid.NewGuid();
+        var (connectionString, ticket) = await SeedTicketAsync(eventId, revoke: true);
+
+        var result = await ScanLikeProductionEndpointAsync(
+            connectionString, ticket.QrPayload, eventId, new AsyncRendezvous(1));
+
+        // Refunded, but the PDF still exists and can still be presented at the gate. "Revoked"
+        // rather than "NotFound" so staff can tell a refund apart from a forgery.
+        Assert.Equal("Revoked", result);
+
+        await using var context = CreateContext(connectionString);
+        var stored = await context.Tickets.SingleAsync(t => t.Id == ticket.Id);
+        Assert.Null(stored.CheckedInAt);
+    }
+
+    private async Task<(string ConnectionString, Ticket Ticket)> SeedTicketAsync(Guid eventId, bool revoke = false)
     {
         var connectionString = await CreateIsolatedDatabaseAsync();
         await using (var schemaContext = CreateContext(connectionString))
@@ -23,7 +92,12 @@ public sealed class ConcurrentCheckInTests(HardeningEnvironmentFixture environme
             Guid.NewGuid(),
             $"qr-{Guid.NewGuid():N}",
             $"ticket-{Guid.NewGuid():N}.pdf",
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            customerId: Guid.NewGuid(),
+            eventId: eventId);
+
+        if (revoke)
+            ticket.Revoke("Order refunded.", DateTimeOffset.UtcNow);
 
         await using (var seedContext = CreateContext(connectionString))
         {
@@ -31,37 +105,38 @@ public sealed class ConcurrentCheckInTests(HardeningEnvironmentFixture environme
             await seedContext.SaveChangesAsync();
         }
 
-        const int scannerCount = 2;
-        var readBarrier = new AsyncRendezvous(scannerCount);
-        var scans = Enumerable.Range(0, scannerCount)
-            .Select(_ => ScanLikeProductionEndpointAsync(connectionString, ticket.QrPayload, readBarrier))
-            .ToArray();
-
-        var results = await Task.WhenAll(scans);
-
-        // Current endpoint does read -> domain mutation -> SaveChanges with no conditional
-        // update/concurrency token. Every context reads NULL before the barrier and returns Valid.
-        Assert.Equal(1, results.Count(result => result == "Valid"));
-        Assert.Equal(scannerCount - 1, results.Count(result => result == "AlreadyCheckedIn"));
+        return (connectionString, ticket);
     }
 
-    private async Task<string> ScanLikeProductionEndpointAsync(
+    /// <summary>
+    /// Mirrors the production endpoint's decision path exactly: evaluate for a specific message,
+    /// then let the conditional UPDATE decide, then re-read to explain a lost race.
+    /// </summary>
+    private static async Task<string> ScanLikeProductionEndpointAsync(
         string connectionString,
         string qrPayload,
+        Guid gateEventId,
         AsyncRendezvous readBarrier)
     {
         await using var context = CreateContext(connectionString);
-        var ticket = await context.Tickets.SingleAsync(item => item.QrPayload == qrPayload);
+        var repository = new TicketRepository(context);
+        var ticket = await context.Tickets.AsNoTracking().SingleAsync(item => item.QrPayload == qrPayload);
 
-        // Deterministically opens the race after all scanners have observed CheckedInAt == null.
+        // Deterministically opens the race after every scanner has observed CheckedInAt == null.
         await readBarrier.SignalAndWaitAsync();
 
-        if (ticket.CheckedInAt is not null)
-            return "AlreadyCheckedIn";
+        var evaluation = ticket.EvaluateScan(gateEventId);
+        if (evaluation.Outcome != CheckInOutcome.Valid)
+            return evaluation.Outcome.ToString();
 
-        ticket.CheckIn(DateTimeOffset.UtcNow);
-        await context.SaveChangesAsync();
-        return "Valid";
+        if (await repository.TryClaimCheckInAsync(ticket.Id, gateEventId, DateTimeOffset.UtcNow))
+            return nameof(CheckInOutcome.Valid);
+
+        var loser = await context.Tickets.AsNoTracking().SingleAsync(item => item.Id == ticket.Id);
+        var reason = loser.EvaluateScan(gateEventId);
+        return reason.Outcome == CheckInOutcome.Valid
+            ? nameof(CheckInOutcome.AlreadyCheckedIn)
+            : reason.Outcome.ToString();
     }
 
     private async Task<string> CreateIsolatedDatabaseAsync()

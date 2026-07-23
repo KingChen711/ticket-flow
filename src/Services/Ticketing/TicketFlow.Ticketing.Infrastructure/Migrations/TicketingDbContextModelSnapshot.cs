@@ -317,6 +317,60 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                     b.ToTable("tickets", "ticketing");
                 });
 
+            modelBuilder.Entity("TicketFlow.Ticketing.Domain.Tickets.TicketIssuanceJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("customer_id");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("failure_reason");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.HasKey("Id")
+                        .HasName("pk_ticket_issuance_jobs");
+
+                    b.HasIndex("OrderId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_ticket_issuance_jobs_order_id");
+
+                    b.HasIndex("State")
+                        .HasDatabaseName("ix_ticket_issuance_jobs_state");
+
+                    b.ToTable("ticket_issuance_jobs", "ticketing");
+                });
+
             modelBuilder.Entity("MassTransit.EntityFrameworkCoreIntegration.OutboxMessage", b =>
                 {
                     b.HasOne("MassTransit.EntityFrameworkCoreIntegration.OutboxState", null)

@@ -24,6 +24,14 @@ namespace TicketFlow.Phase12.HardeningTests.Ordering;
 /// </remarks>
 public sealed class PurchaseSagaDeadlineTests
 {
+    /// <summary>
+    /// Generous on purpose. These waits are for a decision the saga makes immediately, so a correct
+    /// system satisfies them at once — the headroom only covers a machine running the whole suite
+    /// at once. A tighter 5s made one of these fail in the full run while passing in isolation,
+    /// which is a flaky test, not a finding.
+    /// </summary>
+    private static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(30);
+
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task A_silent_participant_must_cause_the_command_to_be_re_sent()
@@ -35,7 +43,7 @@ public sealed class PurchaseSagaDeadlineTests
 
         // Re-sending is safe because ProcessPayment is idempotent (Commit 6); staying silent is not.
         Assert.True(await AsyncTest.WaitUntilAsync(
-            () => harness.Published.Select<ProcessPayment>().Count() == 2, TimeSpan.FromSeconds(5)));
+            () => harness.Published.Select<ProcessPayment>().Count() == 2, SettleTimeout));
     }
 
     [Fact]
@@ -71,7 +79,7 @@ public sealed class PurchaseSagaDeadlineTests
 
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is not null,
-            TimeSpan.FromSeconds(5)));
+            SettleTimeout));
 
         // Cancelling on silence would release seats for a purchase that may in fact have been paid.
         // The order stops, visibly, and waits for a human instead.
@@ -91,7 +99,7 @@ public sealed class PurchaseSagaDeadlineTests
             await FireDeadlineAsync(harness, order);
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is not null,
-            TimeSpan.FromSeconds(5)));
+            SettleTimeout));
         var sentBefore = harness.Published.Select<ProcessPayment>().Count();
 
         await harness.Bus.Publish(new PurchaseDeadlineExpired(order.OrderId, "ManualReview", Guid.NewGuid()));
@@ -112,13 +120,13 @@ public sealed class PurchaseSagaDeadlineTests
             await FireDeadlineAsync(harness, order);
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is not null,
-            TimeSpan.FromSeconds(5)));
+            SettleTimeout));
         var sentBefore = harness.Published.Select<ProcessPayment>().Count();
 
         await harness.Bus.Publish(new ResumePurchase(order.OrderId, "operator-1"));
         Assert.True(await AsyncTest.WaitUntilAsync(
             () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().ManualReviewAt is null,
-            TimeSpan.FromSeconds(5)));
+            SettleTimeout));
 
         var state = await LoadAsync(harness, order.OrderId);
         Assert.Null(state.ManualReviewAt);
@@ -200,7 +208,7 @@ public sealed class PurchaseSagaDeadlineTests
         Assert.True(
             await AsyncTest.WaitUntilAsync(
                 () => LoadAsync(harness, order.OrderId).GetAwaiter().GetResult().DeadlineStrikes > before,
-                TimeSpan.FromSeconds(5)),
+                SettleTimeout),
             $"The deadline for {state.CurrentState} was never processed.");
     }
 

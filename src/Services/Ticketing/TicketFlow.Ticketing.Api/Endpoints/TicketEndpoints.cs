@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Domain.Tickets;
 
@@ -5,7 +6,12 @@ namespace TicketFlow.Ticketing.Api.Endpoints;
 
 public sealed record TicketResponse(Guid Id, Guid OrderId, Guid SeatId, DateTimeOffset IssuedAt, DateTimeOffset? CheckedInAt);
 
-public sealed record ValidateTicketRequest(string QrPayload);
+/// <summary>
+/// <see cref="EventId"/> is what the gate is scanning for. Required (Commit 10): without it the
+/// server cannot tell a ticket for tonight from a ticket for next month, and a scanner pointed at
+/// the wrong door would happily admit both.
+/// </summary>
+public sealed record ValidateTicketRequest(string QrPayload, Guid EventId);
 
 public sealed record ValidateTicketResponse(string Status, Guid? TicketId, DateTimeOffset? CheckedInAt);
 
@@ -13,45 +19,92 @@ public static class TicketEndpoints
 {
     public static void MapTicketEndpoints(this WebApplication app)
     {
-        app.MapGet("/orders/{orderId:guid}/tickets", async (Guid orderId, ITicketRepository repository, CancellationToken ct) =>
+        // Owner-scoped (Commit 10). Before this, any authenticated user could list any order's
+        // tickets by guessing an order id — the endpoint never asked whose order it was.
+        app.MapGet("/orders/{orderId:guid}/tickets", async (
+            Guid orderId,
+            ClaimsPrincipal user,
+            ITicketRepository repository,
+            CancellationToken ct) =>
         {
             var tickets = await repository.GetByOrderIdAsync(orderId, ct);
+            if (tickets.Count == 0)
+                return Results.NotFound();
+
+            // 404, not 403: a 403 would confirm the order exists and belongs to someone else,
+            // which is itself a leak. Same choice as Ordering's own by-id endpoint (Phase 8).
+            if (!CanAccess(tickets[0], user))
+                return Results.NotFound();
+
             return Results.Ok(tickets.Select(Map).ToList());
         }).WithTags("Tickets").RequireAuthorization("RequireAuthenticated");
 
-        app.MapGet("/tickets/{id:guid}/pdf", async (Guid id, ITicketRepository repository, ITicketObjectStorage objectStorage, CancellationToken ct) =>
+        app.MapGet("/tickets/{id:guid}/pdf", async (
+            Guid id,
+            ClaimsPrincipal user,
+            ITicketRepository repository,
+            ITicketObjectStorage objectStorage,
+            CancellationToken ct) =>
         {
             var ticket = await repository.GetByIdAsync(id, ct);
-            if (ticket is null)
+            if (ticket is null || !CanAccess(ticket, user))
                 return Results.NotFound();
 
             var pdfBytes = await objectStorage.DownloadAsync(ticket.PdfObjectKey, ct);
             return Results.File(pdfBytes, "application/pdf", $"ticket-{ticket.Id}.pdf");
         }).WithTags("Tickets").RequireAuthorization("RequireAuthenticated");
 
-        // Gate-scanner endpoint (Phase 8 Ch12) — server-authoritative validate, no QR signing yet
-        // (see ITicketPdfRenderer's doc comment / phase-5-plan.md backlog). RequireOrganizer
-        // stands in for a dedicated "gate-staff" role until there's a real staffing model to
-        // justify one (backlog, see docs/phase-8-plan.md mục 4).
+        // Gate-scanner endpoint. RequireOrganizer stands in for a dedicated "gate-staff" role until
+        // there's a real staffing model to justify one (backlog, docs/phase-8-plan.md mục 4).
         app.MapPost("/tickets/validate", async (
             ValidateTicketRequest request,
             ITicketRepository repository,
-            IUnitOfWork unitOfWork,
             TimeProvider timeProvider,
             CancellationToken ct) =>
         {
             var ticket = await repository.GetByQrPayloadAsync(request.QrPayload, ct);
             if (ticket is null)
-                return Results.Ok(new ValidateTicketResponse("NotFound", null, null));
+                return Results.Ok(new ValidateTicketResponse(nameof(CheckInOutcome.NotFound), null, null));
 
-            if (ticket.CheckedInAt is not null)
-                return Results.Ok(new ValidateTicketResponse("AlreadyCheckedIn", ticket.Id, ticket.CheckedInAt));
+            // Evaluated first so a refused scan carries a specific reason — "revoked" and "wrong
+            // event" are different conversations at the gate than "already used".
+            var evaluation = ticket.EvaluateScan(request.EventId);
+            if (evaluation.Outcome != CheckInOutcome.Valid)
+                return Results.Ok(new ValidateTicketResponse(
+                    evaluation.Outcome.ToString(), evaluation.TicketId, evaluation.CheckedInAt));
 
-            ticket.CheckIn(timeProvider.GetUtcNow());
-            await unitOfWork.SaveChangesAsync(ct);
+            // The conditional UPDATE is the actual decision; everything above is only a fast path
+            // for a better message. Losing this race means another scanner claimed the ticket in
+            // between, so re-read to report exactly which condition it now fails.
+            var now = timeProvider.GetUtcNow();
+            if (await repository.TryClaimCheckInAsync(ticket.Id, request.EventId, now, ct))
+                return Results.Ok(new ValidateTicketResponse(nameof(CheckInOutcome.Valid), ticket.Id, now));
 
-            return Results.Ok(new ValidateTicketResponse("Valid", ticket.Id, ticket.CheckedInAt));
+            var loser = await repository.GetByIdAsync(ticket.Id, ct);
+            var reason = loser?.EvaluateScan(request.EventId) ?? new CheckInResult(CheckInOutcome.NotFound);
+            return Results.Ok(new ValidateTicketResponse(
+                // Never report Valid off a claim that failed, whatever the re-read says.
+                reason.Outcome == CheckInOutcome.Valid
+                    ? nameof(CheckInOutcome.AlreadyCheckedIn)
+                    : reason.Outcome.ToString(),
+                reason.TicketId,
+                reason.CheckedInAt));
         }).WithTags("Tickets").RequireAuthorization("RequireOrganizer");
+    }
+
+    /// <summary>
+    /// A ticket with no recorded owner predates Commit 10; it stays readable by any authenticated
+    /// caller rather than becoming permanently unreachable for the customer who bought it.
+    /// </summary>
+    private static bool CanAccess(Ticket ticket, ClaimsPrincipal user)
+    {
+        if (user.IsInRole("admin"))
+            return true;
+
+        if (ticket.CustomerId is null)
+            return true;
+
+        return Guid.TryParse(user.FindFirstValue("sub"), out var callerId) && ticket.CustomerId == callerId;
     }
 
     private static TicketResponse Map(Ticket ticket) =>
