@@ -35,6 +35,15 @@ public sealed class UploadPosterFunction
             return new UploadPosterResponse(Accepted: false, Key: null, ThumbnailKey: null, Error: "Uploaded file is not a recognized image (PNG or JPEG).");
         }
 
+        // Commit 14: being a real PNG is not the same as being safe to decode. Checked here, before
+        // the object is stored, so a bomb never reaches S3 and therefore never triggers the
+        // thumbnail function that would decode it.
+        if (!ImageLimits.TryValidate(bytes, out var limitError))
+        {
+            context.Logger.LogWarning($"UploadPoster rejected {bytes.Length} bytes — {limitError}");
+            return new UploadPosterResponse(Accepted: false, Key: null, ThumbnailKey: null, Error: limitError);
+        }
+
         var key = $"originals/{Guid.NewGuid():N}.{extension}";
         await S3Client.PutObjectAsync(new PutObjectRequest
         {

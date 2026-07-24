@@ -57,6 +57,18 @@ public sealed class ClickHouseSalesStore(ClickHouseConnection connection) : ISal
             AddParam(command, "currency", query.Currency.ToUpperInvariant());
         }
 
+        if (query.OrganizerId.HasValue)
+        {
+            // Semi-join against the projection rather than a column on `sales`: the order path
+            // never learns which organizer owns an event, so stamping every sale would mean
+            // threading that fact through quote -> order -> saga just to filter a report. FINAL on
+            // the inner select for the same reason as the outer one — without it a redelivered
+            // publish can leave two rows for one event, and the event could match on a stale owner.
+            conditions.Add(
+                "event_id IN (SELECT event_id FROM event_owners FINAL WHERE organizer_id = {organizerId:UUID})");
+            AddParam(command, "organizerId", query.OrganizerId.Value);
+        }
+
         var whereClause = conditions.Count > 0 ? $"WHERE {string.Join(" AND ", conditions)}" : "";
         command.CommandText = $"""
             SELECT event_id, currency, sum(amount) AS revenue, sum(seat_count) AS seats
@@ -90,6 +102,28 @@ public sealed class ClickHouseSalesStore(ClickHouseConnection connection) : ISal
             byEvent.GroupBy(e => e.Currency, StringComparer.OrdinalIgnoreCase)
                 .Select(group => new CurrencyRevenue(group.Key, group.Sum(e => e.Revenue), group.Sum(e => e.SeatCount)))
                 .ToList());
+    }
+
+    /// <summary>
+    /// Upserts the event → organizer projection (Commit 14). ReplacingMergeTree collapses on
+    /// event_id and keeps the highest revision, so a redelivered or out-of-order publish converges
+    /// without this method needing to read first.
+    /// </summary>
+    public async Task RecordEventOwnerAsync(
+        Guid eventId,
+        Guid organizerId,
+        long revision,
+        CancellationToken cancellationToken = default)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO event_owners (event_id, organizer_id, revision)
+            VALUES ({eventId:UUID}, {organizerId:UUID}, {revision:UInt64})
+            """;
+        AddParam(command, "eventId", eventId);
+        AddParam(command, "organizerId", organizerId);
+        AddParam(command, "revision", revision);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static void AddParam(DbCommand command, string name, object value)

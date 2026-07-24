@@ -14,5 +14,16 @@ public interface ISalesStore
 {
     Task RecordSaleAsync(SaleRecorded sale, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Records which organizer owns an event (Phase 12 Commit 14), so revenue can be scoped to the
+    /// caller's own events. Same idempotency story as <see cref="RecordSaleAsync"/> — the storage
+    /// engine collapses repeats, the caller does not need to check first.
+    /// </summary>
+    Task RecordEventOwnerAsync(
+        Guid eventId,
+        Guid organizerId,
+        long revision,
+        CancellationToken cancellationToken = default);
+
     Task<RevenueResult> GetRevenueAsync(RevenueQuery query, CancellationToken cancellationToken = default);
 }

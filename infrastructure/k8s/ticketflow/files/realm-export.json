@@ -3,12 +3,23 @@
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
+  "verifyEmail": true,
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername(undefined)",
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
   "accessTokenLifespan": 3600,
   "roles": {
     "realm": [
       { "name": "customer", "description": "Buys tickets" },
       { "name": "organizer", "description": "Creates/manages events, views revenue" },
-      { "name": "admin", "description": "Platform administrator" }
+      { "name": "admin", "description": "Platform administrator" },
+      { "name": "service", "description": "Internal service-to-service caller (Phase 12 Commit 14) — never granted to a human client, so no user token can satisfy RequireServicePrincipal" }
     ]
   },
   "clients": [
@@ -49,6 +60,19 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "secret": "identity-admin-dev-secret"
+    },
+    {
+      "clientId": "ticketflow-internal",
+      "name": "Internal service-to-service client (Phase 12 Commit 14)",
+      "description": "Confidential, client-credentials only. Used by one TicketFlow service calling another's internal surface (catalog -> reservation inventory provisioning, ordering -> reservation gRPC). Carries the `service` realm role, which no human-facing client can obtain. ticketflow-audience is in defaultClientScopes so the token carries aud=ticketflow-api like every other token services validate.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "internal-services-dev-secret",
+      "defaultClientScopes": ["roles", "ticketflow-audience"]
     },
     {
       "clientId": "ticketflow-customer-web",
@@ -221,6 +245,12 @@
       }
     },
     {
+      "username": "service-account-ticketflow-internal",
+      "enabled": true,
+      "serviceAccountClientId": "ticketflow-internal",
+      "realmRoles": ["service"]
+    },
+    {
       "username": "customer1",
       "email": "customer1@ticketflow.dev",
       "firstName": "Customer",
@@ -235,6 +265,16 @@
       "email": "organizer1@ticketflow.dev",
       "firstName": "Organizer",
       "lastName": "One",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],
+      "realmRoles": ["organizer"]
+    },
+    {
+      "username": "organizer2",
+      "email": "organizer2@ticketflow.dev",
+      "firstName": "Organizer",
+      "lastName": "Two",
       "enabled": true,
       "emailVerified": true,
       "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],

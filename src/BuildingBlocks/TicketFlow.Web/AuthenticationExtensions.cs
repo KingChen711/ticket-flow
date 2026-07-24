@@ -62,7 +62,15 @@ public static class AuthenticationExtensions
         services.AddAuthorizationBuilder()
             .AddPolicy("RequireOrganizer", p => p.RequireRole("organizer", "admin"))
             .AddPolicy("RequireAdmin", p => p.RequireRole("admin"))
-            .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser());
+            .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser())
+            // Commit 14: endpoints one service calls on another, never a browser. Before this they
+            // were simply unauthenticated and relied on "only our containers can reach this port"
+            // — the exact "tin Docker network" the plan rules out as a security boundary (quyết
+            // định 8). The `service` realm role is deliberately NOT granted to any human-facing
+            // client, so a customer or organizer token can never satisfy this policy no matter how
+            // it was obtained; admin is not an escape hatch here either, because these routes take
+            // an already-verified identity as a parameter and would let a human impersonate one.
+            .AddPolicy("RequireServicePrincipal", p => p.RequireRole("service"));
 
         return services;
     }

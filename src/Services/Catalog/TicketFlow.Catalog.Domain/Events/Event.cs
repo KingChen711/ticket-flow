@@ -22,7 +22,7 @@ public sealed class Event : AggregateRoot<Guid>
     // sets every property (including Schedule and the PriceTiers backing field) via reflection.
     private Event() { }
 
-    private Event(Guid id, string title, string description, string artist, Guid venueId, EventSchedule schedule)
+    private Event(Guid id, string title, string description, string artist, Guid venueId, EventSchedule schedule, Guid? organizerId)
         : base(id)
     {
         Title = title;
@@ -30,12 +30,27 @@ public sealed class Event : AggregateRoot<Guid>
         Artist = artist;
         VenueId = venueId;
         Schedule = schedule;
+        OrganizerId = organizerId;
         Status = EventStatus.Draft;
         AggregateVersion = 1;
     }
 
-    public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule) =>
-        Create(Guid.NewGuid(), title, description, artist, venueId, schedule);
+    /// <summary>
+    /// True when <paramref name="organizerId"/> is the organizer this event belongs to.
+    /// </summary>
+    /// <remarks>
+    /// Commit 14. <see cref="OrganizerId"/> has existed since Commit 2 but was expand-only with no
+    /// writer, so events created before this commit carry null — and null is deliberately owned by
+    /// NOBODY rather than by everybody. Treating an unowned event as "anyone may edit it" would
+    /// hand every legacy event to the first organizer who guessed its id, and treating it as
+    /// self-claiming would silently assign ownership from a request, which mục 10 forbids
+    /// ("Record không xác định owner phải vào report/manual-review, không tự gán"). Admin still
+    /// has a way in, so nothing becomes permanently unmanageable.
+    /// </remarks>
+    public bool IsOwnedBy(Guid organizerId) => OrganizerId.HasValue && OrganizerId.Value == organizerId;
+
+    public static Event Create(string title, string description, string artist, Guid venueId, EventSchedule schedule, Guid? organizerId = null) =>
+        Create(Guid.NewGuid(), title, description, artist, venueId, schedule, organizerId);
 
     public static Event Create(
         Guid id,
@@ -43,7 +58,8 @@ public sealed class Event : AggregateRoot<Guid>
         string description,
         string artist,
         Guid venueId,
-        EventSchedule schedule)
+        EventSchedule schedule,
+        Guid? organizerId = null)
     {
         var @event = new Event(
             id == Guid.Empty ? throw new ArgumentException("Event id cannot be empty.", nameof(id)) : id,
@@ -51,7 +67,8 @@ public sealed class Event : AggregateRoot<Guid>
             description ?? string.Empty,
             Guard.NotNullOrEmpty(artist, nameof(artist)),
             venueId,
-            schedule ?? throw new ArgumentNullException(nameof(schedule)));
+            schedule ?? throw new ArgumentNullException(nameof(schedule)),
+            organizerId == Guid.Empty ? null : organizerId);
 
         @event.Raise(new EventCreated(@event.Id, @event.Title, @event.VenueId));
 

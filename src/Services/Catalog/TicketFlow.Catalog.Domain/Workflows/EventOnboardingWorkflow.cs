@@ -57,6 +57,14 @@ public sealed class EventOnboardingWorkflow : Entity<Guid>
     public string? VenueCity { get; private set; }
     public string? VenueCountry { get; private set; }
     public string? VenuePostalCode { get; private set; }
+    /// <summary>
+    /// The organizer this onboarding belongs to (Commit 14), captured once at Start and stored on
+    /// the workflow rather than read from whoever happens to call resume. A resumable workflow can
+    /// be continued minutes later by a retry, so taking the owner from the resuming request would
+    /// let a second organizer adopt a half-built event by resuming it.
+    /// </summary>
+    public Guid? OrganizerId { get; private set; }
+
     public Guid EventId { get; private set; }
     public Guid SeatMapId { get; private set; }
     public string EventTitle { get; private set; } = null!;
@@ -81,7 +89,8 @@ public sealed class EventOnboardingWorkflow : Entity<Guid>
         OnboardingVenuePlan? newVenue,
         OnboardingEventPlan eventPlan,
         IReadOnlyList<OnboardingSectionPlan> sections,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        Guid? organizerId = null)
     {
         if (string.IsNullOrWhiteSpace(creationKey))
             throw new ArgumentException("Creation key is required.", nameof(creationKey));
@@ -106,6 +115,7 @@ public sealed class EventOnboardingWorkflow : Entity<Guid>
             VenueCity = newVenue?.City,
             VenueCountry = newVenue?.Country,
             VenuePostalCode = newVenue?.PostalCode,
+            OrganizerId = organizerId == Guid.Empty ? null : organizerId,
             EventId = Guid.NewGuid(),
             SeatMapId = Guid.NewGuid(),
             EventTitle = eventPlan.Title,

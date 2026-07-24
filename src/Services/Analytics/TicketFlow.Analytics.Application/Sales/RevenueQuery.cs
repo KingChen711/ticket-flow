@@ -1,6 +1,16 @@
 namespace TicketFlow.Analytics.Application.Sales;
 
-public sealed record RevenueQuery(Guid? EventId, DateTimeOffset? From, DateTimeOffset? To, string? Currency = null);
+/// <param name="OrganizerId">
+/// Restricts the result to events this organizer owns (Phase 12 Commit 14). Null means unscoped
+/// and is only ever passed for an admin caller — /revenue used to be unscoped for EVERY organizer,
+/// so any of them could read the whole platform's takings, per event, for any date range.
+/// </param>
+public sealed record RevenueQuery(
+    Guid? EventId,
+    DateTimeOffset? From,
+    DateTimeOffset? To,
+    string? Currency = null,
+    Guid? OrganizerId = null);
 
 public sealed record EventRevenue(Guid EventId, string Currency, decimal Revenue, long SeatCount);
 

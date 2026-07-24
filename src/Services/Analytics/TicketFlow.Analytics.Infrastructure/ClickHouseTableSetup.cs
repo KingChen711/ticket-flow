@@ -34,5 +34,20 @@ public static class ClickHouseTableSetup
         await command.ExecuteNonQueryAsync(cancellationToken);
         command.CommandText = "ALTER TABLE sales ADD COLUMN IF NOT EXISTS price_snapshot_version UInt64 DEFAULT 0 AFTER currency";
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        // Commit 14: which organizer owns which event, projected from CatalogEventPublished, so
+        // /revenue can be scoped without every sale row having to carry an organizer that the
+        // order path never knew. ReplacingMergeTree(revision) keyed by event_id for the same
+        // reason sales uses one: a redelivered publish collapses onto the same row, and the higher
+        // Catalog AggregateVersion is the one that survives a merge.
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS event_owners (
+                event_id UUID,
+                organizer_id UUID,
+                revision UInt64
+            ) ENGINE = ReplacingMergeTree(revision)
+            ORDER BY event_id
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

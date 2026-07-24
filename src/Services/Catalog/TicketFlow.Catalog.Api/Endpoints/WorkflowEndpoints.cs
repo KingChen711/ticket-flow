@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using TicketFlow.Catalog.Application.Workflows;
 
 namespace TicketFlow.Catalog.Api.Endpoints;
@@ -12,10 +13,16 @@ public static class WorkflowEndpoints
 
         onboarding.MapPost("/", async (
             StartEventOnboardingRequest request,
+            ClaimsPrincipal user,
             EventOnboardingWorkflowService service,
             CancellationToken ct) =>
         {
-            var workflow = await service.StartAsync(request, ct);
+            // The organizer is captured once, here, and stored on the workflow — resume and
+            // compensate below deliberately do NOT re-read it from their caller (Commit 14).
+            if (!CatalogCallerFactory.TryCreate(user, out var caller))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var workflow = await service.StartAsync(request, caller, ct);
             return workflow.Status == "Completed"
                 ? Results.Ok(workflow)
                 : Results.Accepted($"/catalog/workflows/event-onboarding/{workflow.WorkflowId}", workflow);

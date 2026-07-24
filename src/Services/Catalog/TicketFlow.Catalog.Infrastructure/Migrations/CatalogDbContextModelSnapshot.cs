@@ -456,6 +456,10 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("last_error");
 
+                    b.Property<Guid?>("OrganizerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("organizer_id");
+
                     b.Property<string>("RequestFingerprint")
                         .IsRequired()
                         .HasMaxLength(64)

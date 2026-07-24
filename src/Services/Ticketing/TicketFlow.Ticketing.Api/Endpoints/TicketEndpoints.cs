@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using TicketFlow.Ticketing.Application.Abstractions;
+using TicketFlow.Ticketing.Application.Tickets;
 using TicketFlow.Ticketing.Domain.Tickets;
 
 namespace TicketFlow.Ticketing.Api.Endpoints;
@@ -58,10 +59,24 @@ public static class TicketEndpoints
         // there's a real staffing model to justify one (backlog, docs/phase-8-plan.md mục 4).
         app.MapPost("/tickets/validate", async (
             ValidateTicketRequest request,
+            ClaimsPrincipal user,
             ITicketRepository repository,
+            GateAccessPolicy gateAccess,
             TimeProvider timeProvider,
             CancellationToken ct) =>
         {
+            // Commit 14: holding the organizer role is not the same as running THIS event's gate.
+            // Until now any organizer in the realm could check in — and, worse, burn — tickets for
+            // an event they had nothing to do with. 403 rather than a scan outcome: this is the
+            // scanner being pointed at the wrong tenant, not a verdict about the ticket, and
+            // reporting it as "invalid" would send staff looking at the customer instead.
+            if (!await IsGateAuthorizedAsync(user, request.EventId, gateAccess, ct))
+            {
+                return Results.Json(
+                    new { error = "This account is not the organizer of the event being scanned." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+
             var ticket = await repository.GetByQrPayloadAsync(request.QrPayload, ct);
             if (ticket is null)
                 return Results.Ok(new ValidateTicketResponse(nameof(CheckInOutcome.NotFound), null, null));
@@ -106,6 +121,21 @@ public static class TicketEndpoints
 
         return Guid.TryParse(user.FindFirstValue("sub"), out var callerId) && ticket.CustomerId == callerId;
     }
+
+    /// <summary>
+    /// Translates the token into the two facts <see cref="GateAccessPolicy"/> needs. The decision
+    /// itself lives in Application so it can be tested without an HTTP fixture.
+    /// </summary>
+    private static Task<bool> IsGateAuthorizedAsync(
+        ClaimsPrincipal user,
+        Guid eventId,
+        GateAccessPolicy gateAccess,
+        CancellationToken cancellationToken) =>
+        gateAccess.CanScanAsync(
+            Guid.TryParse(user.FindFirstValue("sub"), out var organizerId) ? organizerId : null,
+            user.IsInRole("admin"),
+            eventId,
+            cancellationToken);
 
     private static TicketResponse Map(Ticket ticket) =>
         new(ticket.Id, ticket.OrderId, ticket.SeatId, ticket.IssuedAt, ticket.CheckedInAt);

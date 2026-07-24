@@ -30,6 +30,9 @@ var kafkaHost = builder.Configuration["Kafka:Host"]
 await KafkaTopicSetup.EnsureCreatedAsync(kafkaHost, saleRecordedTopic);
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "analytics",
+    // Commit 14: the event -> organizer projection that scopes /revenue. Catalog lifecycle facts
+    // travel on RabbitMQ, so this is a bus consumer even though sales arrive over Kafka.
+    configure: busConfigurator => busConfigurator.AddConsumer<CatalogEventPublishedConsumer>(),
     configureKafka: rider => { rider.AddConsumer<SaleRecordedConsumer>(); },
     configureKafkaFactory: (context, kafkaConfigurator) =>
     {

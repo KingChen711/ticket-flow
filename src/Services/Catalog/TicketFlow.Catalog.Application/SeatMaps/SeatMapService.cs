@@ -8,10 +8,12 @@ public sealed class SeatMapService(
     IEventRepository eventRepository,
     IUnitOfWork unitOfWork)
 {
-    public async Task<SeatMapResponse> CreateForEventAsync(Guid eventId, CancellationToken cancellationToken = default)
+    public async Task<SeatMapResponse> CreateForEventAsync(
+        Guid eventId,
+        CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
-        _ = await eventRepository.GetByIdAsync(eventId, cancellationToken)
-            ?? throw new InvalidOperationException($"Event '{eventId}' was not found.");
+        await EnsureOwnedAsync(eventId, caller, cancellationToken);
 
         if (await seatMapRepository.GetByEventIdAsync(eventId, cancellationToken) is not null)
             throw new InvalidOperationException($"Event '{eventId}' already has a seat map.");
@@ -24,8 +26,14 @@ public sealed class SeatMapService(
         return Map(seatMap);
     }
 
-    public async Task<SeatMapResponse> AddSectionAsync(Guid eventId, AddSectionRequest request, CancellationToken cancellationToken = default)
+    public async Task<SeatMapResponse> AddSectionAsync(
+        Guid eventId,
+        AddSectionRequest request,
+        CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
+        await EnsureOwnedAsync(eventId, caller, cancellationToken);
+
         var seatMap = await seatMapRepository.GetByEventIdAsync(eventId, cancellationToken)
             ?? throw new InvalidOperationException($"Event '{eventId}' does not have a seat map yet.");
 
@@ -39,6 +47,19 @@ public sealed class SeatMapService(
     {
         var seatMap = await seatMapRepository.GetByEventIdAsync(eventId, cancellationToken);
         return seatMap is null ? null : Map(seatMap);
+    }
+
+    /// <summary>
+    /// A seat map is part of an event, so it inherits that event's ownership (Commit 14) — there
+    /// is no separate owner to check. Without this, organizer B could add sections to organizer
+    /// A's seat map, which then become price-tier targets on A's event.
+    /// </summary>
+    private async Task EnsureOwnedAsync(Guid eventId, CatalogCaller caller, CancellationToken cancellationToken)
+    {
+        var @event = await eventRepository.GetByIdAsync(eventId, cancellationToken)
+            ?? throw new InvalidOperationException($"Event '{eventId}' was not found.");
+        if (!caller.IsAdmin && !@event.IsOwnedBy(caller.OrganizerId))
+            throw new EventOwnershipException(eventId);
     }
 
     private static SeatMapResponse Map(SeatMap seatMap) => new(

@@ -12,13 +12,20 @@ public sealed class EventService(
     IIntegrationEventPublisher integrationEventPublisher,
     TimeProvider timeProvider)
 {
-    public async Task<EventResponse> CreateAsync(CreateEventRequest request, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> CreateAsync(
+        CreateEventRequest request,
+        CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
         var venue = await venueRepository.GetByIdAsync(request.VenueId, cancellationToken)
             ?? throw new InvalidOperationException($"Venue '{request.VenueId}' was not found.");
 
         var schedule = EventSchedule.Create(request.StartsAt, request.EndsAt);
-        var @event = Event.Create(request.Title, request.Description, request.Artist, venue.Id, schedule);
+        // Ownership is taken from the token, never from the request — an OrganizerId field on
+        // CreateEventRequest would just be the seat/amount tampering of Commit 3 wearing a
+        // different hat.
+        var @event = Event.Create(
+            request.Title, request.Description, request.Artist, venue.Id, schedule, caller.OrganizerId);
 
         eventRepository.Add(@event);
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -38,9 +45,9 @@ public sealed class EventService(
         return events.Select(Map).ToList();
     }
 
-    public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
-        var @event = await GetRequiredAsync(id, cancellationToken);
+        var @event = await GetOwnedAsync(id, caller, cancellationToken);
         var schedule = EventSchedule.Create(request.StartsAt, request.EndsAt);
 
         @event.Reschedule(schedule, timeProvider.GetUtcNow());
@@ -67,9 +74,9 @@ public sealed class EventService(
     /// Cross-aggregate invariant lives here, not inside Event or SeatMap: a price tier's
     /// SectionId must correspond to a real Section in this event's own SeatMap.
     /// </summary>
-    public async Task<EventResponse> AddPriceTierAsync(Guid id, AddPriceTierRequest request, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> AddPriceTierAsync(Guid id, AddPriceTierRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
-        var @event = await GetRequiredAsync(id, cancellationToken);
+        var @event = await GetOwnedAsync(id, caller, cancellationToken);
 
         var seatMap = await seatMapRepository.GetByEventIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException($"Event '{id}' does not have a seat map yet.");
@@ -85,9 +92,9 @@ public sealed class EventService(
         return Map(@event);
     }
 
-    public async Task<EventResponse> PublishAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> PublishAsync(Guid id, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
-        var @event = await GetRequiredAsync(id, cancellationToken);
+        var @event = await GetOwnedAsync(id, caller, cancellationToken);
         var now = timeProvider.GetUtcNow();
 
         @event.Publish(now);
@@ -109,7 +116,7 @@ public sealed class EventService(
             new CatalogEventPublished(
                 @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
                 @event.Artist, venue.Name, venue.Address.City,
-                @event.AggregateVersion, now),
+                @event.AggregateVersion, now, @event.OrganizerId),
             cancellationToken);
 
         await PublishSalePolicyAsync(@event, now, cancellationToken);
@@ -119,9 +126,9 @@ public sealed class EventService(
         return Map(@event);
     }
 
-    public async Task<EventResponse> CancelAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> CancelAsync(Guid id, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
-        var @event = await GetRequiredAsync(id, cancellationToken);
+        var @event = await GetOwnedAsync(id, caller, cancellationToken);
 
         @event.Cancel();
 
@@ -175,7 +182,7 @@ public sealed class EventService(
                     new CatalogEventPublished(
                         @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
                         @event.Artist, venue.Name, venue.Address.City,
-                        @event.AggregateVersion, now),
+                        @event.AggregateVersion, now, @event.OrganizerId),
                     cancellationToken);
             }
 
@@ -191,6 +198,20 @@ public sealed class EventService(
     private async Task<Event> GetRequiredAsync(Guid id, CancellationToken cancellationToken) =>
         await eventRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new InvalidOperationException($"Event '{id}' was not found.");
+
+    /// <summary>
+    /// Loads an event the caller is allowed to mutate (Commit 14). Admin passes unconditionally;
+    /// an organizer must own it, and a legacy event with no owner belongs to nobody — see
+    /// <see cref="Event.IsOwnedBy"/> for why that is not treated as "belongs to everybody".
+    /// </summary>
+    private async Task<Event> GetOwnedAsync(Guid id, CatalogCaller caller, CancellationToken cancellationToken)
+    {
+        var @event = await GetRequiredAsync(id, cancellationToken);
+        if (!caller.IsAdmin && !@event.IsOwnedBy(caller.OrganizerId))
+            throw new EventOwnershipException(id);
+
+        return @event;
+    }
 
     private Task PublishSalePolicyAsync(Event @event, DateTimeOffset now, CancellationToken cancellationToken) =>
         integrationEventPublisher.PublishAsync(

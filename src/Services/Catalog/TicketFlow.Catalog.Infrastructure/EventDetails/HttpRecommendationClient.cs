@@ -4,7 +4,12 @@ using TicketFlow.Catalog.Application.EventDetails;
 
 namespace TicketFlow.Catalog.Infrastructure.EventDetails;
 
-/// <summary>Same degrade-at-the-boundary reasoning as HttpSeatAvailabilityClient.</summary>
+/// <summary>
+/// Same degrade-at-the-boundary reasoning as HttpSeatAvailabilityClient. Commit 14: calls the
+/// service-principal route rather than the public one — this is an on-behalf-of lookup for a user
+/// Catalog has already identified from its own verified token, and the public route deliberately
+/// no longer accepts a user id from anyone.
+/// </summary>
 public sealed class HttpRecommendationClient(HttpClient httpClient, ILogger<HttpRecommendationClient> logger)
     : IRecommendationClient
 {
@@ -12,7 +17,7 @@ public sealed class HttpRecommendationClient(HttpClient httpClient, ILogger<Http
     {
         try
         {
-            var recommendations = await httpClient.GetFromJsonAsync<List<RecommendedEventDto>>($"/recommendations?userId={userId}", cancellationToken);
+            var recommendations = await httpClient.GetFromJsonAsync<List<RecommendedEventDto>>($"/internal/recommendations/{userId}", cancellationToken);
             return recommendations?
                 .Select(r => new RecommendedEventSummary(r.EventId, r.Title, r.Artist, r.VenueName, r.City, r.StartsAt))
                 .ToList() ?? [];

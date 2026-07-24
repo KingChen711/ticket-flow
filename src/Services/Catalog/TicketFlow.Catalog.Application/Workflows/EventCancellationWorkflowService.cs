@@ -16,14 +16,21 @@ public sealed class EventCancellationWorkflowService(
     public async Task<EventCancellationWorkflowResponse> StartAsync(
         Guid eventId,
         string? reason,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
+        // Ownership is checked before the already-completed shortcut below: replying "already
+        // done" to an organizer who never owned this event still tells them it exists and was
+        // cancelled, and cancelling is the single most destructive thing this API does — it closes
+        // sale and voids every unconfirmed hold (Commit 3).
+        var @event = await events.GetByIdAsync(eventId, cancellationToken)
+            ?? throw new InvalidOperationException($"Event '{eventId}' was not found.");
+        if (!caller.IsAdmin && !@event.IsOwnedBy(caller.OrganizerId))
+            throw new EventOwnershipException(eventId);
+
         var existing = await workflows.GetByEventIdAsync(eventId, cancellationToken);
         if (existing?.Status == EventCancellationStatus.Completed)
             return Map(existing);
-
-        var @event = await events.GetByIdAsync(eventId, cancellationToken)
-            ?? throw new InvalidOperationException($"Event '{eventId}' was not found.");
         var now = timeProvider.GetUtcNow();
         var workflow = existing ?? EventCancellationWorkflow.Start(
             eventId,

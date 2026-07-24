@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Microsoft.AspNetCore.Authorization;
 using TicketFlow.Contracts.Reservation;
 using ApplicationReservationService = TicketFlow.Reservation.Application.Seats.ReservationService;
 
@@ -11,6 +12,17 @@ namespace TicketFlow.Reservation.Api.Services;
 /// ReservationService (from the .proto's own "service ReservationService") — both live in
 /// scope here, so the bare name would be ambiguous.
 /// </summary>
+/// <remarks>
+/// Commit 14: the whole gRPC surface requires a service principal. It was unauthenticated, and
+/// <c>GetHoldQuote</c> takes <c>OwnerUserId</c> as a request field — so anyone able to reach the
+/// gRPC port could read any customer's hold quote (exact seats, amount, expiry) just by naming
+/// them. Taking the owner from a caller-supplied field is still correct HERE and only here,
+/// because the caller is Ordering, which read that id from its own verified token before making
+/// the call; what was missing was any proof that the caller really is Ordering. That is what the
+/// service principal supplies, and it is why this policy must not accept a human token: an
+/// on-behalf-of parameter is only safe when the caller cannot be the person it names.
+/// </remarks>
+[Authorize(Policy = "RequireServicePrincipal")]
 public sealed class ReservationServiceImpl(ApplicationReservationService reservationService)
     : ReservationService.ReservationServiceBase
 {

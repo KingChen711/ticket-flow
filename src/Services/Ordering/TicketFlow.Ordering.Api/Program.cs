@@ -43,10 +43,18 @@ builder.Services.AddHostedService<OrderDispatchRelay>();
 builder.Services.AddScoped<IHoldQuoteProvider, GrpcHoldQuoteProvider>();
 builder.Services.AddScoped<ISaleRecordedPublisher, KafkaSaleRecordedPublisher>();
 
+// Commit 14: Reservation's gRPC surface now requires a service principal, so this client carries
+// a client-credentials token. AddCallCredentials rather than a DelegatingHandler because gRPC
+// metadata is where the callee reads the bearer token from.
+builder.Services.AddServiceTokenHandler();
 builder.Services.AddGrpcClient<ReservationService.ReservationServiceClient>(options =>
 {
     var address = builder.Configuration["Reservation:GrpcAddress"] ?? "http://localhost:9003";
     options.Address = new Uri(address);
+}).AddCallCredentials(async (context, metadata, serviceProvider) =>
+{
+    var tokens = serviceProvider.GetRequiredService<IServiceTokenProvider>();
+    metadata.Add("Authorization", $"Bearer {await tokens.GetTokenAsync(context.CancellationToken)}");
 });
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "ordering", cfg =>

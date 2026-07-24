@@ -241,6 +241,30 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                     b.ToTable("outbox_state", "ticketing");
                 });
 
+            modelBuilder.Entity("TicketFlow.Ticketing.Domain.Tickets.EventOwner", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<Guid>("OrganizerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("organizer_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("EventId")
+                        .HasName("pk_event_owners");
+
+                    b.ToTable("event_owners", "ticketing");
+                });
+
             modelBuilder.Entity("TicketFlow.Ticketing.Domain.Tickets.Ticket", b =>
                 {
                     b.Property<Guid>("Id")

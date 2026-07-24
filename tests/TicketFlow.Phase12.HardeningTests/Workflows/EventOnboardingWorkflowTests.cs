@@ -9,6 +9,13 @@ namespace TicketFlow.Phase12.HardeningTests.Workflows;
 
 public sealed class EventOnboardingWorkflowTests
 {
+    /// <summary>
+    /// Commit 14 gave onboarding a durable owner, so every start needs a caller. A fixed organizer
+    /// keeps these tests about workflow resume/compensation, which is what they exist to prove.
+    /// </summary>
+    private static readonly CatalogCaller Organizer =
+        new(Guid.Parse("11111111-1111-1111-1111-111111111111"), IsAdmin: false);
+
     [Theory]
     [InlineData(EventOnboardingStep.Venue)]
     [InlineData(EventOnboardingStep.Event)]
@@ -22,7 +29,7 @@ public sealed class EventOnboardingWorkflowTests
         var fixture = new Fixture(failAt);
         var request = Request(Guid.NewGuid().ToString("N"));
 
-        var failed = await fixture.Service.StartAsync(request);
+        var failed = await fixture.Service.StartAsync(request, Organizer);
         Assert.Equal("Failed", failed.Status);
         Assert.Equal(failAt.ToString(), failed.FailedStep);
 
@@ -30,7 +37,7 @@ public sealed class EventOnboardingWorkflowTests
         Assert.Equal("Completed", completed.Status);
         Assert.Equal("Published", completed.LastCompletedStep);
 
-        var replay = await fixture.Service.StartAsync(request);
+        var replay = await fixture.Service.StartAsync(request, Organizer);
         Assert.Equal(completed.WorkflowId, replay.WorkflowId);
         Assert.Equal(completed.EventId, replay.EventId);
         Assert.Single(fixture.Venues.Items);
@@ -47,11 +54,11 @@ public sealed class EventOnboardingWorkflowTests
     {
         var fixture = new Fixture(null);
         var request = Request("stable-key");
-        var completed = await fixture.Service.StartAsync(request);
+        var completed = await fixture.Service.StartAsync(request, Organizer);
         Assert.Equal("Completed", completed.Status);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            fixture.Service.StartAsync(request with { Title = "A different event" }));
+            fixture.Service.StartAsync(request with { Title = "A different event" }, Organizer));
         Assert.Contains("different request", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Single(fixture.Events.Items);
     }
@@ -61,7 +68,7 @@ public sealed class EventOnboardingWorkflowTests
     public async Task Failed_draft_can_be_explicitly_compensated_including_uncertain_inventory()
     {
         var fixture = new Fixture(EventOnboardingStep.Published);
-        var failed = await fixture.Service.StartAsync(Request("cleanup-key"));
+        var failed = await fixture.Service.StartAsync(Request("cleanup-key"), Organizer);
         Assert.Equal("ReservationInventory", failed.LastCompletedStep);
         Assert.Single(fixture.Reservation.ProvisionedEvents);
 
@@ -96,7 +103,7 @@ public sealed class EventOnboardingWorkflowTests
             new ThrowFirstConcurrencyUnitOfWork(),
             TimeProvider.System);
 
-        var completed = await service.StartAsync(Request("racing-creation-key"));
+        var completed = await service.StartAsync(Request("racing-creation-key"), Organizer);
 
         Assert.Equal("Completed", completed.Status);
         Assert.Single(events.Items);
@@ -123,7 +130,7 @@ public sealed class EventOnboardingWorkflowTests
             new InMemoryCatalogUnitOfWork(),
             TimeProvider.System);
 
-        var failed = await service.StartAsync(Request("lost-inventory-response"));
+        var failed = await service.StartAsync(Request("lost-inventory-response"), Organizer);
         Assert.Equal("Failed", failed.Status);
         Assert.Equal("ReservationInventory", failed.FailedStep);
 
@@ -139,7 +146,7 @@ public sealed class EventOnboardingWorkflowTests
     public async Task Compensation_refuses_published_event_before_deleting_reservation_inventory()
     {
         var fixture = new Fixture(EventOnboardingStep.Published);
-        var failed = await fixture.Service.StartAsync(Request("publish-compensation-race"));
+        var failed = await fixture.Service.StartAsync(Request("publish-compensation-race"), Organizer);
         var @event = Assert.Single(fixture.Events.Items);
         @event.Publish(DateTimeOffset.UtcNow);
 

@@ -30,10 +30,24 @@ public static class MediaEndpoints
         group.MapGet("/{**key}", GetPosterAsync);
     }
 
+    /// <summary>
+    /// Matches ImageLimits.MaxBytes in the Lambda. Enforced here as well, not instead: the gateway
+    /// is where the bytes are buffered into memory and base64-expanded by a third, so "the Lambda
+    /// will reject it" is too late — the cost is already paid on this side.
+    /// </summary>
+    private const long MaxUploadBytes = 8 * 1024 * 1024;
+
     private static async Task<IResult> UploadPosterAsync(HttpRequest request, IAmazonLambda lambda, CancellationToken ct)
     {
+        // Content-Length is a fast reject when it is present and honest; the bounded read below is
+        // what actually enforces the limit, because a chunked request carries no length at all and
+        // a lying one is exactly what an attacker sends.
+        if (request.ContentLength > MaxUploadBytes)
+            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
         using var buffer = new MemoryStream();
-        await request.Body.CopyToAsync(buffer, ct);
+        if (!await CopyBoundedAsync(request.Body, buffer, MaxUploadBytes, ct))
+            return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
         var payload = JsonSerializer.Serialize(new { base64Content = Convert.ToBase64String(buffer.ToArray()) }, JsonOptions);
         var invokeResponse = await lambda.InvokeAsync(new InvokeRequest
@@ -83,6 +97,35 @@ public static class MediaEndpoints
 
         var bytes = Convert.FromBase64String(result.Base64Content!);
         return Results.File(bytes, result.ContentType ?? "application/octet-stream");
+    }
+
+    /// <summary>
+    /// Copies at most <paramref name="limit"/> bytes and reports whether the source stayed within
+    /// it. Reads one byte past the limit on purpose — that is the only way to distinguish "exactly
+    /// at the limit" from "more is coming", and stopping at the limit would silently truncate an
+    /// oversized upload into a valid-looking one.
+    /// </summary>
+    private static async Task<bool> CopyBoundedAsync(
+        Stream source,
+        Stream destination,
+        long limit,
+        CancellationToken cancellationToken)
+    {
+        var chunk = new byte[81920];
+        long total = 0;
+
+        while (true)
+        {
+            var read = await source.ReadAsync(chunk, cancellationToken);
+            if (read == 0)
+                return true;
+
+            total += read;
+            if (total > limit)
+                return false;
+
+            await destination.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
+        }
     }
 
     private sealed record UploadPosterResult(bool Accepted, string? Key, string? ThumbnailKey, string? Error);

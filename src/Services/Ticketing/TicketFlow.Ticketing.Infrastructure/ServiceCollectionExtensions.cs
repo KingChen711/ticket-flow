@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Minio;
 using TicketFlow.Ticketing.Application.Abstractions;
+using TicketFlow.Ticketing.Application.Tickets;
 
 namespace TicketFlow.Ticketing.Infrastructure;
 
@@ -20,6 +21,8 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<ITicketIssuanceJobRepository, TicketIssuanceJobRepository>();
+        services.AddScoped<IEventOwnerRepository, EventOwnerRepository>();
+        services.AddScoped<GateAccessPolicy>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<ITicketPdfRenderer, LambdaTicketRenderClient>();
 

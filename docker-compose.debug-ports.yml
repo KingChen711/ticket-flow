@@ -1,0 +1,59 @@
+# Opt-in host port mappings for debugging a single service directly.
+#
+# The base compose file deliberately publishes nothing but the gateway (Phase 12 Commit 14): with
+# every service on localhost:800x, "the gateway enforces authorization" was only true for callers
+# who chose to go through it, and Reservation's inventory endpoints in particular were reachable
+# with no credential at all. Services still reach each other over the Docker network by service
+# DNS — that never depended on host publishing.
+#
+# This overlay is for the times you genuinely need to curl one service directly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.debug-ports.yml up -d
+#
+# It is not a "dev mode" to leave switched on. Anything reachable here is reachable without the
+# gateway's authorization policies in front of it, so bring it up for the debugging session and
+# drop back to the plain file afterwards.
+services:
+  catalog:
+    ports:
+      - "8002:8002"
+
+  identity:
+    ports:
+      - "8001:8001"
+
+  reservation:
+    ports:
+      - "8003:8003"
+      # Container port stays 9003; gRPC clients inside the network use reservation:9003 either
+      # way. Remapped on the host away from a Windows dynamic TCP port-exclusion range (see
+      # MinIO's port comment in docker-compose.infra.yml) that blocked the bind outright.
+      - "19003:9003"
+
+  ordering:
+    ports:
+      - "8004:8004"
+
+  notification:
+    ports:
+      - "8005:8005"
+
+  search:
+    ports:
+      - "8006:8006"
+
+  payment:
+    ports:
+      - "8007:8007"
+
+  ticketing:
+    ports:
+      - "8008:8008"
+
+  recommendation:
+    ports:
+      - "8009:8009"
+
+  analytics:
+    ports:
+      - "8010:8010"

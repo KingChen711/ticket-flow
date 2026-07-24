@@ -28,6 +28,7 @@ public sealed class EventOnboardingWorkflowService(
 {
     public async Task<EventOnboardingWorkflowResponse> StartAsync(
         StartEventOnboardingRequest request,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var normalized = Normalize(request);
@@ -58,7 +59,8 @@ public sealed class EventOnboardingWorkflowService(
                     .Select(section => new OnboardingSectionPlan(
                         section.Name, section.Capacity, section.Price, section.Currency!))
                     .ToList(),
-                timeProvider.GetUtcNow());
+                timeProvider.GetUtcNow(),
+                caller.OrganizerId);
 
             workflows.Add(workflow);
             try
@@ -253,7 +255,8 @@ public sealed class EventOnboardingWorkflowService(
                             workflow.EventDescription,
                             workflow.EventArtist,
                             workflow.VenueId,
-                            EventSchedule.Create(workflow.StartsAt, workflow.EndsAt)));
+                            EventSchedule.Create(workflow.StartsAt, workflow.EndsAt),
+                            workflow.OrganizerId));
                     }
 
                     break;
@@ -347,7 +350,8 @@ public sealed class EventOnboardingWorkflowService(
                 venue.Name,
                 venue.Address.City,
                 @event.AggregateVersion,
-                now),
+                now,
+                @event.OrganizerId),
             cancellationToken);
 
         await publisher.PublishAsync(

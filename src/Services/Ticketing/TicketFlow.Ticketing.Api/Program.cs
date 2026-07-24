@@ -42,6 +42,9 @@ builder.Services.AddTicketFlowMessaging(
         // Commit 10: a refunded order's tickets must stop working. Before this nothing ever
         // withdrew one — the money went back and the seat was given away too.
         busConfigurator.AddConsumer<RevokeTicketsConsumer>();
+
+        // Commit 14: keeps the event -> organizer projection a gate scan is authorized against.
+        busConfigurator.AddConsumer<CatalogEventPublishedConsumer>();
     },
     configureRabbitMq: (context, rabbitConfigurator) =>
     {
