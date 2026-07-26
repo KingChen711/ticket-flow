@@ -488,11 +488,21 @@ Cả ba giờ dùng `RequireServicePrincipal` (realm role `service`, client `tic
 
 **Gate đã chạy:** `pnpm run typecheck`, ESLint toàn workspace và production build của cả 3 Next.js app đều xanh; contract test web **11/11**. `Phase12Harness` xanh **194/194** (189 → 194, thêm 5 case timezone/offset/order sequence/availability degradation/public hub); regression `TicketFlow.slnx` xanh **88/88**. Playwright CLI đã chạy login Keycloak thật, session-token leak check, search pagination/timezone, tamper + conflict + double-submit, injected stale order sequence, live invalidation/polling resync, organizer Asia/Saigon→UTC và dependency degradation. Case flake cũ `A_manual_review_order_must_stop_arming_further_deadlines` tái xuất đúng **1** lần ở một full run (193/194), sau đó xanh **4/4** khi chạy riêng và full rerun xanh 194/194; Commit 15 không chạm deadline saga, nên giữ lại bằng chứng thay vì giấu lần chạy đỏ.
 
-### Commit 16 — `fix(scanner): multi-zone routing, event/gate context & camera lifecycle`
+### Commit 16 — `fix(scanner): multi-zone routing, event/gate context & camera lifecycle` ✅ DONE
 - API/assets/manifest dùng `/scanner` base path/scope/start URL nhất quán; customer shell rewrite đúng BFF scanner route.
 - Scanner gửi expected event/gate context, backend đối chiếu assignment; không cho organizer bất kỳ scan ticket của event khác.
 - Chặn camera decode reentrancy, stop track/close `ImageBitmap` khi unmount/tab switch; xử lý offline rõ — nếu chưa có service worker thì không quảng cáo offline validation.
 - **Verify:** production build multi-zone qua customer shell, manifest install path, wrong-event QR, parallel scan và mount/unmount camera loop không leak.
+
+**Kết quả thực tế (2026-07-26).**
+
+**Multi-zone không còn bỏ rơi BFF/PWA ở root.** Customer shell map `/scanner/api/*` về route BFF gốc `/api/*` của scanner trước catch-all page rewrite; scanner standalone cũng rewrite public mount này về BFF của chính nó. Vì vậy client luôn gọi `/scanner/api/validate`, không có trường hợp qua shell rơi vào API không tồn tại của customer-web. Manifest cũ ở `public/` đã bỏ; route handler thực sự nằm tại `/scanner/manifest.webmanifest`, trả `start_url: /scanner`, `scope: /scanner/` và icon `/scanner-static/icon.svg`. Production shell + scanner đã chạy thật: manifest và icon đều `200`; POST BFF không session trả `401 Reauthentication required` (đúng BFF scanner, không phải `404` từ shell). Playwright mở route qua shell cũng đọc đúng manifest này.
+
+**Một scan luôn mang event đã chọn và event là authorization boundary.** Trước khi bật camera/upload, scanner bắt buộc chọn UUID event và nhãn gate; BFF validate UUID rồi chuyển `eventId` sang Ticketing. Gate label chỉ là context hiển thị cho nhân viên: codebase hiện không có entity/nguồn dữ liệu assignment theo từng cửa, nên không giả vờ một chuỗi browser là policy. Assignment có thẩm quyền là projection `EventOwner` từ Commit 14; Ticketing đối chiếu organizer với event đó, rồi đối chiếu event của ticket trong cả fast path lẫn `UPDATE ... WHERE` atomic. Ticket legacy không có `EventId` giờ fail-closed `WrongEvent` cho tới khi reconcile, thay vì được vào bất kỳ event nào organizer sở hữu.
+
+**Camera không còn có hai owner cùng lúc.** `startingCamera`, `decodeInFlight` và `submitInFlight` chặn double click/decode/POST reentrancy. Cleanup dừng toàn bộ media track, huỷ animation frame và tách `video.srcObject`; tab hidden cũng áp cùng cleanup. Nếu permission trả về sau unmount/tab switch, stream vừa nhận bị stop ngay. Upload đóng `ImageBitmap` trong `finally`, kể cả native detector/canvas lỗi. UI ghi rõ chỉ có online validation và báo offline trước khi POST; không có service worker hay tuyên bố offline validation.
+
+**Gate đã chạy:** `pnpm run typecheck`, ESLint toàn workspace, web contract tests **11/11**, và production build cả 3 Next.js app đều xanh (scanner liệt kê `/scanner` + `/scanner/manifest.webmanifest`). Hardening gate `ConcurrentCheckInTests` xanh **5/5** với Postgres thật: wrong-event, ticket legacy không event, revoked ticket, 2 scanner và 100 scanner song song; đúng một request `Valid`. Regression `TicketFlow.slnx` xanh **88/88**. Browser production check qua customer shell xác nhận manifest/icon/BFF route như trên; camera hardware không được giả lập ở browser gate vì phiên scanner tại máy này không có organizer session, nhưng lifecycle ownership được đóng ở mọi unmount/tab-hidden/late-permission path và cần lặp lại trong E2E authenticated scanner của Commit 18.
 
 ---
 

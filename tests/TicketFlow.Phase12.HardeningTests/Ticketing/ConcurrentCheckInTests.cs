@@ -64,6 +64,23 @@ public sealed class ConcurrentCheckInTests(HardeningEnvironmentFixture environme
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task An_eventless_legacy_ticket_must_be_refused_until_reconciled()
+    {
+        var (connectionString, ticket) = await SeedTicketAsync(eventId: null);
+
+        // There is no durable evidence that this old ticket belongs at the selected event. Treat
+        // it as a migration/reconciliation case, never as a pass for every gate an organizer owns.
+        var result = await ScanLikeProductionEndpointAsync(
+            connectionString, ticket.QrPayload, Guid.NewGuid(), new AsyncRendezvous(1));
+
+        Assert.Equal("WrongEvent", result);
+
+        await using var context = CreateContext(connectionString);
+        Assert.Null((await context.Tickets.SingleAsync(t => t.Id == ticket.Id)).CheckedInAt);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task A_revoked_ticket_must_never_be_admitted()
     {
         var eventId = Guid.NewGuid();
@@ -81,7 +98,7 @@ public sealed class ConcurrentCheckInTests(HardeningEnvironmentFixture environme
         Assert.Null(stored.CheckedInAt);
     }
 
-    private async Task<(string ConnectionString, Ticket Ticket)> SeedTicketAsync(Guid eventId, bool revoke = false)
+    private async Task<(string ConnectionString, Ticket Ticket)> SeedTicketAsync(Guid? eventId, bool revoke = false)
     {
         var connectionString = await CreateIsolatedDatabaseAsync();
         await using (var schemaContext = CreateContext(connectionString))

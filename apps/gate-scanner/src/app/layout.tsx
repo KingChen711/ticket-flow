@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "TicketFlow — Gate Scanner",
   description: "Scan ticket QR codes to check attendees in at the gate",
-  manifest: "/manifest.json",
+  manifest: "/scanner/manifest.webmanifest",
 };
 
 export const viewport = {

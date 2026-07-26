@@ -32,9 +32,9 @@ public sealed class TicketRepository(TicketingDbContext dbContext) : ITicketRepo
             .Where(t => t.Id == ticketId)
             .Where(t => t.CheckedInAt == null)
             .Where(t => t.RevokedAt == null)
-            // Tickets issued before Commit 10 carry no EventId; refusing every one of them at the
-            // gate would be worse than not checking, so the guard applies only once it is known.
-            .Where(t => t.EventId == null || t.EventId == expectedEventId)
+            // A legacy ticket with no EventId cannot prove it belongs at this gate. The domain
+            // fast path returns WrongEvent and this database guard must make the same decision.
+            .Where(t => t.EventId == expectedEventId)
             .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.CheckedInAt, now), cancellationToken);
 
         return claimed == 1;

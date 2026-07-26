@@ -29,6 +29,10 @@ const nextConfig: NextConfig = {
       { source: "/organizer/:path*", destination: `${organizerZoneUrl}/organizer/:path*` },
       { source: "/organizer", destination: `${organizerZoneUrl}/organizer` },
       { source: "/scanner-static/:path*", destination: `${scannerZoneUrl}/scanner-static/:path*` },
+      // The scanner is mounted below /scanner, but its BFF deliberately remains an /api route in
+      // the independently deployable zone.  Strip only the shell mount here: forwarding
+      // /scanner/api/validate unchanged would make the scanner look for a non-existent route.
+      { source: "/scanner/api/:path*", destination: `${scannerZoneUrl}/api/:path*` },
       { source: "/scanner/:path*", destination: `${scannerZoneUrl}/scanner/:path*` },
       { source: "/scanner", destination: `${scannerZoneUrl}/scanner` },
     ];

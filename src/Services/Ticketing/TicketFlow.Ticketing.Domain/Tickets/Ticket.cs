@@ -86,9 +86,10 @@ public sealed class Ticket : Entity<Guid>
         if (RevokedAt is not null)
             return new CheckInResult(CheckInOutcome.Revoked, Id, CheckedInAt);
 
-        // Only enforced once a ticket carries its event. Tickets issued before Commit 10 have
-        // none, and refusing every one of them at the gate would be worse than not checking.
-        if (EventId is not null && EventId != expectedEventId)
+        // An event-less legacy ticket has no evidence that it belongs at this gate. Letting it
+        // through at any event owned by the caller turns a migration gap into a cross-event
+        // admission bypass, so the scanner fails closed until it can be reconciled.
+        if (EventId != expectedEventId)
             return new CheckInResult(CheckInOutcome.WrongEvent, Id, CheckedInAt);
 
         return CheckedInAt is not null
