@@ -1,5 +1,10 @@
 # Runbook — đơn hàng kẹt, DLQ và redrive
 
+> Phase 12 release evidence: Grafana now exposes payment reconciliation backlog,
+> newly unknown/manual-review operations and saga deadline fires. CI provisions alerts
+> `phase12-payment-unknown`, `phase12-saga-manual-review` and `phase12-saga-deadline`; the complete
+> failure bundle and seed procedure is in [runbook-phase-12-release-gates.md](runbook-phase-12-release-gates.md).
+
 Viết ở Phase 12 Commit 9. Dành cho người trực khi một đơn hàng ngừng chạy tiếp.
 
 Nguyên tắc xuyên suốt: **không có nút "ép hoàn tất" và không có nút "ép huỷ".** Kết quả của một đơn phải đến từ chính các service đã làm việc đó. Mọi thao tác dưới đây chỉ làm một việc — bảo hệ thống **hỏi lại**.

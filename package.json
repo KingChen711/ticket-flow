@@ -9,9 +9,12 @@
     "build": "pnpm -r run build",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm --filter customer-web exec tsc --noEmit && pnpm --filter organizer-dashboard exec tsc --noEmit && pnpm --filter gate-scanner exec tsc --noEmit",
-    "test:web": "tsx --test packages/http-client/src/index.test.ts packages/types/src/runtime.test.ts packages/web-auth/src/index.test.ts"
+    "test:web": "tsx --test packages/http-client/src/index.test.ts packages/types/src/runtime.test.ts packages/web-auth/src/index.test.ts",
+    "test:e2e:frontend": "playwright test --config tests/e2e/playwright.config.ts --project=frontend-contract",
+    "test:e2e:full": "playwright test --config tests/e2e/playwright.config.ts --project=full-stack"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.1",
     "tsx": "^4.20.6"
   }
 }

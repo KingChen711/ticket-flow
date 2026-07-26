@@ -22,7 +22,7 @@ public interface ICheckoutOperationStore
         int maxCount,
         CancellationToken cancellationToken = default);
 
-    /// <summary>True when the exception is Postgres refusing a duplicate key, whatever wrapper Marten put around it.</summary>
+    /// <summary>True when Marten/Postgres is refusing a duplicate key, whatever wrapper exposed it.</summary>
     bool IsUniqueViolation(Exception exception);
 
     /// <summary>

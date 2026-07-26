@@ -69,7 +69,9 @@ builder.Services.AddHostedService<ReservationCacheReconciliationWorker>();
 // longer trips ASP.NET Core's DI validation at Build() the way it would have in Commit 3/4.
 builder.Services.AddReservationInfrastructure(builder.Configuration);
 builder.Services.AddDbContextReadinessCheck<ReservationDbContext>("postgres");
-builder.Services.AddReservationApplication();
+var reservationOptions = new ReservationOptions();
+builder.Configuration.GetSection("Reservation").Bind(reservationOptions);
+builder.Services.AddReservationApplication(reservationOptions);
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cfg =>
 {

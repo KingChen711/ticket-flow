@@ -71,6 +71,7 @@ public sealed class CheckoutDurabilityIntegrationTests(HardeningEnvironmentFixtu
         var error = await Record.ExceptionAsync(() => second.SaveChangesAsync());
 
         Assert.NotNull(error);
+        Assert.True(new MartenCheckoutOperationStore(second).IsUniqueViolation(error));
         // Store() would have silently repointed the key at the loser's order. That is the bug this
         // whole record exists to prevent, so the distinction has to hold against real Postgres.
         await using var query = _store.QuerySession();

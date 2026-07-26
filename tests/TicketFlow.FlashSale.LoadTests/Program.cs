@@ -5,7 +5,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClickHouse.Client.ADO;
 using NBomber.CSharp;
+using Npgsql;
 
 // Phase 11's full-stack flash-sale evidence.  Unlike Reservation.LoadTests, this deliberately
 // crosses the public gateway and lets PurchaseSaga drive confirmation, payment and ticketing.
@@ -38,8 +40,9 @@ Console.WriteLine($"Shape: {settings.VirtualUsers} virtual users competing for {
 // Passwords are required from the environment and are never logged or stored in source.
 var organizerToken = await GetAccessTokenAsync(keycloak, settings.OrganizerUsername, settings.OrganizerPassword);
 var customerToken = await GetAccessTokenAsync(keycloak, settings.CustomerUsername, settings.CustomerPassword);
+var serviceToken = await GetClientCredentialsTokenAsync(keycloak, settings.InternalClientId, settings.InternalClientSecret);
 
-var flashSale = await CreateFlashSaleAsync(gateway, organizerToken, settings);
+var flashSale = await CreateFlashSaleAsync(gateway, organizerToken, serviceToken, customerToken, settings);
 Console.WriteLine($"Provisioned event {flashSale.EventId} with {flashSale.SeatIds.Count} seats.");
 
 var acceptedOrderIds = new ConcurrentBag<Guid>();
@@ -73,8 +76,17 @@ var scenario = Scenario.Create("flash_sale_hold_then_order", async _ =>
             // its own status code in the generated report.
             if (holdResponse.StatusCode == HttpStatusCode.Conflict)
             {
-                Interlocked.Increment(ref soldOut);
-                return Response.Ok(statusCode: "409_sold_out");
+                var body = await ReadBodyAsync(holdResponse);
+                var rejection = JsonSerializer.Deserialize<HoldResponse>(body, JsonOptionsHolder.Value);
+                if (string.Equals(rejection?.Reason, "SeatsUnavailable", StringComparison.OrdinalIgnoreCase))
+                {
+                    Interlocked.Increment(ref soldOut);
+                    return Response.Ok(statusCode: "409_sold_out");
+                }
+
+                Interlocked.Increment(ref unexpected);
+                unexpectedFailures.Enqueue($"hold: HTTP 409 {rejection?.Reason ?? "unknown"}; {body}");
+                return Response.Fail(statusCode: "hold_409_unexpected");
             }
 
             if (!holdResponse.IsSuccessStatusCode)
@@ -101,12 +113,9 @@ var scenario = Scenario.Create("flash_sale_hold_then_order", async _ =>
                 "/ordering/orders",
                 new
                 {
-                    catalogEventId = flashSale.EventId,
-                    seatIds = new[] { seatId },
-                    totalAmount = 100_000m,
-                    currency = "VND",
                     holdId,
-                    paymentMethod = "card"
+                    paymentMethod = "credit-card",
+                    idempotencyKey = Guid.NewGuid()
                 },
                 customerToken,
                 CancellationToken.None);
@@ -159,6 +168,16 @@ var confirmed = CountStatus(statusCounts, "Confirmed");
 var cancelled = CountStatus(statusCounts, "Cancelled");
 var pendingOrMissing = accepted.Length - confirmed - cancelled;
 var seatsSold = finalAvailability.Seats.Count(seat => string.Equals(seat.Status, "Sold", StringComparison.OrdinalIgnoreCase));
+var confirmedOrderIds = finalStatuses
+    .Where(pair => string.Equals(pair.Value, "Confirmed", StringComparison.OrdinalIgnoreCase))
+    .Select(pair => pair.Key)
+    .OrderBy(id => id)
+    .ToArray();
+var businessInvariant = await WaitForBusinessInvariantAsync(
+    flashSale.EventId,
+    confirmedOrderIds,
+    settings,
+    TimeSpan.FromMinutes(2));
 
 // The normal happy-path result is exactly N confirmed orders.  More than N would prove an
 // oversell defect; fewer or non-terminal orders prove the full stack did not settle cleanly and
@@ -170,7 +189,8 @@ var passed = attempts == settings.VirtualUsers
              && cancelled == 0
              && pendingOrMissing == 0
              && seatsSold == settings.SeatCount
-             && seatsSold <= settings.SeatCount;
+             && seatsSold <= settings.SeatCount
+             && businessInvariant.Passed;
 
 var summary = new FlashSaleSummary(
     DateTimeOffset.UtcNow,
@@ -189,6 +209,7 @@ var summary = new FlashSaleSummary(
     unexpected,
     Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2),
     statusCounts,
+    businessInvariant,
     unexpectedFailures.Take(20).ToArray(),
     passed);
 
@@ -201,6 +222,7 @@ Console.WriteLine($"Orders created         : {ordersCreated}");
 Console.WriteLine($"Confirmed / cancelled  : {confirmed} / {cancelled}");
 Console.WriteLine($"Pending or unavailable : {pendingOrMissing}");
 Console.WriteLine($"Seats sold             : {seatsSold}/{settings.SeatCount}");
+Console.WriteLine($"Business ID reconciliation: {(businessInvariant.Passed ? "PASS" : "FAIL")}");
 Console.WriteLine($"Expected sold-out 409s : {soldOut}");
 Console.WriteLine($"Unexpected failures    : {unexpected}");
 Console.WriteLine($"NBomber report + summary: {settings.ReportDirectory}");
@@ -210,7 +232,12 @@ Console.WriteLine(passed
 
 Environment.ExitCode = passed ? 0 : 1;
 
-static async Task<FlashSaleFixture> CreateFlashSaleAsync(HttpClient gateway, string organizerToken, FlashSaleSettings settings)
+static async Task<FlashSaleFixture> CreateFlashSaleAsync(
+    HttpClient gateway,
+    string organizerToken,
+    string serviceToken,
+    string customerToken,
+    FlashSaleSettings settings)
 {
     var suffix = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
     var venue = await PostAndReadAsync<VenueResponse>(
@@ -254,7 +281,7 @@ static async Task<FlashSaleFixture> CreateFlashSaleAsync(HttpClient gateway, str
         HttpMethod.Post,
         $"/reservation/events/{@event.Id}/inventory",
         new { sections = new[] { new { sectionId = section.Id, sectionName = section.Name, capacity = section.Capacity } } },
-        organizerToken,
+        serviceToken,
         CancellationToken.None);
     await EnsureSuccessAsync(provision, "provision reservation inventory");
 
@@ -266,7 +293,50 @@ static async Task<FlashSaleFixture> CreateFlashSaleAsync(HttpClient gateway, str
     if (availability.Seats.Count != settings.SeatCount)
         throw new InvalidOperationException($"Inventory created {availability.Seats.Count} seats, expected {settings.SeatCount}.");
 
+    await WaitForSalePolicyAsync(gateway, @event.Id, availability.Seats[0].Id, customerToken);
+
     return new FlashSaleFixture(@event.Id, availability.Seats.Select(seat => seat.Id).ToArray());
+}
+
+static async Task WaitForSalePolicyAsync(HttpClient gateway, Guid eventId, Guid seatId, string customerToken)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        using var response = await SendJsonAsync(
+            gateway,
+            HttpMethod.Post,
+            "/reservation/holds",
+            new { eventId, seatIds = new[] { seatId } },
+            customerToken,
+            CancellationToken.None);
+        var body = await response.Content.ReadAsStringAsync();
+        if (response.StatusCode == HttpStatusCode.BadRequest && body.Contains("no sale policy snapshot", StringComparison.Ordinal))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+            continue;
+        }
+
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Sale-policy readiness hold failed: HTTP {(int)response.StatusCode}; {body}");
+
+        var hold = JsonSerializer.Deserialize<HoldResponse>(body, JsonOptionsHolder.Value)
+            ?? throw new InvalidOperationException("Sale-policy readiness hold returned an empty response.");
+        if (!hold.Success || hold.HoldId is not { } holdId)
+            throw new InvalidOperationException("Sale-policy readiness hold did not acquire its probe seat.");
+
+        using var release = await SendJsonAsync(
+            gateway,
+            HttpMethod.Post,
+            $"/reservation/holds/{holdId}/release",
+            new { },
+            customerToken,
+            CancellationToken.None);
+        await EnsureSuccessAsync(release, "release sale-policy readiness hold");
+        return;
+    }
+
+    throw new TimeoutException($"Sale policy for event '{eventId}' did not reach Reservation within 30 seconds.");
 }
 
 static async Task<string> GetAccessTokenAsync(HttpClient keycloak, string username, string password)
@@ -286,6 +356,25 @@ static async Task<string> GetAccessTokenAsync(HttpClient keycloak, string userna
     var token = await ReadJsonAsync<TokenResponse>(response);
     return string.IsNullOrWhiteSpace(token.AccessToken)
         ? throw new InvalidOperationException($"Keycloak returned no access token for '{username}'.")
+        : token.AccessToken;
+}
+
+static async Task<string> GetClientCredentialsTokenAsync(HttpClient keycloak, string clientId, string clientSecret)
+{
+    using var request = new HttpRequestMessage(HttpMethod.Post, "/realms/ticketflow/protocol/openid-connect/token")
+    {
+        Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "client_credentials",
+            ["client_id"] = clientId,
+            ["client_secret"] = clientSecret
+        })
+    };
+    using var response = await keycloak.SendAsync(request);
+    await EnsureSuccessAsync(response, $"obtain service token for '{clientId}'");
+    var token = await ReadJsonAsync<TokenResponse>(response);
+    return string.IsNullOrWhiteSpace(token.AccessToken)
+        ? throw new InvalidOperationException($"Keycloak returned no access token for service client '{clientId}'.")
         : token.AccessToken;
 }
 
@@ -389,6 +478,137 @@ static bool IsTerminal(string status) =>
 static int CountStatus(IReadOnlyDictionary<string, int> statusCounts, string status) =>
     statusCounts.TryGetValue(status, out var count) ? count : 0;
 
+static async Task<BusinessInvariantResult> WaitForBusinessInvariantAsync(
+    Guid eventId,
+    IReadOnlyCollection<Guid> confirmedOrderIds,
+    FlashSaleSettings settings,
+    TimeSpan timeout)
+{
+    var deadline = DateTimeOffset.UtcNow.Add(timeout);
+    BusinessInvariantResult? last = null;
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        try
+        {
+            last = await QueryBusinessInvariantAsync(eventId, confirmedOrderIds, settings);
+            if (last.Passed)
+                return last;
+        }
+        catch (Exception exception)
+        {
+            last = BusinessInvariantResult.Failed(confirmedOrderIds, exception.Message);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(1));
+    }
+
+    return last ?? BusinessInvariantResult.Failed(confirmedOrderIds, "Invariant query did not run before its deadline.");
+}
+
+static async Task<BusinessInvariantResult> QueryBusinessInvariantAsync(
+    Guid eventId,
+    IReadOnlyCollection<Guid> confirmedOrderIds,
+    FlashSaleSettings settings)
+{
+    var allocations = new List<(Guid OrderId, Guid SeatId)>();
+    await using (var connection = new NpgsqlConnection(settings.ReservationConnectionString))
+    {
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT order_id, seat_id
+            FROM reservation.seat_allocations
+            WHERE event_id = @event_id AND state = 'Confirmed'
+            ORDER BY order_id, seat_id
+            """,
+            connection);
+        command.Parameters.AddWithValue("event_id", eventId);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            allocations.Add((reader.GetGuid(0), reader.GetGuid(1)));
+    }
+
+    var payments = await QueryIdsAsync(
+        settings.PaymentConnectionString,
+        "SELECT order_id FROM payment.payment_attempts WHERE state = 'Authorized' ORDER BY order_id");
+
+    var tickets = new List<(Guid OrderId, Guid SeatId)>();
+    await using (var connection = new NpgsqlConnection(settings.TicketingConnectionString))
+    {
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT order_id, seat_id
+            FROM ticketing.tickets
+            WHERE issuance_state = 'Issued'
+            ORDER BY order_id, seat_id
+            """,
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            tickets.Add((reader.GetGuid(0), reader.GetGuid(1)));
+    }
+
+    var analytics = new List<Guid>();
+    await using (var connection = new ClickHouseConnection(settings.ClickHouseConnectionString))
+    {
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT order_id FROM sales FINAL WHERE event_id = {eventId:UUID} ORDER BY order_id";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "eventId";
+        parameter.Value = eventId;
+        command.Parameters.Add(parameter);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            analytics.Add(reader.GetGuid(0));
+    }
+
+    var expected = confirmedOrderIds.OrderBy(id => id).ToArray();
+    var expectedSet = expected.ToHashSet();
+    var allocationRows = allocations.Where(row => expectedSet.Contains(row.OrderId)).ToArray();
+    var paymentIds = payments.Where(expectedSet.Contains).OrderBy(id => id).ToArray();
+    var ticketRows = tickets.Where(row => expectedSet.Contains(row.OrderId)).ToArray();
+    var analyticsIds = analytics.Where(expectedSet.Contains).OrderBy(id => id).ToArray();
+    var allocationOrderIds = allocationRows.Select(row => row.OrderId).Distinct().OrderBy(id => id).ToArray();
+    var ticketOrderIds = ticketRows.Select(row => row.OrderId).Distinct().OrderBy(id => id).ToArray();
+    var allocationSeatIds = allocationRows.Select(row => row.SeatId).OrderBy(id => id).ToArray();
+    var ticketSeatIds = ticketRows.Select(row => row.SeatId).OrderBy(id => id).ToArray();
+
+    var passed = expected.SequenceEqual(allocationOrderIds)
+                 && expected.SequenceEqual(paymentIds)
+                 && expected.SequenceEqual(ticketOrderIds)
+                 && expected.SequenceEqual(analyticsIds)
+                 && allocationSeatIds.SequenceEqual(ticketSeatIds)
+                 && allocationRows.Count(row => expectedSet.Contains(row.OrderId)) == expected.Length
+                 && paymentIds.Length == expected.Length
+                 && ticketRows.Length == expected.Length
+                 && analyticsIds.Length == expected.Length;
+
+    return new BusinessInvariantResult(
+        expected,
+        allocationOrderIds,
+        paymentIds,
+        ticketOrderIds,
+        analyticsIds,
+        allocationSeatIds,
+        ticketSeatIds,
+        null,
+        passed);
+}
+
+static async Task<Guid[]> QueryIdsAsync(string connectionString, string sql)
+{
+    var ids = new List<Guid>();
+    await using var connection = new NpgsqlConnection(connectionString);
+    await connection.OpenAsync();
+    await using var command = new NpgsqlCommand(sql, connection);
+    await using var reader = await command.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
+        ids.Add(reader.GetGuid(0));
+    return ids.ToArray();
+}
+
 internal sealed record FlashSaleSettings(
     string GatewayBaseUrl,
     string KeycloakBaseUrl,
@@ -396,10 +616,16 @@ internal sealed record FlashSaleSettings(
     string CustomerPassword,
     string OrganizerUsername,
     string OrganizerPassword,
+    string InternalClientId,
+    string InternalClientSecret,
     int SeatCount,
     int VirtualUsers,
     int MaxConnectionsPerServer,
     TimeSpan SettleTimeout,
+    string ReservationConnectionString,
+    string PaymentConnectionString,
+    string TicketingConnectionString,
+    string ClickHouseConnectionString,
     string ReportDirectory)
 {
     public static FlashSaleSettings Load()
@@ -416,12 +642,22 @@ internal sealed record FlashSaleSettings(
             Require("FLASH_SALE_CUSTOMER_PASSWORD"),
             Environment.GetEnvironmentVariable("FLASH_SALE_ORGANIZER_USERNAME") ?? "organizer1",
             Require("FLASH_SALE_ORGANIZER_PASSWORD"),
+            Environment.GetEnvironmentVariable("FLASH_SALE_INTERNAL_CLIENT_ID") ?? "ticketflow-internal",
+            Require("FLASH_SALE_INTERNAL_CLIENT_SECRET"),
             seats,
             users,
             GetPositiveInt("FLASH_SALE_MAX_CONNECTIONS", Math.Min(64, users)),
             // Ticketing renders an actual PDF through LocalStack.  On this laptop 50 durable
             // saga completions can legitimately take several minutes even after the HTTP burst.
             TimeSpan.FromSeconds(GetPositiveInt("FLASH_SALE_SETTLE_TIMEOUT_SECONDS", 600)),
+            Environment.GetEnvironmentVariable("FLASH_SALE_RESERVATION_CONNECTION")
+                ?? "Host=localhost;Port=5432;Database=ticketflow_reservation;Username=ticketflow;Password=ticketflow",
+            Environment.GetEnvironmentVariable("FLASH_SALE_PAYMENT_CONNECTION")
+                ?? "Host=localhost;Port=5432;Database=ticketflow_payment;Username=ticketflow;Password=ticketflow",
+            Environment.GetEnvironmentVariable("FLASH_SALE_TICKETING_CONNECTION")
+                ?? "Host=localhost;Port=5432;Database=ticketflow_ticketing;Username=ticketflow;Password=ticketflow",
+            Environment.GetEnvironmentVariable("FLASH_SALE_CLICKHOUSE_CONNECTION")
+                ?? "Host=localhost;Port=8123;Database=analytics;Username=ticketflow;Password=ticketflow",
             Environment.GetEnvironmentVariable("FLASH_SALE_REPORT_DIR")
                 ?? Path.Combine(AppContext.BaseDirectory, "flash-sale-reports"));
     }
@@ -456,9 +692,30 @@ internal sealed record SectionResponse(Guid Id, string Name, int Capacity);
 internal sealed record SeatMapResponse(Guid Id, Guid EventId, IReadOnlyList<SectionResponse> Sections);
 internal sealed record SeatDto(Guid Id, Guid SectionId, string Label, string Status);
 internal sealed record EventAvailabilityResponse(Guid EventId, IReadOnlyList<SeatDto> Seats);
-internal sealed record HoldResponse(bool Success, Guid? HoldId, DateTimeOffset? ExpiresAt, IReadOnlyList<Guid> UnavailableSeatIds);
+internal sealed record HoldResponse(
+    bool Success,
+    Guid? HoldId,
+    DateTimeOffset? ExpiresAt,
+    IReadOnlyList<Guid> UnavailableSeatIds,
+    string? Reason = null,
+    string? ReasonDetail = null);
 internal sealed record OrderResponse(Guid OrderId, string Status);
 internal sealed record OrderView(Guid Id, string Status);
+internal sealed record BusinessInvariantResult(
+    IReadOnlyList<Guid> ConfirmedOrderIds,
+    IReadOnlyList<Guid> SoldAllocationOrderIds,
+    IReadOnlyList<Guid> AuthorizedPaymentOrderIds,
+    IReadOnlyList<Guid> IssuedTicketOrderIds,
+    IReadOnlyList<Guid> AnalyticsOrderIds,
+    IReadOnlyList<Guid> SoldAllocationSeatIds,
+    IReadOnlyList<Guid> IssuedTicketSeatIds,
+    string? QueryError,
+    bool Passed)
+{
+    public static BusinessInvariantResult Failed(IReadOnlyCollection<Guid> expected, string error) =>
+        new(expected.OrderBy(id => id).ToArray(), [], [], [], [], [], [], error, false);
+}
+
 internal sealed record FlashSaleSummary(
     DateTimeOffset CompletedAtUtc,
     string GatewayBaseUrl,
@@ -476,6 +733,7 @@ internal sealed record FlashSaleSummary(
     int UnexpectedFailures,
     double ElapsedMilliseconds,
     IReadOnlyDictionary<string, int> FinalOrderStatuses,
+    BusinessInvariantResult BusinessInvariant,
     IReadOnlyList<string> FailureSamples,
     bool Passed);
 

@@ -52,11 +52,17 @@ public sealed class CatalogConcurrencyIntegrationTests(HardeningEnvironmentFixtu
         var connectionString = await CreateIsolatedDatabaseAsync();
         var eventId = await SeedDraftEventAsync(connectionString);
         var seatMapId = await SeedSeatMapAsync(connectionString, eventId);
+        var loadedCount = 0;
+        var allLoaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var attempts = await Task.WhenAll(Enumerable.Range(0, 8).Select(async _ =>
         {
             await using var context = CreateContext(connectionString);
             var seatMap = await context.SeatMaps.SingleAsync(s => s.Id == seatMapId);
+            if (Interlocked.Increment(ref loadedCount) == 8)
+                allLoaded.SetResult();
+            await allLoaded.Task;
+
             try
             {
                 seatMap.AddSection("Floor A", capacity: 100);

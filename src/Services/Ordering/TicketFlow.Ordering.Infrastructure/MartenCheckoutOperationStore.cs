@@ -1,3 +1,4 @@
+using JasperFx;
 using Marten;
 using Npgsql;
 using TicketFlow.Ordering.Application.Abstractions;
@@ -50,6 +51,12 @@ public sealed class MartenCheckoutOperationStore(IDocumentSession session) : ICh
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
+            // Marten promotes duplicate document ids to a provider-level exception and does not
+            // retain the underlying PostgresException on every insert path. It is still the same
+            // race: the operation key already has a committed winner.
+            if (current is DocumentAlreadyExistsException)
+                return true;
+
             if (current is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
                 return true;
         }

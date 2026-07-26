@@ -374,6 +374,15 @@ Mỗi service theo **Clean/Vertical Slice**: `Api / Application / Domain / Infra
 5. Viết tài liệu kiến trúc + ADR (architecture decision records) + review lại toàn hệ.
 - **DoD:** `helm install` lên cluster chạy full stack; pipeline xanh; có docs kiến trúc.
 
+### Phase 12 — Reliability, consistency & security hardening *(release gate)*
+
+1. Chuyển seat/price/owner authority về durable source of truth; Redis chỉ là cache CAS có thể rebuild.
+2. Idempotent checkout/payment/refund/ticket/notification/analytics relay; provider `Unknown` phải reconcile, không đoán decline.
+3. Một writer/version cho order stream, saga có deadline/manual review, cancellation workflow đi hết refund/revoke/release.
+4. Resource authorization tại service sở hữu; BFF/session/multi-zone/scanner fail-closed và không rò token.
+5. Stateful storage/migration/readiness/production secret boundary; CI theo tầng có frontend, integration, full-stack E2E, flash-ID và chaos.
+- **DoD:** ma trận và run thật nằm tại [docs/phase-12-hardening-evidence.md](docs/phase-12-hardening-evidence.md); kiến trúc hiện hành tại [docs/architecture.md](docs/architecture.md). Không coi tổng `≤ capacity` hoặc một smoke HTTP đơn lẻ là bằng chứng hoàn tất.
+
 ---
 
 ## 11. Chiến lược testing

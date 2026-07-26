@@ -79,6 +79,7 @@
     <Project Path="src/Services/Ticketing/TicketFlow.Ticketing.Infrastructure/TicketFlow.Ticketing.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/TicketFlow.E2E.FunctionsProvider/TicketFlow.E2E.FunctionsProvider.csproj" />
     <Project Path="tests/TicketFlow.FlashSale.LoadTests/TicketFlow.FlashSale.LoadTests.csproj" />
   </Folder>
 </Solution>

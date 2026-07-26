@@ -5,10 +5,12 @@ namespace TicketFlow.Reservation.Application;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddReservationApplication(this IServiceCollection services)
+    public static IServiceCollection AddReservationApplication(
+        this IServiceCollection services,
+        ReservationOptions? options = null)
     {
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton(new ReservationOptions());
+        services.AddSingleton(options ?? new ReservationOptions());
         services.AddScoped<InventoryService>();
         services.AddScoped<ReservationService>();
 

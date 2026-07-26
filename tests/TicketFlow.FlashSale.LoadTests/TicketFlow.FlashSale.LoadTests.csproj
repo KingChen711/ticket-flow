@@ -8,7 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ClickHouse.Client" />
     <PackageReference Include="NBomber" />
+    <PackageReference Include="Npgsql" />
   </ItemGroup>
 
 </Project>

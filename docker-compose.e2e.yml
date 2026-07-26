@@ -1,0 +1,48 @@
+# Deterministic full-stack test overlay. Production and the normal development stack still use
+# the external Lambda provider configured in docker-compose.infra.yml/Helm. This provider exposes
+# only Lambda Invoke for render-ticket-pdf and executes the production function implementation.
+services:
+  # The flash-sale harness models hundreds of buyers with one synthetic customer token. Relax
+  # only that identity-level abuse guard in this isolated test overlay; the production/default
+  # values remain 3 active holds, 20 seats and 10 creations per 60 seconds, and their behaviour
+  # is covered by the Phase12 hardening suite.
+  reservation:
+    environment:
+      Reservation__MaxActiveHoldsPerUserPerEvent: 1000
+      Reservation__MaxHeldSeatsPerUserPerEvent: 1000
+      Reservation__MaxHoldsPerUserPerWindow: 1000
+
+  e2e-functions:
+    build:
+      context: .
+      dockerfile: tests/TicketFlow.E2E.FunctionsProvider/Dockerfile
+    container_name: ticketflow-e2e-functions
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ticketflow
+      MINIO_SECRET_KEY: ticketflow
+      MINIO_BUCKET_NAME: tickets
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "dotnet --info >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ticketing:
+    environment:
+      Aws__LambdaServiceUrl: http://e2e-functions:8080
+      Aws__HealthUrl: http://e2e-functions:8080/health
+    depends_on:
+      e2e-functions:
+        condition: service_healthy
+
+  gateway:
+    environment:
+      Aws__LambdaServiceUrl: http://e2e-functions:8080
+      Aws__HealthUrl: http://e2e-functions:8080/health
+    depends_on:
+      e2e-functions:
+        condition: service_healthy

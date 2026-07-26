@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 
 namespace TicketFlow.Payment.Application.Payments;
@@ -37,6 +38,16 @@ public static class PaymentOperationMetrics
             unit: "{operation}",
             description: "Ambiguous operations that exceeded the reconciliation deadline and need a human.");
 
+    private static readonly ConcurrentDictionary<string, long> ReconciliationBacklog = new();
+
+    private static readonly ObservableGauge<long> Backlog =
+        Meter.CreateObservableGauge(
+            "ticketflow.payment.reconcile_backlog",
+            () => ReconciliationBacklog.Select(pair =>
+                new Measurement<long>(pair.Value, new KeyValuePair<string, object?>("kind", pair.Key))),
+            unit: "{operation}",
+            description: "Current ambiguous payment operations waiting for provider reconciliation.");
+
     public static void RecordCharge(string outcome) =>
         Charges.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
 
@@ -51,4 +62,10 @@ public static class PaymentOperationMetrics
 
     public static void RecordManualReview(string kind) =>
         ManualReview.Add(1, new KeyValuePair<string, object?>("kind", kind));
+
+    public static void SetReconciliationBacklog(string kind, int count)
+    {
+        _ = Backlog;
+        ReconciliationBacklog[kind] = Math.Max(0, count);
+    }
 }

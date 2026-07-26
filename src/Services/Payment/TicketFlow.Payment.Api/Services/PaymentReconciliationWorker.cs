@@ -68,7 +68,11 @@ public sealed class PaymentReconciliationWorker(
         var payments = scope.ServiceProvider.GetRequiredService<PaymentProcessingService>();
         var publisher = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
 
-        foreach (var attempt in await repository.GetUnresolvedAttemptsAsync(options.BatchSize, cancellationToken))
+        PaymentOperationMetrics.SetReconciliationBacklog(
+            "charge",
+            await repository.CountUnresolvedAttemptsAsync(cancellationToken));
+        var unresolvedAttempts = await repository.GetUnresolvedAttemptsAsync(options.BatchSize, cancellationToken);
+        foreach (var attempt in unresolvedAttempts)
         {
             if (attempt.CancellationWorkflowId is not null && attempt.CancellationCompletedAt is null)
             {
@@ -126,7 +130,11 @@ public sealed class PaymentReconciliationWorker(
             }
         }
 
-        foreach (var refund in await repository.GetUnresolvedRefundsAsync(options.BatchSize, cancellationToken))
+        PaymentOperationMetrics.SetReconciliationBacklog(
+            "refund",
+            await repository.CountUnresolvedRefundsAsync(cancellationToken));
+        var unresolvedRefunds = await repository.GetUnresolvedRefundsAsync(options.BatchSize, cancellationToken);
+        foreach (var refund in unresolvedRefunds)
         {
             if (ShouldEscalate(refund.ReconcileAttempts, "refund", refund.OrderId))
                 continue;

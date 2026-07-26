@@ -446,21 +446,32 @@ public sealed class SeatCacheReconciler(
                 .Where(row => row.HoldId == quote.Id && row.State == SeatAllocationState.Confirmed)
                 .OrderBy(row => row.SeatId)
                 .ToArray();
-            var exact = confirmed.Length == quote.SeatIds.Length &&
-                confirmed.Select(row => row.SeatId).SequenceEqual(quote.SeatIds.Order()) &&
-                confirmed.All(row =>
+            var released = rows
+                .Where(row => row.HoldId == quote.Id && row.State == SeatAllocationState.Released)
+                .OrderBy(row => row.SeatId)
+                .ToArray();
+            bool IsExactAllocationSet(IReadOnlyCollection<SeatAllocation> allocations) =>
+                allocations.Count == quote.SeatIds.Length &&
+                allocations.Select(row => row.SeatId).SequenceEqual(quote.SeatIds.Order()) &&
+                allocations.All(row =>
                     row.EventId == quote.EventId &&
                     row.OrderId == quote.OrderId &&
                     row.OwnerUserId == quote.OwnerUserId &&
                     row.Generation == quote.Generation);
-            if (exact)
+
+            // A consumed quote remains durable purchase history after cancellation. Its exact
+            // allocation set is then terminal Released (and inventory is Available), which is
+            // just as authoritative as the live Confirmed set and must survive restart repair.
+            if (IsExactAllocationSet(confirmed) || IsExactAllocationSet(released))
                 continue;
 
-            foreach (var seatId in quote.SeatIds.Union(confirmed.Select(row => row.SeatId)))
+            foreach (var seatId in quote.SeatIds
+                         .Union(confirmed.Select(row => row.SeatId))
+                         .Union(released.Select(row => row.SeatId)))
             {
                 MarkAmbiguous(
                     seatId,
-                    $"Consumed quote '{quote.Id}' does not have one exact matching confirmed allocation set.",
+                    $"Consumed quote '{quote.Id}' does not have one exact matching confirmed or released allocation set.",
                     canonical.GetValueOrDefault(seatId));
             }
         }

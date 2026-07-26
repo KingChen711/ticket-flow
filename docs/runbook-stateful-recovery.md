@@ -1,5 +1,10 @@
 # Runbook — Stateful recovery, migration và secret rotation
 
+> The repeatable admission drill is `tests/ci/run-chaos.sh` on the disposable E2E Compose overlay.
+> It restarts Redis, RabbitMQ, Kafka and Keycloak and verifies the exact order/seat/ticket/analytics
+> IDs from the Playwright seed. See [Phase 12 release gates](runbook-phase-12-release-gates.md) for
+> artifact collection. The manual procedures below remain the production-safe diagnostic path.
+
 Runbook này đi cùng Phase 12 Commit 17. PostgreSQL là nguồn dữ liệu bền vững cho allocation;
 Redis chỉ là cache/hold acceleration. RabbitMQ, Kafka và Keycloak vẫn phải giữ state qua restart
 để tránh mất command, offset và user, nhưng không thành source of truth thay PostgreSQL.

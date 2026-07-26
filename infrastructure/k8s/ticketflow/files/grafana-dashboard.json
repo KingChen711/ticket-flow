@@ -65,6 +65,56 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "Payment reconciliation backlog",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (kind) ({\"ticketflow.payment.reconcile_backlog\"})",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Unknown / manual-review operations",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum(increase({\"ticketflow.payment.charge_total\", \"outcome\"=\"unknown\"}[5m])) + sum(increase({\"ticketflow.payment.refund_total\", \"outcome\"=\"unknown\"}[5m]))",
+          "legendFormat": "payment unknown",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase({\"ticketflow.saga.manual_review_total\"}[5m])) + sum(increase({\"ticketflow.payment.manual_review_total\"}[5m]))",
+          "legendFormat": "manual review",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Saga deadline fires",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "sum by (state) (increase({\"ticketflow.saga.deadlines_total\"}[5m]))",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

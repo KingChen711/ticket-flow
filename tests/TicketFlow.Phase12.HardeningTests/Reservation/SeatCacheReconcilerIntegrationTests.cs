@@ -33,6 +33,7 @@ public sealed class SeatCacheReconcilerIntegrationTests(HardeningEnvironmentFixt
             var orderId = Guid.NewGuid();
             var heldSeat = Seat.Create(eventId, sectionId, "HELD-1");
             var soldSeat = Seat.Create(eventId, sectionId, "SOLD-1");
+            var releasedSeat = Seat.Create(eventId, sectionId, "RELEASED-1");
             var availableSeat = Seat.Create(eventId, sectionId, "AVAILABLE-1");
             soldSeat.MarkSold();
             var heldQuote = HoldQuote.Create(
@@ -53,12 +54,36 @@ public sealed class SeatCacheReconcilerIntegrationTests(HardeningEnvironmentFixt
                 consumedQuote.Amount,
                 consumedQuote.Currency,
                 now.AddSeconds(1));
+            var cancelledOrderId = Guid.NewGuid();
+            var cancelledQuote = HoldQuote.Create(
+                Guid.NewGuid(), eventId, ownerId, [releasedSeat.Id], 175_000m, "VND", 11, 23,
+                now, now.AddMinutes(10));
+            cancelledQuote.Consume(cancelledOrderId, now.AddSeconds(1));
+            var releasedAllocation = SeatAllocation.CreateConfirmed(
+                releasedSeat.Id,
+                eventId,
+                cancelledQuote.Id,
+                cancelledOrderId,
+                ownerId,
+                cancelledQuote.Generation,
+                cancelledQuote.PriceSnapshotVersion,
+                cancelledQuote.Amount,
+                cancelledQuote.Currency,
+                now.AddSeconds(1));
+            Assert.Equal(
+                SeatAllocationReleaseOutcome.Released,
+                releasedAllocation.ReleaseOwned(
+                    cancelledQuote.Id,
+                    cancelledOrderId,
+                    ownerId,
+                    cancelledQuote.Generation,
+                    now.AddSeconds(2)));
 
             await using var context = CreateContext(connectionString);
             await context.Database.MigrateAsync();
-            context.Seats.AddRange(heldSeat, soldSeat, availableSeat);
-            context.HoldQuotes.AddRange(heldQuote, consumedQuote);
-            context.SeatAllocations.Add(allocation);
+            context.Seats.AddRange(heldSeat, soldSeat, releasedSeat, availableSeat);
+            context.HoldQuotes.AddRange(heldQuote, consumedQuote, cancelledQuote);
+            context.SeatAllocations.AddRange(allocation, releasedAllocation);
             await context.SaveChangesAsync();
 
             var store = new RedisSeatHoldStore(redis);
@@ -69,7 +94,7 @@ public sealed class SeatCacheReconcilerIntegrationTests(HardeningEnvironmentFixt
             Assert.NotEmpty(report.DetectedDrifts);
             var beforeRepair = await store.GetLiveStatusesAsync(
                 eventId,
-                [heldSeat.Id, soldSeat.Id, availableSeat.Id]);
+                [heldSeat.Id, soldSeat.Id, releasedSeat.Id, availableSeat.Id]);
             Assert.Equal(SeatStatus.Available, beforeRepair[heldSeat.Id]);
 
             var repaired = await reconciler.ReconcileAsync(eventId, SeatCacheReconcileMode.RepairCache);
@@ -77,9 +102,10 @@ public sealed class SeatCacheReconcilerIntegrationTests(HardeningEnvironmentFixt
             Assert.Empty(repaired.RemainingDrifts);
             var statuses = await store.GetLiveStatusesAsync(
                 eventId,
-                [heldSeat.Id, soldSeat.Id, availableSeat.Id]);
+                [heldSeat.Id, soldSeat.Id, releasedSeat.Id, availableSeat.Id]);
             Assert.Equal(SeatStatus.Held, statuses[heldSeat.Id]);
             Assert.Equal(SeatStatus.Sold, statuses[soldSeat.Id]);
+            Assert.Equal(SeatStatus.Available, statuses[releasedSeat.Id]);
             Assert.Equal(SeatStatus.Available, statuses[availableSeat.Id]);
 
             // A reverse-index-only orphan has no owner token and is therefore repairable. The

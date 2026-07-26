@@ -37,6 +37,9 @@ public interface IPaymentAttemptRepository
         int maxCount,
         CancellationToken cancellationToken = default);
 
+    async Task<int> CountUnresolvedAttemptsAsync(CancellationToken cancellationToken = default) =>
+        (await GetUnresolvedAttemptsAsync(int.MaxValue, cancellationToken)).Count;
+
     void AddAttempt(PaymentAttempt attempt);
 
     Task<PaymentRefund?> GetRefundByOrderAsync(Guid orderId, CancellationToken cancellationToken = default);
@@ -44,6 +47,9 @@ public interface IPaymentAttemptRepository
     Task<IReadOnlyList<PaymentRefund>> GetUnresolvedRefundsAsync(
         int maxCount,
         CancellationToken cancellationToken = default);
+
+    async Task<int> CountUnresolvedRefundsAsync(CancellationToken cancellationToken = default) =>
+        (await GetUnresolvedRefundsAsync(int.MaxValue, cancellationToken)).Count;
 
     void AddRefund(PaymentRefund refund);
 

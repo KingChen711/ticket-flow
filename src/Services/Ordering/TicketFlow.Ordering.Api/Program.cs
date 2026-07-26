@@ -55,10 +55,19 @@ builder.Services.AddScoped<ISaleRecordedPublisher, KafkaSaleRecordedPublisher>()
 // a client-credentials token. AddCallCredentials rather than a DelegatingHandler because gRPC
 // metadata is where the callee reads the bearer token from.
 builder.Services.AddServiceTokenHandler();
+var reservationGrpcAddress = new Uri(
+    builder.Configuration["Reservation:GrpcAddress"] ?? "http://localhost:9003");
 builder.Services.AddGrpcClient<ReservationService.ReservationServiceClient>(options =>
 {
-    var address = builder.Configuration["Reservation:GrpcAddress"] ?? "http://localhost:9003";
-    options.Address = new Uri(address);
+    options.Address = reservationGrpcAddress;
+}).ConfigureChannel(options =>
+{
+    // Compose and the default Kind profile terminate trust at the namespace/network boundary and
+    // use h2c internally. Grpc.Net.Client otherwise refuses to attach call credentials to an HTTP
+    // channel, which turns every order into a 400 before Reservation sees it. TLS endpoints keep
+    // the stricter default.
+    options.UnsafeUseInsecureChannelCallCredentials =
+        reservationGrpcAddress.Scheme == Uri.UriSchemeHttp;
 }).AddCallCredentials(async (context, metadata, serviceProvider) =>
 {
     var tokens = serviceProvider.GetRequiredService<IServiceTokenProvider>();

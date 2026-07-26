@@ -68,6 +68,14 @@ public sealed class PaymentAttemptRepository(PaymentDbContext dbContext) : IPaym
             .Take(maxCount)
             .ToListAsync(cancellationToken);
 
+    public Task<int> CountUnresolvedAttemptsAsync(CancellationToken cancellationToken = default) =>
+        dbContext.PaymentAttempts.CountAsync(
+            attempt =>
+                attempt.State == PaymentAttemptState.Unknown ||
+                attempt.State == PaymentAttemptState.Pending ||
+                attempt.CancellationRequestedAt != null && attempt.CancellationCompletedAt == null,
+            cancellationToken);
+
     public void AddAttempt(PaymentAttempt attempt) => dbContext.PaymentAttempts.Add(attempt);
 
     public Task<PaymentRefund?> GetRefundByOrderAsync(Guid orderId, CancellationToken cancellationToken = default) =>
@@ -83,6 +91,11 @@ public sealed class PaymentAttemptRepository(PaymentDbContext dbContext) : IPaym
             .OrderBy(refund => refund.CreatedAt)
             .Take(maxCount)
             .ToListAsync(cancellationToken);
+
+    public Task<int> CountUnresolvedRefundsAsync(CancellationToken cancellationToken = default) =>
+        dbContext.PaymentRefunds.CountAsync(
+            refund => refund.State == PaymentRefundState.Unknown || refund.State == PaymentRefundState.Pending,
+            cancellationToken);
 
     public void AddRefund(PaymentRefund refund) => dbContext.PaymentRefunds.Add(refund);
 
