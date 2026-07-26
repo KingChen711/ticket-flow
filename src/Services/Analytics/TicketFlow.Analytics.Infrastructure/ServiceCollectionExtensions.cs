@@ -1,6 +1,7 @@
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using TicketFlow.Analytics.Application.Abstractions;
 
 namespace TicketFlow.Analytics.Infrastructure;
@@ -19,7 +20,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISalesStore, ClickHouseSalesStore>();
 
-        services.AddHealthChecks().AddCheck<ClickHouseHealthCheck>("clickhouse");
+        services.AddHealthChecks().AddCheck<ClickHouseHealthCheck>(
+            "clickhouse", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }

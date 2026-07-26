@@ -111,8 +111,14 @@ public sealed class PurchaseSagaDeadlineTests
             () => harness.Published.Select<ProcessPayment>().Count() == sentBefore, SettleTimeout));
 
         await harness.Bus.Publish(new PurchaseDeadlineExpired(order.OrderId, "ManualReview", Guid.NewGuid()));
-        Assert.True(await harness.Consumed.Any<PurchaseDeadlineExpired>(
-            x => x.Context.Message.ExpectedState == "ManualReview"));
+        // TestHarness.Any uses its short inactivity timeout (about one second). Under the full
+        // container-heavy suite the message can legitimately enter the in-memory transport just
+        // after that window even though the saga processes it correctly. Poll the same consumed
+        // collection under this class's explicit settle budget, as the state/count assertions do.
+        Assert.True(await AsyncTest.WaitUntilAsync(
+            () => harness.Consumed.Select<PurchaseDeadlineExpired>()
+                .Any(x => x.Context.Message.ExpectedState == "ManualReview"),
+            SettleTimeout));
 
         // "Không state vô hạn im lặng" cuts both ways: an escalated order must not keep retrying
         // a participant that has already ignored it MaxDeadlineStrikes times.

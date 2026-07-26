@@ -13,6 +13,15 @@ using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (EfMigrationRunner.IsRequested(args))
+{
+    var connectionString = builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string 'Default' was not found.");
+    await using var dbContext = PaymentDbContextFactory.Create(connectionString);
+    await EfMigrationRunner.RunAsync(dbContext, "payment");
+    return;
+}
+
 builder.Services.AddTicketFlowWeb();
 // Commit 5, mục 3 rủi ro số 3 — "Polly" is Polly.Extensions' own Meter name (not configurable),
 // turned on by PaymentGatewayResiliencePipeline's .ConfigureTelemetry(...) call. Same
@@ -29,6 +38,7 @@ builder.Services.AddTicketFlowObservability(
 builder.Services.AddOpenApi();
 builder.Services.AddPaymentApplication();
 builder.Services.AddPaymentInfrastructure(builder.Configuration);
+builder.Services.AddDbContextReadinessCheck<PaymentDbContext>("postgres");
 builder.Services.AddSingleton(new PaymentReconciliationOptions());
 builder.Services.AddHostedService<PaymentReconciliationWorker>();
 builder.Services.AddTicketFlowMessaging(
@@ -57,6 +67,7 @@ builder.Services.AddTicketFlowMessaging(
         // continuation of the existing queues, not a rename.
         rabbitConfigurator.ReceiveEndpoint("payment-process-payment", e =>
         {
+            e.SetQuorumQueue();
             // One Postgres connection is held while the EF inbox/outbox transaction runs.
             // Keep the burst consumer below Payment's bounded pool so flash-sale messages queue
             // in RabbitMQ instead of exhausting PostgreSQL or timing out in Npgsql.
@@ -67,6 +78,7 @@ builder.Services.AddTicketFlowMessaging(
 
         rabbitConfigurator.ReceiveEndpoint("payment-refund-payment", e =>
         {
+            e.SetQuorumQueue();
             e.ConcurrentMessageLimit = 8;
             e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
             e.ConfigureConsumer<RefundPaymentConsumer>(context);
@@ -74,6 +86,7 @@ builder.Services.AddTicketFlowMessaging(
 
         rabbitConfigurator.ReceiveEndpoint("payment-cancel-payment-for-event", e =>
         {
+            e.SetQuorumQueue();
             e.ConcurrentMessageLimit = 8;
             e.UseEntityFrameworkOutbox<PaymentDbContext>(context);
             e.ConfigureConsumer<CancelPaymentForEventConsumer>(context);
@@ -83,7 +96,8 @@ builder.Services.AddTicketFlowMessaging(
 var app = builder.Build();
 
 // Dev-only: auto-migrate on startup, same pattern as Catalog/Identity/Reservation.
-if (!app.Environment.IsProduction())
+if (!app.Environment.IsProduction() &&
+    !string.Equals(builder.Configuration["Database:MigrateOnStartup"], "false", StringComparison.OrdinalIgnoreCase))
 {
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();

@@ -1,3 +1,4 @@
+{{- if .Values.monitoring.enabled }}
 # Jaeger + Prometheus + Grafana + Kibana — same provisioning-as-code files as
 # docker-compose.monitoring.yml (Phase 10), copied into this chart's files/ (self-containment,
 # same reasoning as keycloak.yaml's realm-export.json comment). Service name "ticketflow-jaeger"
@@ -19,7 +20,7 @@ spec:
     spec:
       containers:
         - name: jaeger
-          image: jaegertracing/all-in-one:latest
+          image: {{ .Values.monitoring.jaegerImage | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: COLLECTOR_OTLP_ENABLED
@@ -28,6 +29,8 @@ spec:
             - containerPort: 16686
             - containerPort: 4317
             - containerPort: 4318
+          resources:
+{{ toYaml .Values.monitoring.resources | indent 12 }}
 ---
 apiVersion: v1
 kind: Service
@@ -72,7 +75,7 @@ spec:
     spec:
       containers:
         - name: prometheus
-          image: prom/prometheus:latest
+          image: {{ .Values.monitoring.prometheusImage | quote }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 9090
@@ -83,6 +86,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 10
+          resources:
+{{ toYaml .Values.monitoring.resources | indent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus/prometheus.yml
@@ -133,7 +138,7 @@ spec:
     spec:
       containers:
         - name: grafana
-          image: grafana/grafana:11.4.0
+          image: {{ .Values.monitoring.grafanaImage | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: GF_AUTH_ANONYMOUS_ENABLED
@@ -141,7 +146,8 @@ spec:
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: "Viewer"
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "ticketflow"
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.name }}, key: grafana-admin-password }
           ports:
             - containerPort: 3000
           readinessProbe:
@@ -151,6 +157,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 10
+          resources:
+{{ toYaml .Values.monitoring.resources | indent 12 }}
           volumeMounts:
             - name: provisioning
               mountPath: /etc/grafana/provisioning/datasources/prometheus.yml
@@ -196,7 +204,7 @@ spec:
     spec:
       containers:
         - name: kibana
-          image: docker.elastic.co/kibana/kibana:8.15.3
+          image: {{ .Values.monitoring.kibanaImage | quote }}
           imagePullPolicy: IfNotPresent
           env:
             - name: ELASTICSEARCH_HOSTS
@@ -213,6 +221,8 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 30
+          resources:
+{{ toYaml .Values.monitoring.resources | indent 12 }}
 ---
 apiVersion: v1
 kind: Service
@@ -224,19 +234,19 @@ spec:
   ports:
     - port: 5601
       targetPort: 5601
+{{- end }}
+{{- if .Values.infra.elasticsearch.enabled }}
+{{- $policyHash := (printf "%s|%s|%s" (.Files.Get "files/ilm-policy.json") .Values.runtime.elasticsearchUri .Values.monitoring.curlImage | sha256sum | trunc 10) }}
+---
 # One-shot Job — same role as the es-ilm-init compose container in Phase 10, re-run every
-# `helm upgrade`/`helm install`. It MUST be a post hook: a pre-install/pre-upgrade hook runs
-# before the chart's normal Elasticsearch Deployment (and its ConfigMaps) exists, which makes a
-# fresh `helm install` wait forever. The policy is embedded from the chart file instead of mounted
-# through a normal ConfigMap for the same ordering reason. `--wait` means Helm starts this only
-# after Elasticsearch is ready; the retry loop also makes plain non-wait installs robust.
+# `helm upgrade`/`helm install`. It is deliberately a normal Job, not a post-install hook: with
+# `--wait`, post-install hooks run only after application readiness, while the applications need
+# this ILM policy before their Elasticsearch logging sink can bootstrap. Application init
+# containers gate on the policy, so this Job is the single schema writer without a Helm deadlock.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: es-ilm-init
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  name: es-ilm-init-{{ $policyHash }}
 spec:
   backoffLimit: 5
   template:
@@ -244,7 +254,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: es-ilm-init
-          image: curlimages/curl:8.11.0
+          image: {{ .Values.monitoring.curlImage | quote }}
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -253,8 +263,11 @@ spec:
               cat > /tmp/ilm-policy.json <<'EOF'
 {{ .Files.Get "files/ilm-policy.json" | indent 14 }}
               EOF
-              until curl -sf -X PUT http://elasticsearch:9200/_ilm/policy/ticketflow-logs-retention \
+              until curl -sf -X PUT {{ printf "%s/_ilm/policy/ticketflow-logs-retention" (.Values.runtime.elasticsearchUri | trimSuffix "/") | quote }} \
                 -H "Content-Type: application/json" --data-binary @/tmp/ilm-policy.json; do
                 echo "Elasticsearch not ready for ILM policy; retrying in 5 seconds..."
                 sleep 5
               done
+          resources:
+{{ toYaml .Values.monitoring.resources | indent 12 }}
+{{- end }}

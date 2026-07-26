@@ -1,104 +1,187 @@
-# Generic template ranging over .Values.services — 1 shape (Deployment + Service) shared by all
-# 11 .NET API services + gateway, same "1 building block, N call sites" philosophy as
-# AddTicketFlowWeb/AddTicketFlowObservability in the code itself. Per-service differences (port,
-# an extra gRPC port for reservation, the 2 Aws:LambdaServiceUrl overrides) live entirely in
-# values.yaml — this template never changes when a 12th service is added.
-#
-# Real design win confirmed live: because Commit 1's K8s Service names (postgres, redis, rabbitmq,
-# kafka, minio, elasticsearch, mongodb, clickhouse, keycloak) and this template's Service names
-# (catalog, identity, reservation, ...) match the exact hostnames already hardcoded in each
-# service's appsettings.json (the "Docker" environment file compose already uses) — almost NO env
-# var overrides are needed. Only 2 real differences from compose: Aws:LambdaServiceUrl (LocalStack
-# now lives OUTSIDE the cluster, mục 3/rủi ro số 2) and ASPNETCORE_ENVIRONMENT=Docker (to select
-# appsettings.json over appsettings.Development.json, same env value compose already sets).
 {{- $root := . }}
+{{- $saleTopic := index .Values.infra.kafka.topics 0 }}
 {{- range $name, $svc := .Values.services }}
+{{- if $svc.enabled }}
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: {{ $name }}
+metadata: { name: {{ $name }} }
 spec:
   replicas: 1
   selector:
-    matchLabels:
-      app: {{ $name }}
+    matchLabels: { app: {{ $name }} }
   template:
     metadata:
-      labels:
-        app: {{ $name }}
+      labels: { app: {{ $name }} }
+      annotations:
+        checksum/runtime-contract: {{ toJson (dict "runtime" $root.Values.runtime "secret" $root.Values.secrets.name "kafkaTopics" $root.Values.infra.kafka.topics) | sha256sum }}
     spec:
-      {{- if $svc.bootstrapDatabase }}
-      # Ordering is the sole Marten-backed service. Marten creates its schema but not the
-      # database itself, so make the existing local Postgres superuser create it idempotently
-      # before Kestrel and its health check begin. This removes a fresh-cluster-only readiness
-      # failure without putting database provisioning logic into application code.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      {{- if $svc.usesKafka }}
+      volumes:
+        - name: kafka-client
+          secret:
+            secretName: {{ $root.Values.secrets.name }}
+            items: [{ key: kafka-client-properties, path: client.properties }]
+        {{- if $root.Values.runtime.kafka.caSecretName }}
+        - name: kafka-ca
+          secret: { secretName: {{ $root.Values.runtime.kafka.caSecretName }} }
+        {{- end }}
+      {{- end }}
+      {{- if or $root.Values.infra.elasticsearch.enabled $svc.schemaGate $svc.usesKafka }}
       initContainers:
-        - name: initialize-database
-          image: {{ $root.Values.infra.postgres.image }}
+        {{- if $root.Values.infra.elasticsearch.enabled }}
+        - name: wait-for-log-policy
+          image: {{ $root.Values.monitoring.curlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-ceu", "--"]
+          args:
+            - until curl --fail --silent --show-error {{ printf "%s/_ilm/policy/ticketflow-logs-retention" ($root.Values.runtime.elasticsearchUri | trimSuffix "/") | quote }} >/dev/null; do sleep 2; done
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
+        {{- end }}
+        {{- if $svc.schemaGate }}
+        {{- if eq $svc.schemaGate.kind "ef" }}
+        - name: wait-for-schema
+          image: {{ $root.Values.infra.postgres.image | quote }}
           imagePullPolicy: IfNotPresent
           env:
-            - name: PGHOST
-              value: postgres
-            - name: PGPORT
-              value: "5432"
-            - name: PGUSER
-              value: {{ $root.Values.infra.postgres.user | quote }}
-            - name: PGPASSWORD
-              value: {{ $root.Values.infra.postgres.password | quote }}
-            - name: TARGET_DATABASE
-              value: {{ $svc.bootstrapDatabase | quote }}
-          command:
-            - sh
-            - -ec
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $svc.postgresUriSecretKey }} }
+            - { name: SCHEMA_NAME, value: {{ $svc.schemaGate.schema | quote }} }
+            - { name: EXPECTED_MIGRATION, value: {{ $svc.schemaGate.migration | quote }} }
+          command: ["bash", "-ceu", "--"]
+          args:
             - |
-              until pg_isready -d postgres; do
-                echo "Postgres is not ready; retrying in 2 seconds..."
+              # EF's migrations history stays in public even when domain tables use a
+              # component schema. This was verified against all five real databases; querying
+              # $SCHEMA_NAME here would wait forever after a successful migration. The naming
+              # conventions plugin also maps MigrationId to migration_id.
+              until [ "$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM public.\"__EFMigrationsHistory\" WHERE migration_id = '$EXPECTED_MIGRATION'" 2>/dev/null)" = "1" ]; do
+                echo "Waiting for $SCHEMA_NAME migration $EXPECTED_MIGRATION"
                 sleep 2
               done
-              if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$TARGET_DATABASE'" | grep -q 1; then
-                psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$TARGET_DATABASE\""
-              fi
+        {{- else if eq $svc.schemaGate.kind "marten" }}
+        - name: wait-for-schema
+          image: {{ $root.Values.infra.postgres.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $svc.postgresUriSecretKey }} }
+          command: ["bash", "-ceu", "--"]
+          args:
+            - |
+              until [ "$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('mt_events','mt_streams')" 2>/dev/null)" = "2" ]; do
+                echo "Waiting for Marten event-store schema"
+                sleep 2
+              done
+        {{- else if eq $svc.schemaGate.kind "elasticsearch" }}
+        - name: wait-for-schema
+          image: {{ $root.Values.monitoring.curlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-ceu", "--"]
+          args:
+            - until curl --fail --silent --show-error {{ printf "%s/%s" ($root.Values.runtime.elasticsearchUri | trimSuffix "/") $svc.schemaGate.index | quote }} >/dev/null; do sleep 2; done
+        {{- else if eq $svc.schemaGate.kind "clickhouse" }}
+        - name: wait-for-schema
+          image: {{ $root.Values.infra.clickhouse.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: clickhouse-password }
+          command: ["bash", "-ceu", "--"]
+          args:
+            - |
+              secure_arg=()
+              {{- if $root.Values.runtime.clickhouse.secure }}
+              secure_arg=(--secure)
+              {{- end }}
+              until [ "$(clickhouse-client --host {{ $root.Values.runtime.clickhouse.host | quote }} --port {{ $root.Values.runtime.clickhouse.port }} "${secure_arg[@]}" --user {{ $root.Values.runtime.clickhouse.user | quote }} --password "$CLICKHOUSE_PASSWORD" --database {{ $root.Values.runtime.clickhouse.database | quote }} --query 'EXISTS TABLE {{ $svc.schemaGate.table }}' 2>/dev/null)" = "1" ]; do sleep 2; done
+        {{- else if eq $svc.schemaGate.kind "mongodb" }}
+        - name: wait-for-schema
+          image: {{ $root.Values.infra.mongodb.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: mongo-connection }
+          command: ["bash", "-ceu", "--"]
+          args:
+            - until mongosh "$MONGO_URI/{{ $svc.schemaGate.database }}" --quiet --eval "quit(db.{{ $svc.schemaGate.collection }}.getIndexes().some(i => i.name === '{{ $svc.schemaGate.index }}') ? 0 : 1)"; do sleep 2; done
+        {{- end }}
+        {{- end }}
+        {{- if $svc.usesKafka }}
+        - name: wait-for-kafka-topic
+          image: {{ $root.Values.infra.kafka.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-ceu", "--"]
+          args:
+            - |
+              topic_ready() {
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server {{ $root.Values.runtime.kafka.host | quote }} --command-config /etc/ticketflow/kafka/client.properties --topic {{ $saleTopic.name | quote }} --describe 2>/dev/null | grep -q 'PartitionCount: {{ $saleTopic.partitions }}' &&
+                /opt/kafka/bin/kafka-configs.sh --bootstrap-server {{ $root.Values.runtime.kafka.host | quote }} --command-config /etc/ticketflow/kafka/client.properties --entity-type topics --entity-name {{ $saleTopic.name | quote }} --describe 2>/dev/null | grep -q 'retention.ms={{ $saleTopic.retentionMs | int64 }}'
+              }
+              until topic_ready; do
+                echo "Waiting for provisioned {{ $saleTopic.name }} topic contract"
+                sleep 2
+              done
+          volumeMounts:
+            - { name: kafka-client, mountPath: /etc/ticketflow/kafka, readOnly: true }
+            {{- if $root.Values.runtime.kafka.caSecretName }}
+            - { name: kafka-ca, mountPath: /etc/ticketflow/kafka-ca, readOnly: true }
+            {{- end }}
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ include "ticketflow.appImage" (dict "root" $root "image" $svc.image) | quote }}
           imagePullPolicy: IfNotPresent
           env:
-            - name: ASPNETCORE_ENVIRONMENT
-              value: {{ default "Docker" $svc.environment | quote }}
-            # Every service gets the K8s browser issuer even though only the six services that
-            # call AddTicketFlowAuth consume it.  This keeps the template generic and prevents a
-            # host-issued token from working at the gateway but failing on a downstream owner.
-            - name: Keycloak__ValidIssuers__2
-              value: {{ $root.Values.kubernetes.keycloakBrowserIssuer | quote }}
-            {{- range $svc.env }}
-            - name: {{ .name }}
-              value: {{ .value | quote }}
-            {{- end }}
+{{ include "ticketflow.serviceEnv" (dict "root" $root "service" $svc "name" $name) | indent 12 }}
           ports:
-            - containerPort: {{ $svc.port }}
+            - { name: http, containerPort: {{ $svc.port }} }
             {{- range $svc.extraPorts }}
-            - containerPort: {{ .port }}
+            - { name: {{ .name }}, containerPort: {{ .port }} }
             {{- end }}
+          startupProbe:
+            httpGet: { path: /health/live, port: {{ $svc.port }} }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /health/live, port: {{ $svc.port }} }
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
           readinessProbe:
-            httpGet:
-              path: /health
-              port: {{ $svc.port }}
-            initialDelaySeconds: 15
+            httpGet: { path: /health/ready, port: {{ $svc.port }} }
             periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 12
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            runAsNonRoot: true
+            runAsUser: 1654
+          {{- if and $svc.usesKafka $root.Values.runtime.kafka.caSecretName }}
+          volumeMounts:
+            - { name: kafka-ca, mountPath: /etc/ticketflow/kafka-ca, readOnly: true }
+          {{- end }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: {{ $name }}
+metadata: { name: {{ $name }} }
 spec:
   {{- if $svc.nodePort }}
   type: NodePort
   {{- end }}
-  selector:
-    app: {{ $name }}
+  selector: { app: {{ $name }} }
   ports:
     - name: http
       port: {{ $svc.port }}
@@ -107,9 +190,8 @@ spec:
       nodePort: {{ $svc.nodePort }}
       {{- end }}
     {{- range $svc.extraPorts }}
-    - name: {{ .name }}
-      port: {{ .port }}
-      targetPort: {{ .port }}
+    - { name: {{ .name }}, port: {{ .port }}, targetPort: {{ .port }} }
     {{- end }}
 ---
+{{- end }}
 {{- end }}

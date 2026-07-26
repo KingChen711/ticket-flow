@@ -42,6 +42,7 @@
        preserves the existing solution-level 81/81 regression gate. -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
     <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Api\TicketFlow.Ordering.Api.csproj" />
     <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Application\TicketFlow.Ordering.Application.csproj" />
     <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Domain\TicketFlow.Ordering.Domain.csproj" />

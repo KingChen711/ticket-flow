@@ -67,6 +67,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       reservation:
         condition: service_started
       es-ilm-init:
@@ -161,11 +163,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      # kafka has no healthcheck (docker-compose.infra.yml) — service_started is the strongest
-      # signal available; KafkaTopicSetup.EnsureCreatedAsync still races the broker being fully
-      # ready to serve admin requests, same as every other Kafka dependency in this stack.
-      kafka:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
       es-ilm-init:
         condition: service_completed_successfully
 

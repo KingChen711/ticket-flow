@@ -1,0 +1,25 @@
+{{- if eq .Values.profile "production" }}
+{{- if .Values.secrets.create }}{{ fail "production requires secrets.create=false and an externally managed Secret" }}{{ end }}
+{{- if eq .Values.appImages.tag "latest" }}{{ fail "production application images cannot use latest" }}{{ end }}
+{{- if ne .Values.runtime.environment "Production" }}{{ fail "production profile requires runtime.environment=Production" }}{{ end }}
+{{- if ne .Values.runtime.notification.provider "Http" }}{{ fail "production requires the real HTTP notification provider" }}{{ end }}
+{{- if not .Values.runtime.minio.useSsl }}{{ fail "production object storage must enable TLS" }}{{ end }}
+{{- if not .Values.runtime.rabbitmq.useSsl }}{{ fail "production RabbitMQ must enable TLS" }}{{ end }}
+{{- if eq .Values.runtime.rabbitmq.virtualHost "/" }}{{ fail "production RabbitMQ must use a dedicated virtual host" }}{{ end }}
+{{- if not .Values.runtime.kafka.useSsl }}{{ fail "production Kafka must enable TLS" }}{{ end }}
+{{- if not .Values.runtime.kafka.useSasl }}{{ fail "production Kafka must enable SASL authentication" }}{{ end }}
+{{- range $name, $url := dict
+      "gateway" .Values.runtime.gatewayUrl
+      "keycloak-authority" .Values.runtime.keycloak.authority
+      "keycloak-health" .Values.runtime.keycloak.healthUrl
+      "elasticsearch" .Values.runtime.elasticsearchUri
+      "otlp" .Values.runtime.otlpEndpoint
+      "functions" .Values.runtime.functions.serviceUrl
+      "functions-health" .Values.runtime.functions.healthUrl
+      "notification" .Values.runtime.notification.baseUrl
+      "notification-health" .Values.runtime.notification.healthUrl }}
+{{- if not (hasPrefix "https://" $url) }}{{ fail (printf "production endpoint %s must use HTTPS" $name) }}{{ end }}
+{{- if contains "host.docker.internal" $url }}{{ fail (printf "production endpoint %s cannot use host.docker.internal" $name) }}{{ end }}
+{{- end }}
+{{- if .Values.infra.keycloak.importDevelopmentRealm }}{{ fail "development Keycloak realm import is forbidden in production" }}{{ end }}
+{{- end }}

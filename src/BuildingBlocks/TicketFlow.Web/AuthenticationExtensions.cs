@@ -24,12 +24,23 @@ public static class AuthenticationExtensions
         var validIssuers = keycloak.GetSection("ValidIssuers").Get<string[]>();
         if (validIssuers is null || validIssuers.Length == 0)
             throw new InvalidOperationException("Missing configuration: Keycloak:ValidIssuers");
+        var production = string.Equals(
+            configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
+        if (production && (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
+                           authorityUri.Scheme != Uri.UriSchemeHttps ||
+                           validIssuers.Any(issuer =>
+                               !Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) ||
+                               issuerUri.Scheme != Uri.UriSchemeHttps)))
+        {
+            throw new InvalidOperationException(
+                "Production Keycloak authority and every valid issuer must use HTTPS.");
+        }
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
                 options.Authority = authority;
-                options.RequireHttpsMetadata = false; // dev: Keycloak này chạy HTTP thuần, không TLS
+                options.RequireHttpsMetadata = production;
                 options.MapInboundClaims = false; // giữ tên claim gốc (email/sub/name) — mặc định remap sang URI kiểu cũ (xem mục 6 phase-7-plan.md)
                 options.TokenValidationParameters = new TokenValidationParameters
                 {

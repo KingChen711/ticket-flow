@@ -1,6 +1,7 @@
 using Elastic.Clients.Elasticsearch;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using TicketFlow.Search.Application.Abstractions;
 
 namespace TicketFlow.Search.Infrastructure;
@@ -19,7 +20,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEventSearchIndex>(sp =>
             new ElasticEventSearchIndex(sp.GetRequiredService<ElasticsearchClient>(), indexName));
 
-        services.AddHealthChecks().AddCheck<ElasticsearchHealthCheck>("elasticsearch");
+        services.AddHealthChecks().AddCheck<ElasticsearchHealthCheck>(
+            "elasticsearch", Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy,
+            ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }

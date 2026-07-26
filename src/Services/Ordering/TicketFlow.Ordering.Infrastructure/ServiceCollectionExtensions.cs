@@ -4,6 +4,7 @@ using Marten;
 using Marten.Schema;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Sagas;
@@ -22,7 +23,8 @@ public static class ServiceCollectionExtensions
         services.AddMarten(options =>
         {
             options.Connection(connectionString);
-            Configure(options);
+            var allowRuntimeSchemaChanges = configuration.GetValue("Marten:AutoCreateSchemaObjects", true);
+            Configure(options, allowRuntimeSchemaChanges ? AutoCreate.CreateOrUpdate : AutoCreate.None);
         });
 
         services.AddScoped<IOrderStore, MartenOrderStore>();
@@ -30,7 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOrderViewStore, MartenOrderViewStore>();
         services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
 
-        services.AddHealthChecks().AddCheck<MartenHealthCheck>("marten");
+        services.AddHealthChecks().AddCheck<MartenHealthCheck>(
+            "marten", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }
@@ -40,11 +43,13 @@ public static class ServiceCollectionExtensions
     /// hardening tests can prove these exact projections and indexes against real Postgres — a
     /// hand-copied test configuration would only prove the copy.
     /// </summary>
-    public static void Configure(StoreOptions options)
+    public static void Configure(
+        StoreOptions options,
+        AutoCreate autoCreateSchemaObjects = AutoCreate.CreateOrUpdate)
     {
-        // Dev-only, same spirit as EF's migrate-on-startup elsewhere in this repo — a real
-        // deployment would run schema setup as a separate CI/CD step instead.
-        options.AutoCreateSchemaObjects = AutoCreate.CreateOrUpdate;
+        // Production sets this to None; the image's explicit --migrate command is the sole
+        // schema writer. Development keeps CreateOrUpdate for the existing fast local loop.
+        options.AutoCreateSchemaObjects = autoCreateSchemaObjects;
 
         // Inline = read model updates in the SAME transaction as the event append, so a
         // query right after a command sees the new state immediately (read-after-write

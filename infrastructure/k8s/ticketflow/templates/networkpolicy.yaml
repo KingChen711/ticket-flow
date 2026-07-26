@@ -19,7 +19,7 @@
 # like an application bug. Ingress is where the bypass actually was.
 {{- $root := . }}
 {{- range $name, $svc := .Values.services }}
-{{- if ne $name "gateway" }}
+{{- if and $svc.enabled (ne $name "gateway") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -37,7 +37,7 @@ spec:
             matchLabels:
               app: gateway
         {{- range $peer, $peerSvc := $root.Values.services }}
-        {{- if ne $peer "gateway" }}
+        {{- if and $peerSvc.enabled (ne $peer "gateway") }}
         # Peer services: catalog -> reservation/recommendation, ordering -> reservation (gRPC).
         # Listed rather than left open because "any pod in the namespace" would include the
         # frontends, which have no business reaching a service directly.

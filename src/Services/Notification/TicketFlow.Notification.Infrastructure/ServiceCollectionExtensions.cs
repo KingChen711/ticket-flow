@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using MongoDB.Driver;
 using TicketFlow.Notification.Application;
@@ -45,7 +46,8 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<INotificationProvider, DevelopmentNotificationProvider>();
         }
 
-        services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
+        services.AddHealthChecks().AddCheck<MongoHealthCheck>(
+            "mongodb", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }
@@ -70,8 +72,14 @@ public static class ServiceCollectionExtensions
             if (!Uri.TryCreate(configuration["Delivery:BaseUrl"], UriKind.Absolute, out var uri) ||
                 uri.Scheme is not ("http" or "https"))
                 throw new InvalidOperationException("Delivery:BaseUrl must be an absolute HTTP(S) URI.");
+            if (production && uri.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("Production Delivery:BaseUrl must use HTTPS.");
             if (string.IsNullOrWhiteSpace(configuration["Delivery:ApiKey"]))
                 throw new InvalidOperationException("Delivery:ApiKey is required for the HTTP provider.");
+            if (production &&
+                (!Uri.TryCreate(configuration["Delivery:HealthUrl"], UriKind.Absolute, out var healthUri) ||
+                 healthUri.Scheme != Uri.UriSchemeHttps))
+                throw new InvalidOperationException("Production Delivery:HealthUrl must be an absolute HTTPS URI.");
             return "Http";
         }
 

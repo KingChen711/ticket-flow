@@ -19,6 +19,15 @@ using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (EfMigrationRunner.IsRequested(args))
+{
+    var connectionString = builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string 'Default' was not found.");
+    await using var dbContext = ReservationDbContextFactory.Create(connectionString);
+    await EfMigrationRunner.RunAsync(dbContext, "reservation");
+    return;
+}
+
 var httpPort = builder.Configuration.GetValue("Kestrel:HttpPort", 8003);
 var grpcPort = builder.Configuration.GetValue("Kestrel:GrpcPort", 9003);
 var reconcileModeName = builder.Configuration["Reservation:CacheReconcileMode"] ?? "RepairCache";
@@ -59,6 +68,7 @@ builder.Services.AddHostedService<ReservationCacheReconciliationWorker>();
 // (Application) — ISeatHoldStore now has a real implementation (Commit 4-6), so this no
 // longer trips ASP.NET Core's DI validation at Build() the way it would have in Commit 3/4.
 builder.Services.AddReservationInfrastructure(builder.Configuration);
+builder.Services.AddDbContextReadinessCheck<ReservationDbContext>("postgres");
 builder.Services.AddReservationApplication();
 
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cfg =>
@@ -79,6 +89,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cf
     // EF consumer outbox continues the existing endpoints instead of creating replacement queues.
     rabbit.ReceiveEndpoint("reservation-confirm-seats", endpoint =>
     {
+        endpoint.SetQuorumQueue();
         endpoint.ConcurrentMessageLimit = 8;
         endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
         endpoint.ConfigureConsumer<ConfirmSeatsConsumer>(context);
@@ -86,6 +97,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cf
 
     rabbit.ReceiveEndpoint("reservation-release-seats", endpoint =>
     {
+        endpoint.SetQuorumQueue();
         endpoint.ConcurrentMessageLimit = 8;
         endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
         endpoint.ConfigureConsumer<ReleaseSeatsConsumer>(context);
@@ -93,6 +105,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cf
 
     rabbit.ReceiveEndpoint("reservation-catalog-sale-policy-changed", endpoint =>
     {
+        endpoint.SetQuorumQueue();
         // Serialize snapshots so two first deliveries cannot race the EventId primary key.
         endpoint.ConcurrentMessageLimit = 1;
         endpoint.UseEntityFrameworkOutbox<ReservationDbContext>(context);
@@ -104,6 +117,7 @@ builder.Services.AddTicketFlowMessaging(builder.Configuration, "reservation", cf
     // SeatAvailabilityChanged event.
     rabbit.ReceiveEndpoint("reservation-seat-map-notification", endpoint =>
     {
+        endpoint.SetQuorumQueue();
         // Held and Sold for one quote intentionally share its allocation generation. Serialize
         // the projection queue so a faster Sold hub call cannot be overtaken by the earlier Held
         // notification for that same seat.
@@ -116,7 +130,8 @@ var app = builder.Build();
 
 // Dev-only: auto-migrate on startup. A real deployment would run migrations as a separate
 // CI/CD step instead of on every app boot (avoids races across multiple instances).
-if (!app.Environment.IsProduction())
+if (!app.Environment.IsProduction() &&
+    !string.Equals(builder.Configuration["Database:MigrateOnStartup"], "false", StringComparison.OrdinalIgnoreCase))
 {
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<ReservationDbContext>();

@@ -1,3 +1,4 @@
+using MongoDB.Driver;
 using Scalar.AspNetCore;
 using TicketFlow.Messaging;
 using TicketFlow.Observability;
@@ -7,6 +8,17 @@ using TicketFlow.Recommendation.Infrastructure;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (EfMigrationRunner.IsRequested(args))
+{
+    MongoSerializationConfig.EnsureConfigured();
+    var connectionString = builder.Configuration["Mongo:ConnectionString"]
+        ?? throw new InvalidOperationException("Configuration 'Mongo:ConnectionString' was not found.");
+    var databaseName = builder.Configuration["Mongo:Database"] ?? "recommendation";
+    var client = new MongoClient(connectionString);
+    await PurchaseHistoryIndexInitializer.EnsureCreatedAsync(client.GetDatabase(databaseName));
+    return;
+}
 
 builder.Services.AddTicketFlowWeb();
 // Commit 14: this service validates its own token now. It held none before, so its only

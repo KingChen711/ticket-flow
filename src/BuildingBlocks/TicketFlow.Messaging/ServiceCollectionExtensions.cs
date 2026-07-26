@@ -1,3 +1,5 @@
+using System.Security.Authentication;
+using Confluent.Kafka;
 using MassTransit;
 using MassTransit.RabbitMqTransport;
 using Microsoft.Extensions.Configuration;
@@ -30,13 +32,10 @@ public static class ServiceCollectionExtensions
     /// RabbitMQ transport on the same bus, not a replacement. RabbitMQ stays the default for
     /// every service's commands/sagas (Phase 6 mục 3); Kafka Rider is only for the one analytics
     /// stream (SaleRecorded) that actually needs stream/replay semantics. Confirmed via a real
-    /// probe against a live Kafka broker before wiring this in: a producer-only Rider
-    /// (AddProducer, no AddConsumer/TopicEndpoint) auto-creates its topic on first Produce() —
-    /// no admin pre-step needed for producer-only callers like Ordering. A consumer that
-    /// subscribes via TopicEndpoint to a topic that doesn't exist yet crashes bus startup
-    /// entirely, so any consumer-side caller (Commit 7's Analytics) needs its own explicit
-    /// topic-creation-on-startup step (via Confluent.Kafka.Admin.IAdminClient) before calling
-    /// this.
+    /// probe against a live Kafka broker before wiring this in: both producer and consumer can
+    /// lose their startup race when topic auto-creation is disabled. Phase 12 therefore provisions
+    /// topics once through an idempotent Helm/Compose job, then every Kafka workload gates startup
+    /// on that topic contract. Application replicas never compete to mutate broker metadata.
     ///
     /// `configureKafkaFactory` is the Kafka-specific analog of `configureRabbitMq` — same reason
     /// it exists: `configureKafka` only sees IRiderRegistrationConfigurator (AddProducer/
@@ -58,10 +57,32 @@ public static class ServiceCollectionExtensions
             ?? throw new InvalidOperationException("Configuration 'RabbitMq:Username' was not found.");
         var password = configuration["RabbitMq:Password"]
             ?? throw new InvalidOperationException("Configuration 'RabbitMq:Password' was not found.");
+        var virtualHost = configuration["RabbitMq:VirtualHost"] ?? "/";
+        var rabbitUseSsl = bool.TryParse(configuration["RabbitMq:UseSsl"], out var configuredRabbitSsl)
+            && configuredRabbitSsl;
+        var isProduction = string.Equals(
+            configuration["ASPNETCORE_ENVIRONMENT"],
+            "Production",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (isProduction && !rabbitUseSsl)
+            throw new InvalidOperationException("Production RabbitMQ transport requires RabbitMq:UseSsl=true.");
+
+        if (isProduction && virtualHost == "/")
+            throw new InvalidOperationException("Production RabbitMQ transport requires a dedicated RabbitMq:VirtualHost.");
 
         services.AddMassTransit(busConfigurator =>
         {
             busConfigurator.SetEndpointNameFormatter(new KebabCaseEndpointNameFormatter(serviceName, includeNamespace: false));
+
+            // Durable is MassTransit's default, and quorum makes the persistence contract
+            // explicit at the broker. On the local one-node chart this has one member; the same
+            // declaration automatically replicates when production RabbitMQ has more nodes.
+            busConfigurator.AddConfigureEndpointsCallback((_, endpointConfigurator) =>
+            {
+                if (endpointConfigurator is IRabbitMqReceiveEndpointConfigurator rabbitEndpoint)
+                    rabbitEndpoint.SetQuorumQueue();
+            });
 
             // Commit 9: backs the saga deadlines, the missing-instance redelivery and the
             // delayed-redelivery ladder below. The RabbitMQ delayed-message-exchange plugin does
@@ -79,10 +100,19 @@ public static class ServiceCollectionExtensions
 
             busConfigurator.UsingRabbitMq((context, rabbitConfigurator) =>
             {
-                rabbitConfigurator.Host(host, "/", hostConfigurator =>
+                rabbitConfigurator.Host(host, virtualHost, hostConfigurator =>
                 {
                     hostConfigurator.Username(username);
                     hostConfigurator.Password(password);
+
+                    if (rabbitUseSsl)
+                    {
+                        hostConfigurator.UseSsl(sslConfigurator =>
+                        {
+                            sslConfigurator.Protocol = SslProtocols.Tls12;
+                            sslConfigurator.ServerName = configuration["RabbitMq:ServerName"] ?? host;
+                        });
+                    }
                 });
 
                 rabbitConfigurator.UseDelayedMessageScheduler();
@@ -126,13 +156,70 @@ public static class ServiceCollectionExtensions
             {
                 var kafkaHost = configuration["Kafka:Host"]
                     ?? throw new InvalidOperationException("Configuration 'Kafka:Host' was not found.");
+                var kafkaUseSsl = bool.TryParse(configuration["Kafka:UseSsl"], out var configuredKafkaSsl)
+                    && configuredKafkaSsl;
+                var kafkaUseSasl = bool.TryParse(configuration["Kafka:UseSasl"], out var configuredKafkaSasl)
+                    && configuredKafkaSasl;
+
+                if (isProduction && (!kafkaUseSsl || !kafkaUseSasl))
+                {
+                    throw new InvalidOperationException(
+                        "Production Kafka transport requires Kafka:UseSsl=true and Kafka:UseSasl=true.");
+                }
 
                 busConfigurator.AddRider(riderConfigurator =>
                 {
                     configureKafka(riderConfigurator);
                     riderConfigurator.UsingKafka((context, kafkaConfigurator) =>
                     {
-                        kafkaConfigurator.Host(kafkaHost);
+                        // librdkafka keeps reconnecting, but every delay is bounded and jittered.
+                        // Topic creation is deliberately disabled broker-side and belongs to the
+                        // Helm provisioning Job, never to an application replica.
+                        kafkaConfigurator.ReconnectBackoff = TimeSpan.FromMilliseconds(
+                            int.TryParse(configuration["Kafka:ReconnectBackoffMs"], out var reconnectBackoff)
+                                ? reconnectBackoff
+                                : 250);
+                        kafkaConfigurator.ReconnectBackoffMax = TimeSpan.FromMilliseconds(
+                            int.TryParse(configuration["Kafka:ReconnectBackoffMaxMs"], out var reconnectBackoffMax)
+                                ? reconnectBackoffMax
+                                : 10_000);
+                        kafkaConfigurator.Host(kafkaHost, hostConfigurator =>
+                        {
+                            if (kafkaUseSsl)
+                            {
+                                hostConfigurator.UseSsl(sslConfigurator =>
+                                {
+                                    var caLocation = configuration["Kafka:CaLocation"];
+                                    if (!string.IsNullOrWhiteSpace(caLocation))
+                                        sslConfigurator.CaLocation = caLocation;
+                                });
+                            }
+
+                            if (kafkaUseSasl)
+                            {
+                                var kafkaUsername = configuration["Kafka:Username"]
+                                    ?? throw new InvalidOperationException("Configuration 'Kafka:Username' was not found.");
+                                var kafkaPassword = configuration["Kafka:Password"]
+                                    ?? throw new InvalidOperationException("Configuration 'Kafka:Password' was not found.");
+                                var mechanismText = configuration["Kafka:SaslMechanism"] ?? "ScramSha512";
+                                if (!Enum.TryParse<SaslMechanism>(mechanismText, ignoreCase: true, out var mechanism))
+                                {
+                                    throw new InvalidOperationException(
+                                        $"Unsupported Kafka:SaslMechanism '{mechanismText}'.");
+                                }
+
+                                hostConfigurator.UseSasl(saslConfigurator =>
+                                {
+                                    saslConfigurator.Username = kafkaUsername;
+                                    saslConfigurator.Password = kafkaPassword;
+                                    saslConfigurator.Mechanism = mechanism;
+                                    saslConfigurator.SecurityProtocol = kafkaUseSsl
+                                        ? SecurityProtocol.SaslSsl
+                                        : SecurityProtocol.SaslPlaintext;
+                                });
+                            }
+                        });
+
                         configureKafkaFactory?.Invoke(context, kafkaConfigurator);
                     });
                 });

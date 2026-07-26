@@ -13,6 +13,15 @@ using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (EfMigrationRunner.IsRequested(args))
+{
+    var connectionString = builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string 'Default' was not found.");
+    await using var dbContext = TicketingDbContextFactory.Create(connectionString);
+    await EfMigrationRunner.RunAsync(dbContext, "ticketing");
+    return;
+}
+
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(
     builder.Configuration,
@@ -26,6 +35,9 @@ builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddTicketingApplication();
 builder.Services.AddTicketingInfrastructure(builder.Configuration);
+builder.Services.AddDbContextReadinessCheck<TicketingDbContext>("postgres");
+RegisterHttpDependency("Aws:HealthUrl", "functions-provider", requiredInProduction: true);
+RegisterHttpDependency("Minio:HealthUrl", "minio", requiredInProduction: true);
 builder.Services.AddTicketFlowMessaging(
     builder.Configuration,
     "ticketing",
@@ -53,6 +65,7 @@ builder.Services.AddTicketFlowMessaging(
         // so this is a continuation of the existing queue, not a rename.
         rabbitConfigurator.ReceiveEndpoint("ticketing-issue-tickets", e =>
         {
+            e.SetQuorumQueue();
             // PDF rendering invokes LocalStack's Docker-backed Lambda executor.  On this local
             // Compose host, parallel cold starts can time out before the function begins; a
             // single durable consumer lets RabbitMQ absorb a flash-sale fan-out instead of
@@ -66,7 +79,8 @@ builder.Services.AddTicketFlowMessaging(
 var app = builder.Build();
 
 // Dev-only: auto-migrate on startup, same pattern as Catalog/Identity/Reservation/Payment.
-if (!app.Environment.IsProduction())
+if (!app.Environment.IsProduction() &&
+    !string.Equals(builder.Configuration["Database:MigrateOnStartup"], "false", StringComparison.OrdinalIgnoreCase))
 {
     using var scope = app.Services.CreateScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<TicketingDbContext>();
@@ -82,3 +96,18 @@ app.MapScalarApiReference();
 app.MapTicketEndpoints();
 
 app.Run();
+
+void RegisterHttpDependency(string configurationKey, string name, bool requiredInProduction)
+{
+    var value = builder.Configuration[configurationKey];
+    if (Uri.TryCreate(value, UriKind.Absolute, out var endpoint))
+    {
+        if (builder.Environment.IsProduction() && endpoint.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException($"Production requires HTTPS for '{configurationKey}'.");
+        builder.Services.AddHttpReadinessCheck(name, endpoint);
+    }
+    else if (requiredInProduction && builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException($"Production requires an absolute '{configurationKey}'.");
+    }
+}

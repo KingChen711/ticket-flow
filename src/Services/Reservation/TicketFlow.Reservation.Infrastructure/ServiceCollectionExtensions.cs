@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using StackExchange.Redis;
 using TicketFlow.Reservation.Application.Abstractions;
 using TicketFlow.Reservation.Infrastructure.Reconciliation;
@@ -47,7 +48,8 @@ public static class ServiceCollectionExtensions
             ConnectionMultiplexer.Connect(redisConnectionString));
         services.AddScoped<ISeatHoldStore, RedisSeatHoldStore>();
 
-        services.AddHealthChecks().AddCheck<RedisHealthCheck>("redis");
+        services.AddHealthChecks().AddCheck<RedisHealthCheck>(
+            "redis", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }

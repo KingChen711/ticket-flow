@@ -11,9 +11,14 @@ namespace TicketFlow.Recommendation.Infrastructure;
 /// </summary>
 public sealed class PurchaseHistoryIndexInitializer(IMongoDatabase database) : IHostedService
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken) =>
+        EnsureCreatedAsync(database, cancellationToken);
+
+    public static async Task EnsureCreatedAsync(
+        IMongoDatabase targetDatabase,
+        CancellationToken cancellationToken = default)
     {
-        var collection = database.GetCollection<BsonDocument>("purchaseHistory");
+        var collection = targetDatabase.GetCollection<BsonDocument>("purchaseHistory");
         var index = new CreateIndexModel<BsonDocument>(
             Builders<BsonDocument>.IndexKeys.Ascending("UserId"),
             new CreateIndexOptions { Name = "ux_purchase_history_user_id", Unique = true });

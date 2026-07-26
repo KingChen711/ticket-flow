@@ -20,6 +20,14 @@ using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (EfMigrationRunner.IsRequested(args))
+{
+    var connectionString = builder.Configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("Connection string 'Default' was not found.");
+    await OrderingMigrationRunner.RunAsync(connectionString);
+    return;
+}
+
 builder.Services.AddTicketFlowWeb();
 builder.Services.AddSingleton<TicketSalesMetrics>();
 builder.Services.AddTicketFlowObservability(

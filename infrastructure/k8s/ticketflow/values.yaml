@@ -1,177 +1,339 @@
-# Phase 11 Commit 1 — infra datastores only. Images/env/versions mirror
-# infrastructure/docker/docker-compose.infra.yml exactly (same pins, same credentials — this is a
-# local learning cluster, not a security exercise). storage sizes are generous-but-arbitrary for
-# a local kind node backed by the default `standard` StorageClass (local-path-provisioner).
-infra:
-  postgres:
-    image: postgres:16
-    user: ticketflow
-    password: ticketflow
-    db: ticketflow
-    storage: 2Gi
+# Phase 12 Commit 17: durable local/kind profile. Production overlays this file with
+# values-production.yaml and secret material supplied by an external secret controller.
+profile: development
 
-  redis:
-    image: redis:7
-
-  rabbitmq:
-    # Same plugin requirement as docker-compose.infra.yml (Commit 9): the saga's deadlines and
-    # missing-instance redelivery schedule through rabbitmq_delayed_message_exchange, which the
-    # stock image does not ship.
-    image: masstransit/rabbitmq:latest
-    user: ticketflow
-    password: ticketflow
-
-  kafka:
-    image: apache/kafka:3.8.0
-
-  minio:
-    image: minio/minio:latest
-    user: ticketflow
-    password: ticketflow
-    storage: 2Gi
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
-    # Same 1g heap as compose (Phase 10 Commit 4) — this node also ingests Serilog logs once
-    # Commit 2 wires the 11 API services in.
-    javaOpts: "-Xms1g -Xmx1g"
-    storage: 3Gi
-
-  mongodb:
-    image: mongo:7
-    user: ticketflow
-    password: ticketflow
-    storage: 2Gi
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    user: ticketflow
-    password: ticketflow
-    db: analytics
-    storage: 2Gi
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.7
-    adminUser: admin
-    adminPassword: admin
-
-# Phase 11 Commit 2 — 11 .NET API services + gateway. Image names match exactly what
-# `docker compose build` already produces locally (docker-compose.yml's default project-name
-# tagging: ticket-flow-<service>:latest) — `kind load docker-image` reuses these, no separate
-# K8s-specific build. Commit 3 overrides these two fields so the workflow deploys the immutable
-# GHCR SHA tags it just built; infrastructure images deliberately remain on their upstream tags.
 appImages:
   registry: ""
-  tag: latest
+  # Deliberately not `latest`. Tag locally built images with this value; CI overrides it with the
+  # immutable Git SHA. The helper rejects `latest` at render time.
+  tag: phase12-local
 
-# `Aws__LambdaServiceUrl` is only overridden for the 2 services that actually call Lambda
-# (ticketing→RenderTicketPdf, gateway→media Lambdas) — LocalStack lives OUTSIDE the cluster
-# (rủi ro số 2: Kubernetes Executor for Lambda is Enterprise-only, confirmed live via
-# LocalStack's own docs), reached from inside the cluster via `host.docker.internal` — confirmed
-# live (DNS resolves to the Docker Desktop gateway IP, and a real HTTP call from a pod to
-# `host.docker.internal:4566/_localstack/health` succeeded) before this value was ever written.
-kubernetes:
-  # Keycloak remains reachable inside the cluster at keycloak:8180 for JWKS discovery.  Host
-  # browser logins use a Keycloak port-forward on the Docker Desktop gateway, so their JWTs carry
-  # this issuer instead; services receive it as Keycloak__ValidIssuers__2 below.
-  keycloakBrowserIssuer: http://host.docker.internal:8180/realms/ticketflow
+secrets:
+  create: true
+  name: ticketflow-runtime
+  rabbitDefinitionsName: ticketflow-rabbitmq-definitions
+  # Development-only values. Production sets create=false; none of these render there.
+  development:
+    postgresAdminPassword: dev-postgres-admin-change-me
+    catalogDbPassword: dev-catalog-db-change-me
+    identityDbPassword: dev-identity-db-change-me
+    reservationDbPassword: dev-reservation-db-change-me
+    orderingDbPassword: dev-ordering-db-change-me
+    paymentDbPassword: dev-payment-db-change-me
+    ticketingDbPassword: dev-ticketing-db-change-me
+    keycloakDbPassword: dev-keycloak-db-change-me
+    redisPassword: dev-redis-change-me
+    rabbitmqAdminPassword: dev-rabbit-admin-change-me
+    rabbitmqAppPassword: dev-rabbit-app-change-me
+    kafkaUsername: ticketflow_app
+    kafkaPassword: dev-kafka-app-change-me
+    mongoPassword: dev-mongo-change-me
+    clickhousePassword: dev-clickhouse-change-me
+    minioSecretKey: dev-minio-secret-change-me
+    keycloakAdminPassword: dev-keycloak-admin-change-me
+    identityAdminClientSecret: identity-admin-dev-secret
+    notificationApiKey: development-notification-key
+    awsAccessKey: test
+    awsSecretKey: test
+    grafanaAdminPassword: dev-grafana-admin-change-me
+    customerAuthSecret: phase12-customer-auth-secret-change-me
+    customerClientSecret: customer-web-dev-secret
+    organizerAuthSecret: phase12-organizer-auth-secret-change-me
+    organizerClientSecret: organizer-dashboard-dev-secret
+    scannerAuthSecret: phase12-scanner-auth-secret-change-me
+    scannerClientSecret: gate-scanner-dev-secret
+
+runtime:
+  environment: Development
+  gatewayUrl: http://gateway:8080
+  rabbitmq:
+    host: rabbitmq
+    virtualHost: ticketflow
+    useSsl: false
+    serverName: rabbitmq
+  kafka:
+    host: kafka:9092
+    provisionTopics: true
+    useSsl: false
+    useSasl: false
+    saslMechanism: ScramSha512
+    caSecretName: ""
+    caSecretKey: ca.crt
+    reconnectBackoffMs: 250
+    reconnectBackoffMaxMs: 10000
+  mongo:
+    notificationDatabase: notification
+    recommendationDatabase: recommendation
+  clickhouse:
+    host: clickhouse
+    port: 9000
+    secure: false
+    user: ticketflow_analytics
+    database: analytics
+  keycloak:
+    authority: http://keycloak:8180/realms/ticketflow
+    serverUrl: http://keycloak:8180
+    browserIssuer: http://localhost:8180/realms/ticketflow
+    healthUrl: http://keycloak:9000/health/ready
+  elasticsearchUri: http://elasticsearch:9200
+  otlpEndpoint: http://ticketflow-jaeger:4317
+  minio:
+    endpoint: minio:9000
+    healthUrl: http://minio:9000/minio/health/ready
+    useSsl: false
+  functions:
+    # Explicit external dependency. Run the pinned LocalStack container on the kind Docker
+    # network under this DNS name; pod readiness fails until its health endpoint is reachable.
+    serviceUrl: http://functions-provider:4566
+    healthUrl: http://functions-provider:4566/_localstack/health
+    externalName: ticketflow-localstack
+    port: 4566
+  notification:
+    provider: DevelopmentStub
+    baseUrl: http://notification-provider.invalid
+    healthUrl: http://notification-provider.invalid/health
+
+infra:
+  postgres:
+    enabled: true
+    image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
+    adminUser: ticketflow_admin
+    storage: 4Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  redis:
+    enabled: true
+    image: redis:7@sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50
+    storage: 1Gi
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 384Mi }
+
+  rabbitmq:
+    enabled: true
+    image: masstransit/rabbitmq@sha256:b09de6c97585b9e14103ff8827a9f25784de81a3a6464df532947dd8f2299005
+    adminUser: ticketflow_admin
+    appUser: ticketflow_app
+    storage: 2Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "1", memory: 768Mi }
+
+  kafka:
+    enabled: true
+    image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
+    storage: 3Gi
+    topics:
+      - name: sale-recorded
+        partitions: 6
+        replicationFactor: 1
+        retentionMs: 604800000
+    resources:
+      requests: { cpu: 100m, memory: 384Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+  minio:
+    enabled: true
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    user: ticketflow_minio
+    storage: 2Gi
+    tls:
+      enabled: false
+      secretName: ticketflow-minio-tls
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+
+  elasticsearch:
+    enabled: true
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3@sha256:01c1732062b4a846c5ca687b0094b89bad0bfed00c6d71626db32fb8f3131a78
+    javaOpts: -Xms512m -Xmx512m
+    storage: 3Gi
+    resources:
+      requests: { cpu: 100m, memory: 768Mi }
+      limits: { cpu: "1", memory: 1400Mi }
+
+  mongodb:
+    enabled: true
+    image: mongo:7@sha256:9bdaeb6dac6e7e762e84e2f84103d1f9bb078fa1ba6bde8bb9d2274f655ad173
+    user: ticketflow_mongo
+    storage: 2Gi
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    user: ticketflow_analytics
+    db: analytics
+    storage: 2Gi
+    resources:
+      requests: { cpu: 50m, memory: 192Mi }
+      limits: { cpu: "1", memory: 768Mi }
+
+  keycloak:
+    enabled: true
+    image: quay.io/keycloak/keycloak:26.7@sha256:2eb3cd316835c990e69e26ade292ffa78f6fb0db7d5fc6377463c162e1979ac0
+    adminUser: ticketflow_keycloak_admin
+    database: ticketflow_keycloak
+    databaseUser: ticketflow_keycloak
+    importDevelopmentRealm: true
+    tls:
+      enabled: false
+      secretName: ticketflow-keycloak-tls
+    resources:
+      requests: { cpu: 100m, memory: 384Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+monitoring:
+  enabled: true
+  jaegerImage: jaegertracing/all-in-one@sha256:ab6f1a1f0fb49ea08bcd19f6b84f6081d0d44b364b6de148e1798eb5816bacac
+  prometheusImage: prom/prometheus@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
+  grafanaImage: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
+  kibanaImage: docker.elastic.co/kibana/kibana:8.15.3@sha256:43dffccc4085ebca96ed8a8da30116fa3a246c9e204b028949d2a8e733544987
+  curlImage: curlimages/curl:8.11.0@sha256:83a505ba2ba62f208ed6e410c268b7b9aa48f0f7b403c8108b9773b44199dbba
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+workloads:
+  resources:
+    requests: { cpu: 25m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  frontendResources:
+    requests: { cpu: 25m, memory: 96Mi }
+    limits: { cpu: 300m, memory: 384Mi }
+  migrationBackoffLimit: 12
 
 services:
   catalog:
+    enabled: true
     image: ticket-flow-catalog
+    dll: TicketFlow.Catalog.Api.dll
     port: 8002
-
+    usesRabbit: true
+    databaseSecretKey: connection-catalog
+    postgresUriSecretKey: postgres-uri-catalog
+    schemaGate: { kind: ef, schema: catalog, migration: 20260725195248_Phase12WebContracts }
   identity:
+    enabled: true
     image: ticket-flow-identity
+    dll: TicketFlow.Identity.Api.dll
     port: 8001
-
+    databaseSecretKey: connection-identity
+    postgresUriSecretKey: postgres-uri-identity
+    usesIdentityAdmin: true
+    schemaGate: { kind: ef, schema: identity, migration: 20260723141642_Phase12DurableUserRegistration }
   reservation:
+    enabled: true
     image: ticket-flow-reservation
+    dll: TicketFlow.Reservation.Api.dll
     port: 8003
-    extraPorts:
-      - name: grpc
-        port: 9003
-
+    extraPorts: [{ name: grpc, port: 9003 }]
+    usesRabbit: true
+    usesRedis: true
+    databaseSecretKey: connection-reservation
+    postgresUriSecretKey: postgres-uri-reservation
+    schemaGate: { kind: ef, schema: reservation, migration: 20260721174533_Phase12DurableSeatAllocation }
   ordering:
+    enabled: true
     image: ticket-flow-ordering
+    dll: TicketFlow.Ordering.Api.dll
     port: 8004
-    # Marten manages schemas/streams once connected but (unlike the EF Core services) does not
-    # create its target database. The generic service template's init container creates it once
-    # before Ordering starts, including on a completely fresh Helm install.
-    bootstrapDatabase: ticketflow_ordering
-
+    usesRabbit: true
+    usesKafka: true
+    databaseSecretKey: connection-ordering
+    postgresUriSecretKey: postgres-uri-ordering
+    schemaGate: { kind: marten }
   notification:
+    enabled: true
     image: ticket-flow-notification
+    dll: TicketFlow.Notification.Api.dll
     port: 8005
-    # This chart targets the local Docker Desktop cluster. Production values must override this
-    # with Production and provide Delivery__Provider/BaseUrl/ApiKey via a Secret.
-    environment: Testing
-
+    usesRabbit: true
+    usesMongo: true
+    usesNotificationProvider: true
   search:
+    enabled: true
     image: ticket-flow-search
+    dll: TicketFlow.Search.Api.dll
     port: 8006
-
+    usesRabbit: true
+    schemaGate: { kind: elasticsearch, index: events }
   payment:
+    enabled: true
     image: ticket-flow-payment
+    dll: TicketFlow.Payment.Api.dll
     port: 8007
-
+    usesRabbit: true
+    databaseSecretKey: connection-payment
+    postgresUriSecretKey: postgres-uri-payment
+    schemaGate: { kind: ef, schema: payment, migration: 20260723162750_Phase12PaymentCancellationRecovery }
   ticketing:
+    enabled: true
     image: ticket-flow-ticketing
+    dll: TicketFlow.Ticketing.Api.dll
     port: 8008
-    env:
-      - name: Aws__LambdaServiceUrl
-        value: http://host.docker.internal:4566
-
+    usesRabbit: true
+    usesMinio: true
+    usesFunctions: true
+    databaseSecretKey: connection-ticketing
+    postgresUriSecretKey: postgres-uri-ticketing
+    schemaGate: { kind: ef, schema: ticketing, migration: 20260724075341_Phase12EventOwnerProjection }
   recommendation:
+    enabled: true
     image: ticket-flow-recommendation
+    dll: TicketFlow.Recommendation.Api.dll
     port: 8009
-
+    usesRabbit: true
+    usesMongo: true
+    migration: true
+    schemaGate: { kind: mongodb, database: recommendation, collection: purchaseHistory, index: ux_purchase_history_user_id }
   analytics:
+    enabled: true
     image: ticket-flow-analytics
+    dll: TicketFlow.Analytics.Api.dll
     port: 8010
-
+    usesRabbit: true
+    usesKafka: true
+    usesClickhouse: true
+    schemaGate: { kind: clickhouse, table: sales }
   gateway:
+    enabled: true
     image: ticket-flow-gateway
+    dll: TicketFlow.Gateway.dll
     port: 8080
-    # NodePort matches infrastructure/k8s/kind-config.yaml's extraPortMappings (Commit 1) — the
-    # one port actually mapped out to the Windows host at cluster-creation time.
     nodePort: 30080
-    env:
-      - name: Aws__LambdaServiceUrl
-        value: http://host.docker.internal:4566
+    usesFunctions: true
 
-# The browser reaches the 3 UI pods with `kubectl port-forward` (3000/3001/3002) and the API
-# gateway through kind's single mapped NodePort (localhost:30080).  Their server-side calls use
-# Kubernetes Service DNS instead.  `NEXT_PUBLIC_GATEWAY_URL` is deliberately absent here: it is
-# compiled into customer-web by its Dockerfile, because Next exposes NEXT_PUBLIC_* vars to the
-# browser at build time rather than reading them from a running pod.
-#
-# These are local-learning credentials, on the same footing as the existing database/Keycloak
-# credentials above. They are materialized as K8s Secrets by templates/frontends.yaml, not as
-# plain Deployment environment values.
 frontends:
   customer-web:
+    enabled: true
     image: ticket-flow-customer-web
     port: 3000
     readinessPath: /
-    authSecret: phase11-k8s-customer-web-auth-secret-not-for-production
-    keycloakClientId: ticketflow-customer-web
-    keycloakClientSecret: customer-web-dev-secret
-
+    authUrl: http://localhost:3000
+    authSecretKey: customer-auth-secret
+    clientId: ticketflow-customer-web
+    clientSecretKey: customer-client-secret
   organizer-dashboard:
+    enabled: true
     image: ticket-flow-organizer-dashboard
     port: 3001
-    # This zone intentionally owns /organizer, not / (the customer shell forwards the prefix).
     readinessPath: /organizer
-    authSecret: phase11-k8s-organizer-dashboard-auth-secret-not-for-production
-    keycloakClientId: ticketflow-organizer-dashboard
-    keycloakClientSecret: organizer-dashboard-dev-secret
-
+    authUrl: http://localhost:3001
+    authSecretKey: organizer-auth-secret
+    clientId: ticketflow-organizer-dashboard
+    clientSecretKey: organizer-client-secret
   gate-scanner:
+    enabled: true
     image: ticket-flow-gate-scanner
     port: 3002
-    # Same Multi-Zones contract: a root request is deliberately 404, /scanner is the app route.
     readinessPath: /scanner
-    authSecret: phase11-k8s-gate-scanner-auth-secret-not-for-production
-    keycloakClientId: ticketflow-gate-scanner
-    keycloakClientSecret: gate-scanner-dev-secret
+    authUrl: http://localhost:3002
+    authSecretKey: scanner-auth-secret
+    clientId: ticketflow-gate-scanner
+    clientSecretKey: scanner-client-secret

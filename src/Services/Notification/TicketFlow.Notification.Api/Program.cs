@@ -11,6 +11,9 @@ builder.Services.AddTicketFlowWeb();
 builder.Services.AddTicketFlowObservability(builder.Configuration, "notification");
 builder.Services.Configure<ReminderOptions>(builder.Configuration.GetSection("Reminder"));
 builder.Services.AddNotificationInfrastructure(builder.Configuration, builder.Environment);
+var deliveryHealthUrl = builder.Configuration["Delivery:HealthUrl"];
+if (Uri.TryCreate(deliveryHealthUrl, UriKind.Absolute, out var deliveryHealthUri))
+    builder.Services.AddHttpReadinessCheck("notification-provider", deliveryHealthUri);
 builder.Services.AddTicketFlowMessaging(builder.Configuration, "notification", busConfigurator =>
 {
     busConfigurator.AddConsumer<CatalogEventPublishedConsumer>();

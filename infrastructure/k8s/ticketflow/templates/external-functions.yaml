@@ -1,0 +1,10 @@
+{{- if .Values.runtime.functions.externalName }}
+apiVersion: v1
+kind: Service
+metadata: { name: functions-provider }
+spec:
+  type: ExternalName
+  externalName: {{ .Values.runtime.functions.externalName | quote }}
+  ports:
+    - { name: api, port: {{ .Values.runtime.functions.port }} }
+{{- end }}
