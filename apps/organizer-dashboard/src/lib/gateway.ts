@@ -1,32 +1,30 @@
+import { fetchJson, type RuntimeValidator } from "@ticketflow/http-client";
+
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
 
-// Server-side only — this Next.js server calls the gateway directly (BFF, docs/phase-8-plan.md
-// mục 2). Used for the public catalog GET routes (listing venues/events for the create-event
-// form and dashboard) that don't need a token.
-export async function fetchGateway<T>(path: string): Promise<T> {
-  const res = await fetch(`${GATEWAY_URL}${path}`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Gateway ${path} responded ${res.status}`);
-  }
-  return res.json() as Promise<T>;
+export function fetchGateway<T>(path: string, validate: RuntimeValidator<T>, signal?: AbortSignal): Promise<T> {
+  return fetchJson(`${GATEWAY_URL}${path}`, {
+    cache: "no-store",
+    signal,
+    validate,
+  });
 }
 
-// Authenticated variant — organizer write operations (create venue/event/seatmap/..., revenue).
-export async function fetchGatewayAuthed<T>(
+export function fetchGatewayAuthed<T>(
   path: string,
   accessToken: string,
-  init?: RequestInit,
+  validate: RuntimeValidator<T>,
+  init: Omit<RequestInit, "signal"> & { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
-  const res = await fetch(`${GATEWAY_URL}${path}`, {
-    ...init,
+  const { timeoutMs, ...requestInit } = init;
+  return fetchJson(`${GATEWAY_URL}${path}`, {
+    ...requestInit,
     cache: "no-store",
     headers: {
-      ...init?.headers,
+      ...init.headers,
       Authorization: `Bearer ${accessToken}`,
     },
+    timeoutMs,
+    validate,
   });
-  if (!res.ok) {
-    throw new Error(`Gateway ${path} responded ${res.status}`);
-  }
-  return res.json() as Promise<T>;
 }

@@ -6,9 +6,17 @@ public sealed record CreateEventRequest(
     string Artist,
     Guid VenueId,
     DateTimeOffset StartsAt,
-    DateTimeOffset EndsAt);
+    DateTimeOffset EndsAt,
+    string? TimeZoneId = "UTC",
+    int? StartUtcOffsetMinutes = null,
+    int? EndUtcOffsetMinutes = null);
 
-public sealed record RescheduleEventRequest(DateTimeOffset StartsAt, DateTimeOffset EndsAt);
+public sealed record RescheduleEventRequest(
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    string? TimeZoneId = "UTC",
+    int? StartUtcOffsetMinutes = null,
+    int? EndUtcOffsetMinutes = null);
 
 public sealed record AddPriceTierRequest(Guid SectionId, decimal Amount, string? Currency);
 
@@ -23,4 +31,5 @@ public sealed record EventResponse(
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     string Status,
-    IReadOnlyList<PriceTierResponse> PriceTiers);
+    IReadOnlyList<PriceTierResponse> PriceTiers,
+    string TimeZoneId);

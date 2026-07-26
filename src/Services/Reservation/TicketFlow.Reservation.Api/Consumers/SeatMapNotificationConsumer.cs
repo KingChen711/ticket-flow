@@ -20,6 +20,7 @@ public sealed class SeatMapNotificationConsumer(ISeatMapNotifier notifier)
             message.SeatIds,
             message.Status,
             message.Generation,
+            message.OccurredAt,
             context.CancellationToken);
     }
 }

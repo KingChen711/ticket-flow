@@ -22,6 +22,7 @@ public sealed class EventOnboardingWorkflowConfiguration : IEntityTypeConfigurat
         builder.Property(workflow => workflow.EventTitle).IsRequired().HasMaxLength(200);
         builder.Property(workflow => workflow.EventDescription).HasMaxLength(2000);
         builder.Property(workflow => workflow.EventArtist).IsRequired().HasMaxLength(200);
+        builder.Property(workflow => workflow.TimeZoneId).IsRequired().HasMaxLength(100).HasDefaultValue("UTC");
         builder.Property(workflow => workflow.Status).HasConversion<string>().HasMaxLength(32);
         builder.Property(workflow => workflow.LastCompletedStep).HasConversion<string>().HasMaxLength(32);
         builder.Property(workflow => workflow.FailedStep).HasConversion<string>().HasMaxLength(32);

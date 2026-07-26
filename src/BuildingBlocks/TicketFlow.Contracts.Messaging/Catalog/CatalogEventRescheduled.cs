@@ -14,4 +14,5 @@ public sealed record CatalogEventRescheduled(
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     long AggregateVersion = 0,
-    DateTimeOffset? OccurredAt = null);
+    DateTimeOffset? OccurredAt = null,
+    string? TimeZoneId = null);

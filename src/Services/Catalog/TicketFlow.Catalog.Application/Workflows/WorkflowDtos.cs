@@ -22,7 +22,10 @@ public sealed record StartEventOnboardingRequest(
     string Artist,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
-    IReadOnlyList<EventOnboardingSectionRequest> Sections);
+    IReadOnlyList<EventOnboardingSectionRequest> Sections,
+    string? TimeZoneId = "UTC",
+    int? StartUtcOffsetMinutes = null,
+    int? EndUtcOffsetMinutes = null);
 
 public sealed record EventOnboardingWorkflowResponse(
     Guid WorkflowId,

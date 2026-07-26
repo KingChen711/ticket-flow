@@ -36,6 +36,14 @@ public interface IEventSearchIndex
         long revision,
         CancellationToken cancellationToken = default);
 
+    Task ApplyRescheduledWithTimeZoneAsync(
+        Guid eventId,
+        DateTimeOffset startsAt,
+        long revision,
+        string? timeZoneId,
+        CancellationToken cancellationToken = default) =>
+        ApplyRescheduledAsync(eventId, startsAt, revision, cancellationToken);
+
     /// <summary>
     /// Applies <c>CatalogEventCancelled</c>. Unlike the other two, this one is never rejected: a
     /// tombstone always wins, because Catalog's domain forbids ever un-cancelling an event, so no

@@ -7,5 +7,7 @@ packages:
 # default (supply-chain hardening) and auto-wrote this stub key name for us (allowBuilds,
 # not the older onlyBuiltDependencies array syntax) the first time it hit the block.
 allowBuilds:
+  # tsx uses esbuild to execute the repository's TypeScript contract tests.
+  esbuild: true
   sharp: true
   unrs-resolver: true

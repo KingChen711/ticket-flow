@@ -64,7 +64,7 @@
     {
       "clientId": "ticketflow-internal",
       "name": "Internal service-to-service client (Phase 12 Commit 14)",
-      "description": "Confidential, client-credentials only. Used by one TicketFlow service calling another's internal surface (catalog -> reservation inventory provisioning, ordering -> reservation gRPC). Carries the `service` realm role, which no human-facing client can obtain. ticketflow-audience is in defaultClientScopes so the token carries aud=ticketflow-api like every other token services validate.",
+      "description": "Client-credentials only for TicketFlow internal service calls. Carries the service realm role and the ticketflow-api audience; no human-facing client receives this role.",
       "enabled": true,
       "publicClient": false,
       "protocol": "openid-connect",
@@ -257,7 +257,7 @@
       "lastName": "One",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "customer123", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "Customer1!Dev", "temporary": false }],
       "realmRoles": ["customer"]
     },
     {
@@ -267,7 +267,7 @@
       "lastName": "One",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "Organizer1!Dev", "temporary": false }],
       "realmRoles": ["organizer"]
     },
     {
@@ -277,7 +277,7 @@
       "lastName": "Two",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "organizer123", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "Organizer2!Dev", "temporary": false }],
       "realmRoles": ["organizer"]
     },
     {
@@ -287,7 +287,7 @@
       "lastName": "One",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "Admin1!TicketFlow", "temporary": false }],
       "realmRoles": ["admin"]
     }
   ]

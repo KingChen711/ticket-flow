@@ -54,7 +54,8 @@ public sealed class EventOnboardingWorkflowService(
                     normalized.Description,
                     normalized.Artist,
                     normalized.StartsAt,
-                    normalized.EndsAt),
+                    normalized.EndsAt,
+                    normalized.TimeZoneId!),
                 normalized.Sections
                     .Select(section => new OnboardingSectionPlan(
                         section.Name, section.Capacity, section.Price, section.Currency!))
@@ -255,7 +256,7 @@ public sealed class EventOnboardingWorkflowService(
                             workflow.EventDescription,
                             workflow.EventArtist,
                             workflow.VenueId,
-                            EventSchedule.Create(workflow.StartsAt, workflow.EndsAt),
+                            EventSchedule.Create(workflow.StartsAt, workflow.EndsAt, workflow.TimeZoneId),
                             workflow.OrganizerId));
                     }
 
@@ -351,7 +352,8 @@ public sealed class EventOnboardingWorkflowService(
                 venue.Address.City,
                 @event.AggregateVersion,
                 now,
-                @event.OrganizerId),
+                @event.OrganizerId,
+                @event.Schedule.TimeZoneId),
             cancellationToken);
 
         await publisher.PublishAsync(
@@ -402,7 +404,12 @@ public sealed class EventOnboardingWorkflowService(
                 Required(request.NewVenue.Country, "Venue country"),
                 string.IsNullOrWhiteSpace(request.NewVenue.PostalCode) ? null : request.NewVenue.PostalCode.Trim());
 
-        _ = EventSchedule.Create(request.StartsAt, request.EndsAt);
+        var schedule = EventSchedule.Create(
+            request.StartsAt,
+            request.EndsAt,
+            request.TimeZoneId,
+            request.StartUtcOffsetMinutes,
+            request.EndUtcOffsetMinutes);
 
         return request with
         {
@@ -411,6 +418,9 @@ public sealed class EventOnboardingWorkflowService(
             Title = Required(request.Title, "Event title"),
             Description = request.Description?.Trim() ?? string.Empty,
             Artist = Required(request.Artist, "Event artist"),
+            StartsAt = schedule.StartsAt,
+            EndsAt = schedule.EndsAt,
+            TimeZoneId = schedule.TimeZoneId,
             Sections = sections,
         };
     }

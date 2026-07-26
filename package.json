@@ -7,6 +7,11 @@
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
     "build": "pnpm -r run build",
-    "lint": "pnpm -r run lint"
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm --filter customer-web exec tsc --noEmit && pnpm --filter organizer-dashboard exec tsc --noEmit && pnpm --filter gate-scanner exec tsc --noEmit",
+    "test:web": "tsx --test packages/http-client/src/index.test.ts packages/types/src/runtime.test.ts packages/web-auth/src/index.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
   }
 }

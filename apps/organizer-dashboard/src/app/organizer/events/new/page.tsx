@@ -1,4 +1,5 @@
-import type { EventOnboardingWorkflowResponse, VenueResponse } from "@ticketflow/types";
+import { parseVenueResponses, parseWorkflowResponse, type EventOnboardingWorkflowResponse } from "@ticketflow/types";
+import { HttpError } from "@ticketflow/http-client";
 import { auth } from "@/auth";
 import { fetchGateway, fetchGatewayAuthed } from "@/lib/gateway";
 import { NewEventForm } from "./NewEventForm";
@@ -14,7 +15,7 @@ export default async function NewEventPage({
 }) {
   const session = await auth();
 
-  if (!session) {
+  if (!session || session.error || !session.serverAccessToken) {
     return (
       <div className="mx-auto max-w-2xl p-6">
         <p className="text-gray-500">Sign in with an organizer account to create events.</p>
@@ -34,19 +35,21 @@ export default async function NewEventPage({
 
   // GET /catalog/venues is public (anonymous route) — fetched without a token, same as
   // customer-web's browse page.
-  const venues = await fetchGateway<VenueResponse[]>("/catalog/venues");
+  const venues = await fetchGateway("/catalog/venues", parseVenueResponses);
   const query = await searchParams;
   const suppliedKey = typeof query.creationKey === "string" ? query.creationKey.trim() : "";
   const creationKey = suppliedKey.length > 0 && suppliedKey.length <= 128 ? suppliedKey : randomUUID();
   let initialWorkflow: EventOnboardingWorkflowResponse | null = null;
 
-  if (suppliedKey && session.accessToken) {
+  if (suppliedKey && session.serverAccessToken && !session.error) {
     try {
-      initialWorkflow = await fetchGatewayAuthed<EventOnboardingWorkflowResponse>(
+      initialWorkflow = await fetchGatewayAuthed(
         `/catalog/workflows/event-onboarding/by-key/${encodeURIComponent(creationKey)}`,
-        session.accessToken,
+        session.serverAccessToken,
+        parseWorkflowResponse,
       );
-    } catch {
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 404)) throw error;
       // No workflow for a newly minted key is the normal first-render case. The server action
       // performs the same reconciliation after an uncertain POST response.
     }

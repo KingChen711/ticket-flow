@@ -31,4 +31,7 @@ public sealed record MyOrderView(
     // OrderTicketsIssued but dropped here, so "my orders" had to call Ticketing just to render a
     // download link for data it already had. Trailing with a default so existing persisted
     // documents keep deserializing until the projection is rebuilt.
-    IReadOnlyList<string>? TicketPdfUrls = null);
+    IReadOnlyList<string>? TicketPdfUrls = null,
+    // Monotonic stream position exposed to polling clients. Legacy documents deserialize as 0;
+    // every newly projected event advances it exactly once.
+    long Sequence = 0);

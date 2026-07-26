@@ -26,6 +26,11 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         {
             schedule.Property(s => s.StartsAt).HasColumnName("schedule_starts_at").IsRequired();
             schedule.Property(s => s.EndsAt).HasColumnName("schedule_ends_at").IsRequired();
+            schedule.Property(s => s.TimeZoneId)
+                .HasColumnName("schedule_time_zone_id")
+                .HasMaxLength(100)
+                .HasDefaultValue("UTC")
+                .IsRequired();
         });
         builder.Navigation(e => e.Schedule).IsRequired();
 

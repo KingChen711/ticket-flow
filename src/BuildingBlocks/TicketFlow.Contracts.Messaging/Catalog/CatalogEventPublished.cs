@@ -37,4 +37,5 @@ public sealed record CatalogEventPublished(
     string City,
     long AggregateVersion = 0,
     DateTimeOffset? OccurredAt = null,
-    Guid? OrganizerId = null);
+    Guid? OrganizerId = null,
+    string? TimeZoneId = null);

@@ -31,7 +31,8 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         e.PlacedAt,
         null,
         null,
-        null);
+        null,
+        1);
 
     public MyOrderView Apply(OrderSeatsConfirmed e, MyOrderView current) =>
         WithIntermediateStatus(current, OrderStatus.SeatsConfirmed);
@@ -43,7 +44,7 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         WithIntermediateStatus(current, OrderStatus.TicketsIssued) with { TicketPdfUrls = e.TicketPdfUrls };
 
     public MyOrderView Apply(OrderConfirmed e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.Confirmed), ConfirmedAt = e.ConfirmedAt };
+        current with { Status = nameof(OrderStatus.Confirmed), ConfirmedAt = e.ConfirmedAt, Sequence = current.Sequence + 1 };
 
     public MyOrderView Apply(OrderPaymentRefunded e, MyOrderView current) =>
         WithIntermediateStatus(current, OrderStatus.Refunded);
@@ -52,7 +53,7 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         WithIntermediateStatus(current, OrderStatus.SeatsReleased);
 
     public MyOrderView Apply(OrderCancelled e, MyOrderView current) =>
-        current with { Status = nameof(OrderStatus.Cancelled), CancelledAt = e.CancelledAt };
+        current with { Status = nameof(OrderStatus.Cancelled), CancelledAt = e.CancelledAt, Sequence = current.Sequence + 1 };
 
     /// <summary>
     /// Monotonic guard (Commit 10), now defense-in-depth only (Commit 8).
@@ -72,6 +73,6 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
     /// </summary>
     private static MyOrderView WithIntermediateStatus(MyOrderView current, OrderStatus status) =>
         current.Status is nameof(OrderStatus.Confirmed) or nameof(OrderStatus.Cancelled)
-            ? current
-            : current with { Status = status.ToString() };
+            ? current with { Sequence = current.Sequence + 1 }
+            : current with { Status = status.ToString(), Sequence = current.Sequence + 1 };
 }

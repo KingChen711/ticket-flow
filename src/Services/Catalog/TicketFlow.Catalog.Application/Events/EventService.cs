@@ -20,7 +20,12 @@ public sealed class EventService(
         var venue = await venueRepository.GetByIdAsync(request.VenueId, cancellationToken)
             ?? throw new InvalidOperationException($"Venue '{request.VenueId}' was not found.");
 
-        var schedule = EventSchedule.Create(request.StartsAt, request.EndsAt);
+        var schedule = EventSchedule.Create(
+            request.StartsAt,
+            request.EndsAt,
+            request.TimeZoneId,
+            request.StartUtcOffsetMinutes,
+            request.EndUtcOffsetMinutes);
         // Ownership is taken from the token, never from the request — an OrganizerId field on
         // CreateEventRequest would just be the seat/amount tampering of Commit 3 wearing a
         // different hat.
@@ -48,7 +53,12 @@ public sealed class EventService(
     public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
-        var schedule = EventSchedule.Create(request.StartsAt, request.EndsAt);
+        var schedule = EventSchedule.Create(
+            request.StartsAt,
+            request.EndsAt,
+            request.TimeZoneId,
+            request.StartUtcOffsetMinutes,
+            request.EndUtcOffsetMinutes);
 
         @event.Reschedule(schedule, timeProvider.GetUtcNow());
 
@@ -59,7 +69,7 @@ public sealed class EventService(
         await integrationEventPublisher.PublishAsync(
             new CatalogEventRescheduled(
                 @event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt,
-                @event.AggregateVersion, timeProvider.GetUtcNow()),
+                @event.AggregateVersion, timeProvider.GetUtcNow(), @event.Schedule.TimeZoneId),
             cancellationToken);
 
         if (@event.Status == EventStatus.Published)
@@ -116,7 +126,7 @@ public sealed class EventService(
             new CatalogEventPublished(
                 @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
                 @event.Artist, venue.Name, venue.Address.City,
-                @event.AggregateVersion, now, @event.OrganizerId),
+                @event.AggregateVersion, now, @event.OrganizerId, @event.Schedule.TimeZoneId),
             cancellationToken);
 
         await PublishSalePolicyAsync(@event, now, cancellationToken);
@@ -182,7 +192,7 @@ public sealed class EventService(
                     new CatalogEventPublished(
                         @event.Id, @event.Title, @event.VenueId, @event.Schedule.StartsAt, now,
                         @event.Artist, venue.Name, venue.Address.City,
-                        @event.AggregateVersion, now, @event.OrganizerId),
+                        @event.AggregateVersion, now, @event.OrganizerId, @event.Schedule.TimeZoneId),
                     cancellationToken);
             }
 
@@ -239,5 +249,6 @@ public sealed class EventService(
         @event.Status.ToString(),
         @event.PriceTiers
             .Select(p => new PriceTierResponse(p.Id, p.SectionId, p.Price.Amount, p.Price.Currency))
-            .ToList());
+            .ToList(),
+        @event.Schedule.TimeZoneId);
 }

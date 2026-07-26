@@ -1,54 +1,50 @@
-import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
+import { HttpError } from "@ticketflow/http-client";
+import { parseHoldQuote } from "@ticketflow/types";
+import { notFound, redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { fetchGateway } from "@/lib/gateway";
+import { CheckoutForm } from "./CheckoutForm";
 import { Countdown } from "./Countdown";
-import { placeOrderAction } from "./actions";
 
 export default async function CheckoutPage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    eventId?: string;
-    holdId?: string;
-    seatIds?: string;
-    expiresAt?: string;
-    totalAmount?: string;
-    currency?: string;
-  }>;
+  searchParams: Promise<{ holdId?: string; idempotencyKey?: string }>;
 }) {
-  const { eventId, holdId, seatIds, expiresAt, totalAmount, currency } = await searchParams;
-  if (!eventId || !holdId || !seatIds || !expiresAt || !totalAmount || !currency) {
-    redirect("/");
+  const { holdId, idempotencyKey } = await searchParams;
+  if (!holdId) redirect("/");
+
+  const session = await auth();
+  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
+    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/checkout?holdId=${holdId}`)}`);
   }
 
-  const seatCount = seatIds.split(",").length;
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    const stableKey = randomUUID();
+    redirect(`/checkout?${new URLSearchParams({ holdId, idempotencyKey: stableKey })}`);
+  }
+
+  let quote;
+  try {
+    quote = await fetchGateway(
+      `/reservation/holds/${encodeURIComponent(holdId)}/quote`,
+      parseHoldQuote,
+      { accessToken: session.serverAccessToken },
+    );
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) notFound();
+    throw error;
+  }
 
   return (
     <div className="mx-auto max-w-md p-6">
       <h1 className="text-xl font-bold">Checkout</h1>
-      <Countdown expiresAt={expiresAt} />
-
+      <Countdown expiresAt={quote.expiresAt} />
       <p className="mt-4">
-        {seatCount} seat(s) — {Number(totalAmount).toLocaleString()} {currency}
+        {quote.seatIds.length} seat(s) — {quote.amount.toLocaleString()} {quote.currency}
       </p>
-
-      <form action={placeOrderAction} className="mt-6 flex flex-col gap-3">
-        <input type="hidden" name="eventId" value={eventId} />
-        <input type="hidden" name="holdId" value={holdId} />
-        <input type="hidden" name="seatIds" value={seatIds} />
-        <input type="hidden" name="totalAmount" value={totalAmount} />
-        <input type="hidden" name="currency" value={currency} />
-
-        <label className="flex flex-col gap-1 text-sm">
-          Payment method
-          <select name="paymentMethod" defaultValue="credit-card" className="rounded border px-3 py-2">
-            <option value="credit-card">Credit card</option>
-            <option value="e-wallet">E-wallet</option>
-          </select>
-        </label>
-
-        <button type="submit" className="rounded bg-black px-4 py-2 text-white">
-          Place order
-        </button>
-      </form>
+      <CheckoutForm holdId={quote.holdId} idempotencyKey={idempotencyKey} />
     </div>
   );
 }

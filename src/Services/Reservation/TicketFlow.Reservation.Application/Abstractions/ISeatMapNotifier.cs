@@ -17,4 +17,13 @@ public interface ISeatMapNotifier
         long generation,
         CancellationToken cancellationToken = default) =>
         SeatsUpdatedAsync(eventId, seatIds, status, cancellationToken);
+
+    Task SeatsUpdatedAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        string status,
+        long generation,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken = default) =>
+        SeatsUpdatedAsync(eventId, seatIds, status, generation, cancellationToken);
 }

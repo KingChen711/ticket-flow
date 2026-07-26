@@ -480,6 +480,14 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("status");
 
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasDefaultValue("UTC")
+                        .HasColumnName("time_zone_id");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -558,6 +566,14 @@ namespace TicketFlow.Catalog.Infrastructure.Migrations
                             b1.Property<DateTimeOffset>("StartsAt")
                                 .HasColumnType("timestamp with time zone")
                                 .HasColumnName("schedule_starts_at");
+
+                            b1.Property<string>("TimeZoneId")
+                                .IsRequired()
+                                .ValueGeneratedOnAdd()
+                                .HasMaxLength(100)
+                                .HasColumnType("character varying(100)")
+                                .HasDefaultValue("UTC")
+                                .HasColumnName("schedule_time_zone_id");
 
                             b1.HasKey("EventId");
 

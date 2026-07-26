@@ -35,7 +35,8 @@ public sealed record OnboardingEventPlan(
     string Description,
     string Artist,
     DateTimeOffset StartsAt,
-    DateTimeOffset EndsAt);
+    DateTimeOffset EndsAt,
+    string TimeZoneId = "UTC");
 
 public sealed record OnboardingSectionPlan(string Name, int Capacity, decimal Price, string Currency);
 
@@ -72,6 +73,7 @@ public sealed class EventOnboardingWorkflow : Entity<Guid>
     public string EventArtist { get; private set; } = null!;
     public DateTimeOffset StartsAt { get; private set; }
     public DateTimeOffset EndsAt { get; private set; }
+    public string TimeZoneId { get; private set; } = "UTC";
     public EventOnboardingStep LastCompletedStep { get; private set; }
     public EventOnboardingStep? FailedStep { get; private set; }
     public EventOnboardingStatus Status { get; private set; }
@@ -123,6 +125,7 @@ public sealed class EventOnboardingWorkflow : Entity<Guid>
             EventArtist = eventPlan.Artist,
             StartsAt = eventPlan.StartsAt,
             EndsAt = eventPlan.EndsAt,
+            TimeZoneId = eventPlan.TimeZoneId,
             LastCompletedStep = EventOnboardingStep.Accepted,
             Status = EventOnboardingStatus.Running,
             CreatedAt = now,

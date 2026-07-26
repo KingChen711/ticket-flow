@@ -1,38 +1,51 @@
 "use server";
 
+import { HttpError } from "@ticketflow/http-client";
+import { parseOrderPlacedResponse } from "@ticketflow/types";
 import { redirect } from "next/navigation";
-import type { OrderPlacedResponse } from "@ticketflow/types";
 import { auth } from "@/auth";
+import { mutateGateway } from "@/lib/gateway";
 
-const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
+export type CheckoutActionResult =
+  | { kind: "idle" }
+  | { kind: "success"; orderId: string }
+  | { kind: "conflict"; message: string }
+  | { kind: "error"; message: string };
 
-// Server Action — POST /ordering/orders body carries only order data (catalogEventId, seatIds,
-// totalAmount, currency, holdId, paymentMethod). No customerId/name/email: the gateway forwards
-// the Bearer token and ordering reads identity from its claims (Phase 7 Commit 4).
-export async function placeOrderAction(formData: FormData) {
+export async function placeOrderAction(
+  _previous: CheckoutActionResult,
+  formData: FormData,
+): Promise<CheckoutActionResult> {
   const session = await auth();
-  if (!session?.accessToken) redirect("/api/auth/signin");
+  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
+    redirect("/api/auth/signin?callbackUrl=/checkout");
+  }
 
-  const body = {
-    catalogEventId: formData.get("eventId") as string,
-    seatIds: (formData.get("seatIds") as string).split(","),
-    totalAmount: Number(formData.get("totalAmount")),
-    currency: formData.get("currency") as string,
-    holdId: formData.get("holdId") as string,
-    paymentMethod: formData.get("paymentMethod") as string,
-  };
+  const holdId = formData.get("holdId")?.toString() ?? "";
+  const paymentMethod = formData.get("paymentMethod")?.toString() ?? "";
+  const idempotencyKey = formData.get("idempotencyKey")?.toString() ?? "";
+  if (!holdId || !paymentMethod || !idempotencyKey) {
+    return { kind: "error", message: "Checkout details are incomplete. Reload and try again." };
+  }
 
-  const res = await fetch(`${GATEWAY_URL}/ordering/orders`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.accessToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) throw new Error(`Gateway /ordering/orders responded ${res.status}`);
-  const order = (await res.json()) as OrderPlacedResponse;
-
-  redirect(`/orders/${order.orderId}`);
+  try {
+    const order = await mutateGateway(
+      "/ordering/orders",
+      session.serverAccessToken,
+      { holdId, paymentMethod, idempotencyKey },
+      parseOrderPlacedResponse,
+    );
+    return { kind: "success", orderId: order.orderId };
+  } catch (error) {
+    if (error instanceof HttpError && error.kind === "conflict") {
+      return { kind: "conflict", message: error.message };
+    }
+    if (error instanceof HttpError && (error.kind === "timeout" || error.kind === "unavailable" || error.kind === "network")) {
+      return {
+        kind: "error",
+        message: "Checkout is temporarily unavailable. Retry safely with the same request key.",
+      };
+    }
+    return { kind: "error", message: "Checkout failed. Reload the hold before trying again." };
+  }
 }

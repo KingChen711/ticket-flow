@@ -34,8 +34,9 @@ builder.Services.AddSingleton<IAmazonLambda>(_ =>
 // cross-origin browser requests hit. A real bug found via probing: the CORS *preflight* (OPTIONS)
 // request carries no Authorization header by spec, and without CORS middleware ahead of auth,
 // RequireAuthenticated 401s the preflight itself — the browser then reports a generic
-// "Failed to fetch" with no indication it was ever a CORS problem. AllowCredentials required
-// (SignalR negotiate sends the token), which means an explicit origin allowlist, not "*".
+// "Failed to fetch" with no indication it was ever a CORS problem. SignalR still sends
+// credentials by default even though this read-only public seat-status hub no longer receives a
+// bearer token, so AllowCredentials requires an explicit origin allowlist rather than "*".
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy

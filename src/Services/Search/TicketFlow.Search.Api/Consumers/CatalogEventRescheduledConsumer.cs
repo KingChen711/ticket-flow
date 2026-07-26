@@ -17,10 +17,11 @@ public sealed class CatalogEventRescheduledConsumer(IEventSearchIndex searchInde
     public Task Consume(ConsumeContext<CatalogEventRescheduled> context)
     {
         ContractVersionMetrics.RecordInbound(nameof(CatalogEventRescheduled), context.Message.AggregateVersion);
-        return searchIndex.ApplyRescheduledAsync(
+        return searchIndex.ApplyRescheduledWithTimeZoneAsync(
             context.Message.CatalogEventId,
             context.Message.StartsAt,
             context.Message.AggregateVersion,
+            context.Message.TimeZoneId,
             context.CancellationToken);
     }
 }

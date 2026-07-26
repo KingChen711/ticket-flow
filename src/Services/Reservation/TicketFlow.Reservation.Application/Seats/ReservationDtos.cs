@@ -1,10 +1,18 @@
+using System.Text.Json.Serialization;
+
 namespace TicketFlow.Reservation.Application.Seats;
 
 public sealed record ProvisionSectionRequest(Guid SectionId, string SectionName, int Capacity);
 
 public sealed record ProvisionInventoryRequest(Guid EventId, IReadOnlyList<ProvisionSectionRequest> Sections);
 
-public sealed record SeatDto(Guid Id, Guid SectionId, string Label, string Status);
+public sealed record SeatDto(
+    Guid Id,
+    Guid SectionId,
+    string Label,
+    string Status,
+    long Generation = 0,
+    DateTimeOffset? UpdatedAt = null);
 
 public sealed record EventAvailabilityResponse(Guid EventId, IReadOnlyList<SeatDto> Seats);
 
@@ -54,6 +62,7 @@ public sealed record ConfirmSeatAllocationResult(
 /// "you are holding too much / too often" — otherwise a per-user cap looks identical to a real
 /// sold-out event, both to the UI and to anyone probing the API (plan Commit 5 delta).
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<HoldRejectionReason>))]
 public enum HoldRejectionReason
 {
     None,

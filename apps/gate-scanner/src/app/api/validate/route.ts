@@ -1,33 +1,41 @@
+import { fetchJson, HttpError } from "@ticketflow/http-client";
+import { parseValidateTicketResponse } from "@ticketflow/types";
 import { NextResponse } from "next/server";
-import type { ValidateTicketResponse } from "@ticketflow/types";
 import { auth } from "@/auth";
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
 
-// BFF proxy (docs/phase-8-plan.md mục 2) — ScannerClient is a client component (needs the
-// camera/canvas APIs) so it can't hold the session's accessToken itself; this route reads the
-// session server-side and forwards to the gateway on the signed-in organizer's behalf.
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session?.accessToken) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  if (!session?.serverAccessToken || session.error) {
+    return NextResponse.json({ error: "Reauthentication required" }, { status: 401 });
   }
 
-  const body = await request.json();
-
-  const res = await fetch(`${GATEWAY_URL}/ticketing/tickets/validate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.accessToken}`,
-    },
-    body: JSON.stringify({ qrPayload: body.qrPayload }),
-  });
-
-  if (!res.ok) {
-    return NextResponse.json({ error: `Gateway responded ${res.status}` }, { status: res.status });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (typeof body !== "object" || body === null || typeof (body as { qrPayload?: unknown }).qrPayload !== "string") {
+    return NextResponse.json({ error: "qrPayload is required" }, { status: 400 });
   }
 
-  const result = (await res.json()) as ValidateTicketResponse;
-  return NextResponse.json(result);
+  try {
+    const result = await fetchJson(`${GATEWAY_URL}/ticketing/tickets/validate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.serverAccessToken}`,
+      },
+      body: JSON.stringify({ qrPayload: (body as { qrPayload: string }).qrPayload }),
+      signal: request.signal,
+      timeoutMs: 5_000,
+      validate: parseValidateTicketResponse,
+    });
+    return NextResponse.json(result);
+  } catch (error) {
+    const status = error instanceof HttpError ? (error.status ?? 503) : 500;
+    return NextResponse.json({ error: error instanceof Error ? error.message : "validation failed" }, { status });
+  }
 }

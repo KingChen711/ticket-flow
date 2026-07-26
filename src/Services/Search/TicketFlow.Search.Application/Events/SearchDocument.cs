@@ -28,4 +28,5 @@ public sealed record SearchDocument(
     DateTimeOffset StartsAt,
     string Status,
     long Revision = 0,
-    bool Tombstoned = false);
+    bool Tombstoned = false,
+    string TimeZoneId = "UTC");

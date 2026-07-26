@@ -25,7 +25,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const session = await auth();
-  const isOrganizer = !!session?.roles?.includes("organizer");
+  const isOrganizer = !!session?.roles?.includes("organizer") && !session.error;
 
   return (
     <html
@@ -37,7 +37,7 @@ export default async function RootLayout({
           <Link href="/organizer" className="text-lg font-semibold">
             TicketFlow — Organizer
           </Link>
-          {session ? (
+          {session && !session.error ? (
             <div className="flex items-center gap-4 text-sm">
               {isOrganizer && (
                 <Link href="/organizer/events/new" className="text-blue-600 underline">
@@ -67,7 +67,7 @@ export default async function RootLayout({
               }}
             >
               <button type="submit" className="text-blue-600 underline">
-                Sign in
+                {session?.error ? "Session expired — sign in again" : "Sign in"}
               </button>
             </form>
           )}

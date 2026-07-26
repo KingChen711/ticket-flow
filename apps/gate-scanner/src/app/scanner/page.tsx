@@ -7,7 +7,7 @@ import { ScannerClient } from "./ScannerClient";
 export default async function ScannerPage() {
   const session = await auth();
 
-  if (!session) {
+  if (!session || session.error || !session.serverAccessToken) {
     return (
       <div className="mx-auto max-w-md p-6">
         <p className="text-gray-500">Sign in with an organizer account to scan tickets.</p>

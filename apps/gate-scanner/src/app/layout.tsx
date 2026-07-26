@@ -38,7 +38,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col">
         <header className="flex items-center justify-between border-b px-6 py-4">
           <span className="text-lg font-semibold">TicketFlow — Gate Scanner</span>
-          {session ? (
+          {session && !session.error ? (
             <div className="flex items-center gap-4 text-sm">
               <span>{session.user?.email}</span>
               <form
@@ -61,7 +61,7 @@ export default async function RootLayout({
               }}
             >
               <button type="submit" className="text-blue-600 underline">
-                Sign in
+                {session?.error ? "Session expired — sign in again" : "Sign in"}
               </button>
             </form>
           )}

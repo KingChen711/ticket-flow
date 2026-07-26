@@ -20,7 +20,8 @@ public sealed class CatalogEventPublishedConsumer(IEventSearchIndex searchIndex)
         return searchIndex.ApplyPublishedAsync(
             new SearchDocument(
                 message.CatalogEventId, message.Title, message.Artist, message.VenueName, message.City,
-                message.StartsAt, "Published", message.AggregateVersion),
+                message.StartsAt, "Published", message.AggregateVersion,
+                TimeZoneId: message.TimeZoneId ?? "UTC"),
             context.CancellationToken);
     }
 }

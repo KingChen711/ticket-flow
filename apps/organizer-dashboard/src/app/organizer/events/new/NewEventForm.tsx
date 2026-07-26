@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import type { EventOnboardingWorkflowResponse, VenueResponse } from "@ticketflow/types";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { browserTimeZone, serializeLocalDateTime, type EventOnboardingWorkflowResponse, type VenueResponse } from "@ticketflow/types";
 import { createEventAction } from "./actions";
 
 interface SectionRow {
@@ -32,6 +32,13 @@ export function NewEventForm({
   const [sections, setSections] = useState<SectionRow[]>([
     { key: nextKey++, name: "General", capacity: "50", price: "450000" },
   ]);
+  const startsAtRef = useRef<HTMLInputElement>(null);
+  const endsAtRef = useRef<HTMLInputElement>(null);
+  const startsAtUtcRef = useRef<HTMLInputElement>(null);
+  const endsAtUtcRef = useRef<HTMLInputElement>(null);
+  const timeZoneRef = useRef<HTMLInputElement>(null);
+  const startOffsetRef = useRef<HTMLInputElement>(null);
+  const endOffsetRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -52,9 +59,27 @@ export function NewEventForm({
     setSections((prev) => prev.map((s) => (s.key === key ? { ...s, [field]: value } : s)));
   }
 
+  function captureTimezone() {
+    if (actionState.workflow) return;
+    if (!startsAtRef.current || !endsAtRef.current || !startsAtUtcRef.current || !endsAtUtcRef.current ||
+        !timeZoneRef.current || !startOffsetRef.current || !endOffsetRef.current) return;
+    const start = serializeLocalDateTime(startsAtRef.current.value);
+    const end = serializeLocalDateTime(endsAtRef.current.value);
+    startsAtUtcRef.current.value = start.utc;
+    endsAtUtcRef.current.value = end.utc;
+    timeZoneRef.current.value = browserTimeZone();
+    startOffsetRef.current.value = String(start.utcOffsetMinutes);
+    endOffsetRef.current.value = String(end.utcOffsetMinutes);
+  }
+
   return (
-    <form action={formAction} className="flex flex-col gap-6">
+    <form action={formAction} onSubmit={captureTimezone} noValidate={!!actionState.workflow} className="flex flex-col gap-6">
       <input type="hidden" name="creationKey" value={creationKey} />
+      <input ref={startsAtUtcRef} type="hidden" name="startsAtUtc" />
+      <input ref={endsAtUtcRef} type="hidden" name="endsAtUtc" />
+      <input ref={timeZoneRef} type="hidden" name="timeZoneId" />
+      <input ref={startOffsetRef} type="hidden" name="startUtcOffsetMinutes" />
+      <input ref={endOffsetRef} type="hidden" name="endUtcOffsetMinutes" />
       {actionState.workflow && (
         <input type="hidden" name="workflowId" value={actionState.workflow.workflowId} />
       )}
@@ -134,11 +159,11 @@ export function NewEventForm({
         <div className="flex gap-2">
           <label className="flex-1 text-sm">
             Starts at
-            <input type="datetime-local" name="startsAt" required className="mt-1 w-full rounded border px-3 py-2" />
+            <input ref={startsAtRef} type="datetime-local" name="startsAtLocal" required className="mt-1 w-full rounded border px-3 py-2" />
           </label>
           <label className="flex-1 text-sm">
             Ends at
-            <input type="datetime-local" name="endsAt" required className="mt-1 w-full rounded border px-3 py-2" />
+            <input ref={endsAtRef} type="datetime-local" name="endsAtLocal" required className="mt-1 w-full rounded border px-3 py-2" />
           </label>
         </div>
       </fieldset>

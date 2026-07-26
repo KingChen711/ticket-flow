@@ -784,6 +784,11 @@ public sealed class ReservationService(
             eventId,
             seats.Select(seat => seat.Id).ToList(),
             cancellationToken);
+        var allocations = await allocationRepository.GetBySeatIdsAsync(
+            eventId,
+            seats.Select(seat => seat.Id).ToList(),
+            cancellationToken);
+        var allocationBySeat = allocations.ToDictionary(allocation => allocation.SeatId);
 
         var dtos = seats
             .Select(seat =>
@@ -791,7 +796,14 @@ public sealed class ReservationService(
                 var status = seat.Status == SeatStatus.Sold
                     ? SeatStatus.Sold
                     : liveStatuses.TryGetValue(seat.Id, out var live) ? live : seat.Status;
-                return new SeatDto(seat.Id, seat.SectionId, seat.Label, status.ToString());
+                allocationBySeat.TryGetValue(seat.Id, out var allocation);
+                return new SeatDto(
+                    seat.Id,
+                    seat.SectionId,
+                    seat.Label,
+                    status.ToString(),
+                    allocation?.Generation ?? 0,
+                    allocation?.UpdatedAt);
             })
             .ToList();
 

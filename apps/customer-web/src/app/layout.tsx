@@ -36,7 +36,7 @@ export default async function RootLayout({
           <Link href="/" className="text-lg font-semibold">
             TicketFlow
           </Link>
-          {session ? (
+          {session && !session.error ? (
             <div className="flex items-center gap-4 text-sm">
               <Link href="/orders" className="text-blue-600 underline">
                 My orders
@@ -61,7 +61,7 @@ export default async function RootLayout({
               }}
             >
               <button type="submit" className="text-blue-600 underline">
-                Sign in
+                {session?.error ? "Session expired — sign in again" : "Sign in"}
               </button>
             </form>
           )}

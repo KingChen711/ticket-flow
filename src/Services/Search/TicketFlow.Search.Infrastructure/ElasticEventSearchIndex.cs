@@ -63,6 +63,7 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
                                 ctx._source.city = params.city;
                                 ctx._source.startsAt = params.startsAt;
                                 ctx._source.status = params.status;
+                                ctx._source.timeZoneId = params.timeZoneId;
                                 ctx._source.revision = params.revision;
                             } else {
                                 ctx.op = 'noop';
@@ -76,6 +77,7 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
                         ["city"] = document.City,
                         ["startsAt"] = document.StartsAt,
                         ["status"] = document.Status,
+                        ["timeZoneId"] = document.TimeZoneId,
                         ["revision"] = document.Revision,
                     })),
             cancellationToken);
@@ -83,16 +85,34 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
         EnsureValid(response, $"apply Published to event '{document.EventId}'");
     }
 
-    public async Task ApplyRescheduledAsync(
+    public Task ApplyRescheduledAsync(
         Guid eventId,
         DateTimeOffset startsAt,
         long revision,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ApplyRescheduledCoreAsync(eventId, startsAt, revision, null, cancellationToken);
+
+    public Task ApplyRescheduledWithTimeZoneAsync(
+        Guid eventId,
+        DateTimeOffset startsAt,
+        long revision,
+        string? timeZoneId,
+        CancellationToken cancellationToken = default) =>
+        ApplyRescheduledCoreAsync(eventId, startsAt, revision, timeZoneId, cancellationToken);
+
+    private async Task ApplyRescheduledCoreAsync(
+        Guid eventId,
+        DateTimeOffset startsAt,
+        long revision,
+        string? timeZoneId,
+        CancellationToken cancellationToken)
     {
         // Rescheduled carries nothing but StartsAt — if it overtakes Published, the placeholder
         // below is what keeps the fact alive instead of silently dropping it (see the old
         // UpdateStartsAtAsync's failure mode documented on IEventSearchIndex).
-        var placeholder = new SearchDocument(eventId, "", "", "", "", startsAt, "Published", revision);
+        var placeholder = new SearchDocument(
+            eventId, "", "", "", "", startsAt, "Published", revision,
+            TimeZoneId: timeZoneId ?? "UTC");
 
         var response = await client.UpdateAsync<SearchDocument, object>(indexName, eventId.ToString(), u => u
                 .Upsert(placeholder)
@@ -104,6 +124,9 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
                                 ctx.op = 'noop';
                             } else if (stored == null || params.revision >= stored) {
                                 ctx._source.startsAt = params.startsAt;
+                                if (params.timeZoneId != null) {
+                                    ctx._source.timeZoneId = params.timeZoneId;
+                                }
                                 ctx._source.revision = params.revision;
                             } else {
                                 ctx.op = 'noop';
@@ -113,6 +136,7 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
                     {
                         ["startsAt"] = startsAt,
                         ["revision"] = revision,
+                        ["timeZoneId"] = timeZoneId!,
                     })),
             cancellationToken);
 

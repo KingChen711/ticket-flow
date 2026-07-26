@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import jsQR from "jsqr";
-import type { ValidateTicketResponse } from "@ticketflow/types";
+import { fetchJson } from "@ticketflow/http-client";
+import { parseValidateTicketResponse, type ValidateTicketResponse } from "@ticketflow/types";
 
 // The Shape Detection API's BarcodeDetector isn't in TS's DOM lib and isn't available on every
 // browser (probed in this dev environment's desktop Chromium: absent — docs/phase-8-plan.md
@@ -74,13 +75,14 @@ export function ScannerClient() {
     scanningRef.current = false;
     stopCamera();
     try {
-      const res = await fetch("/api/validate", {
+      const response = await fetchJson("/api/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ qrPayload }),
+        timeoutMs: 5_000,
+        validate: parseValidateTicketResponse,
       });
-      if (!res.ok) throw new Error(`Validate request failed (${res.status})`);
-      setResult((await res.json()) as ValidateTicketResponse);
+      setResult(response);
       setPhase("result");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scan failed");
@@ -201,6 +203,8 @@ function ResultPanel({
     Valid: { bg: "bg-green-600", label: "VALID — checked in" },
     AlreadyCheckedIn: { bg: "bg-yellow-500", label: "ALREADY CHECKED IN" },
     NotFound: { bg: "bg-red-600", label: "NOT FOUND" },
+    WrongEvent: { bg: "bg-red-600", label: "WRONG EVENT" },
+    Revoked: { bg: "bg-red-600", label: "REVOKED" },
   }[result.status];
 
   return (

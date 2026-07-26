@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { EventResponse, RevenueResult } from "@ticketflow/types";
+import { formatEventDateTime, parseEventResponses, parseRevenueResult } from "@ticketflow/types";
 import { auth } from "@/auth";
 import { fetchGatewayAuthed } from "@/lib/gateway";
 
@@ -10,7 +10,7 @@ import { fetchGatewayAuthed } from "@/lib/gateway";
 export default async function DashboardPage() {
   const session = await auth();
 
-  if (!session) {
+  if (!session || session.error || !session.serverAccessToken) {
     return (
       <div className="mx-auto max-w-3xl p-6">
         <p className="text-gray-500">Sign in with an organizer account to manage events.</p>
@@ -29,8 +29,8 @@ export default async function DashboardPage() {
   }
 
   const [events, revenue] = await Promise.all([
-    fetchGatewayAuthed<EventResponse[]>("/catalog/events", session.accessToken!),
-    fetchGatewayAuthed<RevenueResult>("/analytics/revenue", session.accessToken!),
+    fetchGatewayAuthed("/catalog/events", session.serverAccessToken, parseEventResponses),
+    fetchGatewayAuthed("/analytics/revenue", session.serverAccessToken, parseRevenueResult),
   ]);
 
   const titleByEventId = new Map(events.map((e) => [e.id, e.title]));
@@ -72,7 +72,7 @@ export default async function DashboardPage() {
               <li key={e.id} className="rounded border p-3 text-sm">
                 <p className="font-medium">{e.title}</p>
                 <p className="text-gray-500">
-                  {e.artist} · {new Date(e.startsAt).toLocaleString()} · {e.status}
+                  {e.artist} · {formatEventDateTime(e.startsAt, e.timeZoneId)} · {e.status}
                 </p>
               </li>
             ))}
