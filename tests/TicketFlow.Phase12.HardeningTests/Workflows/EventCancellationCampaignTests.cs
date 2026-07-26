@@ -2,12 +2,17 @@ using Marten;
 using MassTransit;
 using MassTransit.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using TicketFlow.Contracts.Messaging.Ordering;
 using TicketFlow.Contracts.Messaging.Workflows;
 using TicketFlow.Ordering.Api.Consumers;
+using TicketFlow.Ordering.Api.Services;
+using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Sagas;
 using TicketFlow.Ordering.Application.Workflows;
+using TicketFlow.Ordering.Infrastructure;
+using TicketFlow.Ordering.Infrastructure.Messaging;
 using TicketFlow.Phase12.HardeningTests.Infrastructure;
 
 namespace TicketFlow.Phase12.HardeningTests.Workflows;
@@ -144,6 +149,64 @@ public sealed class EventCancellationCampaignTests(HardeningEnvironmentFixture e
         Assert.Null(campaign.CompletedAt);
     }
 
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_dispatch_discovered_after_quiet_completion_must_reopen_and_drive_the_campaign()
+    {
+        var time = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        await using var provider = BuildProvider(time);
+        var store = provider.GetRequiredService<IDocumentStore>();
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        var workflowId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+
+        await harness.Bus.Publish(new EventCancellationRequested(
+            workflowId,
+            eventId,
+            "Event cancelled.",
+            time.GetUtcNow()));
+        await WaitForCampaignAsync(store, workflowId, _ => true);
+
+        time.Advance(EventCancellationCampaignConsumer.LateOrderQuietPeriod + TimeSpan.FromSeconds(1));
+        await harness.Bus.Publish(new RetryEventCancellation(workflowId, eventId, time.GetUtcNow()));
+        await WaitForCampaignAsync(store, workflowId, campaign => campaign.CompletedAt is not null);
+
+        await using (var session = store.LightweightSession())
+        {
+            session.Store(OrderDispatch.Pending(new OrderSubmitted(
+                orderId,
+                eventId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                [Guid.NewGuid()],
+                500_000m,
+                "CreditCard",
+                "Buyer",
+                "buyer@example.com",
+                time.GetUtcNow(),
+                "VND",
+                1,
+                $"checkout:{orderId:N}"), time.GetUtcNow()));
+            await session.SaveChangesAsync();
+        }
+
+        var relay = new OrderDispatchRelay(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new OrderDispatchOptions { BatchSize = 10 },
+            time,
+            NullLogger<OrderDispatchRelay>.Instance);
+        Assert.Equal(1, await relay.RelayOnceAsync(default));
+
+        Assert.True(await harness.Published.Any<CancelOrderForEvent>(x =>
+            x.Context.Message.WorkflowId == workflowId &&
+            x.Context.Message.OrderId == orderId));
+        var reopened = await LoadCampaignAsync(store, workflowId);
+        Assert.Null(reopened.CompletedAt);
+        Assert.Contains(reopened.Orders, operation => operation.OrderId == orderId);
+    }
+
     private ServiceProvider BuildProvider(TimeProvider timeProvider)
     {
         var schema = $"phase12_campaign_{Guid.NewGuid():N}";
@@ -157,6 +220,8 @@ public sealed class EventCancellationCampaignTests(HardeningEnvironmentFixture e
                 TicketFlow.Ordering.Infrastructure.ServiceCollectionExtensions.Configure(options);
             })
             .Services
+            .AddScoped<ICheckoutOperationStore, MartenCheckoutOperationStore>()
+            .AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>()
             .AddMassTransitTestHarness(configuration =>
             {
                 configuration.AddDelayedMessageScheduler();

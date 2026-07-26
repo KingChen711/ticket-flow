@@ -6,6 +6,7 @@ using TicketFlow.Messaging;
 using TicketFlow.Observability;
 using TicketFlow.Ticketing.Api.Consumers;
 using TicketFlow.Ticketing.Api.Endpoints;
+using TicketFlow.Ticketing.Api.Services;
 using TicketFlow.Ticketing.Application;
 using TicketFlow.Ticketing.Application.Abstractions;
 using TicketFlow.Ticketing.Infrastructure;
@@ -35,6 +36,14 @@ builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddTicketingApplication();
 builder.Services.AddTicketingInfrastructure(builder.Configuration);
+var issuanceReconciliationOptions = new TicketIssuanceReconciliationOptions();
+builder.Configuration
+    .GetSection("Ticketing:IssuanceReconciliation")
+    .Bind(issuanceReconciliationOptions);
+builder.Services.AddSingleton(issuanceReconciliationOptions);
+builder.Services.AddScoped<ITicketIssuanceRecoveryPublisher, TicketIssuanceRecoveryPublisher>();
+builder.Services.AddScoped<TicketIssuanceReconciliationService>();
+builder.Services.AddHostedService<TicketIssuanceReconciliationWorker>();
 builder.Services.AddDbContextReadinessCheck<TicketingDbContext>("postgres");
 RegisterHttpDependency("Aws:HealthUrl", "functions-provider", requiredInProduction: true);
 RegisterHttpDependency("Minio:HealthUrl", "minio", requiredInProduction: true);
@@ -73,6 +82,16 @@ builder.Services.AddTicketFlowMessaging(
             e.ConcurrentMessageLimit = 1;
             e.UseEntityFrameworkOutbox<TicketingDbContext>(context);
             e.ConfigureConsumer<IssueTicketsConsumer>(context);
+        });
+
+        // Revocation mutates ticket/job state and publishes the campaign acknowledgement. Without
+        // the consumer outbox, ConsumeContext.Publish reaches RabbitMQ before SaveChanges commits,
+        // allowing Ordering to complete a cancellation while the ticket is still valid.
+        rabbitConfigurator.ReceiveEndpoint("ticketing-revoke-tickets", e =>
+        {
+            e.SetQuorumQueue();
+            e.UseEntityFrameworkOutbox<TicketingDbContext>(context);
+            e.ConfigureConsumer<RevokeTicketsConsumer>(context);
         });
     });
 

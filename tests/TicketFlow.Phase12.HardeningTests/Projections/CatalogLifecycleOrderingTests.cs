@@ -79,6 +79,9 @@ public sealed class CatalogLifecycleOrderingTests
         Assert.NotNull(stored);
         // The stale Published must not roll the schedule back to the original time.
         Assert.Equal(reschedule, stored.StartsAt);
+        Assert.Equal("Concert", stored.Title);
+        Assert.Equal("Artist", stored.Artist);
+        Assert.Equal("Venue", stored.VenueName);
     }
 
     [Fact]
@@ -154,6 +157,21 @@ internal sealed class InMemoryEventSearchIndex : IEventSearchIndex
             if (!_documents.TryGetValue(document.EventId, out var current) ||
                 (!current.Tombstoned && document.Revision >= current.Revision))
                 _documents[document.EventId] = document;
+            else if (!current.Tombstoned &&
+                     (string.IsNullOrEmpty(current.Title) ||
+                      string.IsNullOrEmpty(current.Artist) ||
+                      string.IsNullOrEmpty(current.VenueName) ||
+                      string.IsNullOrEmpty(current.City)))
+            {
+                _documents[document.EventId] = current with
+                {
+                    Title = document.Title,
+                    Artist = document.Artist,
+                    VenueName = document.VenueName,
+                    City = document.City,
+                    Status = document.Status,
+                };
+            }
 
             Interlocked.Increment(ref _operationCount);
         }

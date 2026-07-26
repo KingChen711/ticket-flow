@@ -117,6 +117,25 @@ public sealed class ResourceOwnershipTests(HardeningEnvironmentFixture environme
         Assert.Equal(OrganizerA, published.OrganizerId);
     }
 
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Rescheduling_a_draft_must_not_publish_a_public_lifecycle_event()
+    {
+        var connectionString = await CreateIsolatedDatabaseAsync();
+        await using var context = CreateContext(connectionString);
+        var eventId = await SeedEventAsync(context, OrganizerA);
+        var publisher = new RecordingIntegrationEventPublisher();
+
+        await CreateService(context, publisher).RescheduleAsync(
+            eventId,
+            new RescheduleEventRequest(
+                DateTimeOffset.UtcNow.AddDays(45),
+                DateTimeOffset.UtcNow.AddDays(45).AddHours(3)),
+            AsOrganizer(OrganizerA));
+
+        Assert.Empty(publisher.Published.OfType<CatalogEventRescheduled>());
+    }
+
     private static Task Mutate(EventService service, string mutation, Guid eventId, CatalogCaller caller) =>
         mutation switch
         {

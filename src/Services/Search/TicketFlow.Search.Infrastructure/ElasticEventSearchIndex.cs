@@ -54,20 +54,33 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
                 .Script(s => s
                     .Source("""
                             def stored = ctx._source.revision;
-                            if (ctx._source.tombstoned == true) {
-                                ctx.op = 'noop';
-                            } else if (stored == null || params.revision >= stored) {
+                             if (ctx._source.tombstoned == true) {
+                                 ctx.op = 'noop';
+                             } else if (stored == null || params.revision >= stored) {
                                 ctx._source.title = params.title;
                                 ctx._source.artist = params.artist;
                                 ctx._source.venueName = params.venueName;
                                 ctx._source.city = params.city;
                                 ctx._source.startsAt = params.startsAt;
                                 ctx._source.status = params.status;
-                                ctx._source.timeZoneId = params.timeZoneId;
-                                ctx._source.revision = params.revision;
-                            } else {
-                                ctx.op = 'noop';
-                            }
+                                 ctx._source.timeZoneId = params.timeZoneId;
+                                 ctx._source.revision = params.revision;
+                             } else if (ctx._source.title == null || ctx._source.title == '' ||
+                                        ctx._source.artist == null || ctx._source.artist == '' ||
+                                        ctx._source.venueName == null || ctx._source.venueName == '' ||
+                                        ctx._source.city == null || ctx._source.city == '') {
+                                 // Rescheduled carries only schedule data and may create a shell at
+                                 // a newer revision before Published arrives. The older Published
+                                 // may fill immutable metadata, but must not roll startsAt,
+                                 // timeZoneId or the document revision backwards.
+                                 ctx._source.title = params.title;
+                                 ctx._source.artist = params.artist;
+                                 ctx._source.venueName = params.venueName;
+                                 ctx._source.city = params.city;
+                                 ctx._source.status = params.status;
+                             } else {
+                                 ctx.op = 'noop';
+                             }
                             """)
                     .Params(new Dictionary<string, object>
                     {
@@ -180,7 +193,10 @@ public sealed class ElasticEventSearchIndex(ElasticsearchClient client, string i
         // A 404 for GetAsync is Elasticsearch's normal, valid answer to "no document with this
         // id" — IsValidResponse is true and Found is false. Only a transport failure or a genuine
         // server error leaves IsValidResponse false, and that must not be read as "not found".
-        if (!response.IsValidResponse && response.ApiCallDetails.HttpStatusCode != 404)
+        // The client represents a genuine missing document as a valid response with Found=false.
+        // An invalid 404 is therefore an infrastructure/schema failure (most notably
+        // index_not_found_exception), not another spelling of "this event does not exist".
+        if (!response.IsValidResponse)
             throw new SearchIndexUnavailableException(
                 $"Elasticsearch GET for event '{eventId}' failed: {response.DebugInformation}");
 

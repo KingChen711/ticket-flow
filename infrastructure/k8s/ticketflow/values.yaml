@@ -282,7 +282,7 @@ services:
     usesFunctions: true
     databaseSecretKey: connection-ticketing
     postgresUriSecretKey: postgres-uri-ticketing
-    schemaGate: { kind: ef, schema: ticketing, migration: 20260724075341_Phase12EventOwnerProjection }
+    schemaGate: { kind: ef, schema: ticketing, migration: 20260726230000_Phase12GateAssignmentsAndIssuanceRecovery }
   recommendation:
     enabled: true
     image: ticket-flow-recommendation

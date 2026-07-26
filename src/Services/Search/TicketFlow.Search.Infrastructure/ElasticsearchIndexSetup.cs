@@ -17,10 +17,16 @@ public static class ElasticsearchIndexSetup
         CancellationToken cancellationToken = default)
     {
         var exists = await client.Indices.ExistsAsync(indexName, cancellationToken);
+        if (!exists.IsValidResponse && exists.ApiCallDetails.HttpStatusCode != 404)
+        {
+            throw new SearchIndexUnavailableException(
+                $"Elasticsearch could not check index '{indexName}': {exists.DebugInformation}");
+        }
+
         if (exists.Exists)
             return;
 
-        await client.Indices.CreateAsync(indexName, c => c
+        var created = await client.Indices.CreateAsync(indexName, c => c
                 .Mappings(m => m
                     .Properties(new Properties
                     {
@@ -35,5 +41,17 @@ public static class ElasticsearchIndexSetup
                         { "tombstoned", new BooleanProperty() },
                     })),
             cancellationToken);
+
+        if (created.IsValidResponse)
+            return;
+
+        // Multiple startup/migration replicas may race to create the same index. Re-read once and
+        // accept the winner; every other invalid response is a real setup failure.
+        var afterCreate = await client.Indices.ExistsAsync(indexName, cancellationToken);
+        if (!afterCreate.IsValidResponse || !afterCreate.Exists)
+        {
+            throw new SearchIndexUnavailableException(
+                $"Elasticsearch could not create index '{indexName}': {created.DebugInformation}");
+        }
     }
 }

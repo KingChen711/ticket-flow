@@ -34,29 +34,74 @@ public sealed class TicketIssuanceJob : Entity<Guid>
 
     public Guid CustomerId { get; private set; }
 
+    public Guid[] ExpectedSeatIds { get; private set; } = [];
+
+    public string? CustomerName { get; private set; }
+
+    public string? CustomerEmail { get; private set; }
+
+    public string? OperationKey { get; private set; }
+
+    public long PriceSnapshotVersion { get; private set; }
+
     public TicketIssuanceJobState State { get; private set; }
 
     public int Attempts { get; private set; }
 
     public DateTimeOffset CreatedAt { get; private set; }
 
+    public DateTimeOffset LastAttemptAt { get; private set; }
+
+    public DateTimeOffset? LastRecoveryAt { get; private set; }
+
     public DateTimeOffset? CompletedAt { get; private set; }
+
+    public DateTimeOffset? ArtifactsReconciledAt { get; private set; }
 
     public string? FailureReason { get; private set; }
 
     private TicketIssuanceJob() { }
 
-    public static TicketIssuanceJob Claim(Guid orderId, Guid eventId, Guid customerId, DateTimeOffset now) =>
-        new()
+    public bool HasRecoveryIntent =>
+        ExpectedSeatIds.Length > 0 &&
+        !string.IsNullOrWhiteSpace(CustomerName) &&
+        !string.IsNullOrWhiteSpace(CustomerEmail);
+
+    public static TicketIssuanceJob Claim(
+        Guid orderId,
+        Guid eventId,
+        Guid customerId,
+        IReadOnlyCollection<Guid> expectedSeatIds,
+        string customerName,
+        string customerEmail,
+        string? operationKey,
+        long priceSnapshotVersion,
+        DateTimeOffset now)
+    {
+        var job = new TicketIssuanceJob
         {
             Id = Guid.NewGuid(),
-            OrderId = orderId,
-            EventId = eventId,
-            CustomerId = customerId,
+            OrderId = RequireId(orderId, nameof(orderId)),
+            EventId = RequireId(eventId, nameof(eventId)),
+            CustomerId = RequireId(customerId, nameof(customerId)),
             State = TicketIssuanceJobState.Pending,
             Attempts = 1,
             CreatedAt = now,
+            LastAttemptAt = now,
         };
+
+        if (!job.TryCaptureOrMatchIntent(
+                eventId,
+                customerId,
+                expectedSeatIds,
+                customerName,
+                customerEmail,
+                operationKey,
+                priceSnapshotVersion))
+            throw new ArgumentException("The issuance intent is invalid.");
+
+        return job;
+    }
 
     public static TicketIssuanceJob CancelBeforeIssue(
         Guid orderId,
@@ -65,12 +110,77 @@ public sealed class TicketIssuanceJob : Entity<Guid>
         string reason,
         DateTimeOffset now)
     {
-        var job = Claim(orderId, eventId, customerId, now);
+        var job = new TicketIssuanceJob
+        {
+            Id = Guid.NewGuid(),
+            OrderId = RequireId(orderId, nameof(orderId)),
+            // Some legacy cancellation messages have no CatalogEventId. The tombstone still has
+            // to fence the order, and cannot fabricate an event id.
+            EventId = eventId,
+            CustomerId = RequireId(customerId, nameof(customerId)),
+            State = TicketIssuanceJobState.Pending,
+            Attempts = 1,
+            CreatedAt = now,
+            LastAttemptAt = now,
+        };
         job.MarkCancelled(reason, now);
         return job;
     }
 
-    public void RecordAttempt() => Attempts++;
+    /// <summary>
+    /// Captures a command snapshot for legacy rows that predate recovery metadata, or verifies
+    /// that a redelivery is the same command. A reused OrderId never gets to rewrite the intent.
+    /// </summary>
+    public bool TryCaptureOrMatchIntent(
+        Guid eventId,
+        Guid customerId,
+        IReadOnlyCollection<Guid> expectedSeatIds,
+        string customerName,
+        string customerEmail,
+        string? operationKey,
+        long priceSnapshotVersion)
+    {
+        if (eventId == Guid.Empty ||
+            customerId == Guid.Empty ||
+            expectedSeatIds.Count == 0 ||
+            expectedSeatIds.Any(seatId => seatId == Guid.Empty) ||
+            expectedSeatIds.Distinct().Count() != expectedSeatIds.Count ||
+            string.IsNullOrWhiteSpace(customerName) ||
+            string.IsNullOrWhiteSpace(customerEmail))
+            return false;
+
+        if (ExpectedSeatIds.Length == 0)
+        {
+            if (EventId != eventId || CustomerId != customerId)
+                return false;
+
+            ExpectedSeatIds = [.. expectedSeatIds];
+            CustomerName = customerName;
+            CustomerEmail = customerEmail;
+            OperationKey = operationKey;
+            PriceSnapshotVersion = priceSnapshotVersion;
+            return true;
+        }
+
+        return EventId == eventId &&
+               CustomerId == customerId &&
+               ExpectedSeatIds.Length == expectedSeatIds.Count &&
+               ExpectedSeatIds.ToHashSet().SetEquals(expectedSeatIds) &&
+               string.Equals(CustomerName, customerName, StringComparison.Ordinal) &&
+               string.Equals(CustomerEmail, customerEmail, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(OperationKey, operationKey, StringComparison.Ordinal) &&
+               PriceSnapshotVersion == priceSnapshotVersion;
+    }
+
+    public void RecordAttempt(DateTimeOffset now)
+    {
+        Attempts++;
+        LastAttemptAt = now;
+    }
+
+    public void MarkRecoveryScheduled(DateTimeOffset now) => LastRecoveryAt = now;
+
+    public void MarkArtifactsReconciled(DateTimeOffset now) => ArtifactsReconciledAt = now;
 
     public void MarkIssued(DateTimeOffset now)
     {
@@ -103,4 +213,9 @@ public sealed class TicketIssuanceJob : Entity<Guid>
         CompletedAt = now;
         FailureReason = reason.Length > 500 ? reason[..500] : reason;
     }
+
+    private static Guid RequireId(Guid value, string parameterName) =>
+        value == Guid.Empty
+            ? throw new ArgumentException("Identifier cannot be empty.", parameterName)
+            : value;
 }

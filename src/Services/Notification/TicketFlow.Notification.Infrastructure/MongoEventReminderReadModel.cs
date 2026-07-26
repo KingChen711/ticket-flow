@@ -28,7 +28,7 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
     private IMongoCollection<EventScheduleDocument> Schedules => database.GetCollection<EventScheduleDocument>(SchedulesCollectionName);
     private IMongoCollection<ReminderRecipientDocument> Recipients => database.GetCollection<ReminderRecipientDocument>(RecipientsCollectionName);
 
-    public Task ApplyPublishedAsync(
+    public async Task ApplyPublishedAsync(
         Guid catalogEventId,
         string title,
         string artist,
@@ -45,19 +45,39 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
             .Set(d => d.IsCancelled, false)
             .Set(d => d.Revision, revision);
 
-        return ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken);
+        if (await ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken))
+            return;
+
+        // A newer Rescheduled can legitimately create a schedule-only shell before the earlier
+        // Published message arrives. Its revision must continue to win for StartsAt, while the
+        // immutable metadata from Published fills the otherwise permanent empty fields.
+        var placeholderFilter = Builders<EventScheduleDocument>.Filter.And(
+            Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId),
+            Builders<EventScheduleDocument>.Filter.Ne(d => d.IsCancelled, true),
+            Builders<EventScheduleDocument>.Filter.Or(
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.Title, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Title, false),
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.Artist, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Artist, false),
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.VenueName, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.VenueName, false)));
+        var metadata = Builders<EventScheduleDocument>.Update
+            .Set(d => d.Title, title)
+            .Set(d => d.Artist, artist)
+            .Set(d => d.VenueName, venueName);
+        await Schedules.UpdateOneAsync(placeholderFilter, metadata, cancellationToken: cancellationToken);
     }
 
-    public Task ApplyRescheduledAsync(
+    public async Task ApplyRescheduledAsync(
         Guid catalogEventId,
         DateTimeOffset startsAt,
         long revision,
         CancellationToken cancellationToken = default)
     {
         // Rescheduled carries nothing but StartsAt. If it overtakes Published, this update also
-        // creates the document (see ApplyGuardedAsync) with empty placeholder fields — a later
-        // Published fills them in, since Published's revision (the earlier canonical mutation) is
-        // never higher than a reschedule that came after it.
+        // creates the document (see ApplyGuardedAsync) with empty placeholder fields. Published
+        // may carry an older revision, so its dedicated metadata-fill path completes this shell
+        // without overwriting the newer StartsAt.
         var update = Builders<EventScheduleDocument>.Update
             .Set(d => d.StartsAt, startsAt.UtcDateTime)
             .Set(d => d.Revision, revision)
@@ -66,7 +86,7 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
             .SetOnInsert(d => d.VenueName, "")
             .SetOnInsert(d => d.IsCancelled, false);
 
-        return ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken);
+        await ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken);
     }
 
     public async Task ApplyCancelledAsync(Guid catalogEventId, long revision, CancellationToken cancellationToken = default)
@@ -76,13 +96,25 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
         var filter = Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId);
         var update = Builders<EventScheduleDocument>.Update
             .Set(d => d.IsCancelled, true)
-            .Set(d => d.Revision, revision)
+            .SetOnInsert(d => d.Revision, revision)
             .SetOnInsert(d => d.Title, "")
             .SetOnInsert(d => d.Artist, "")
             .SetOnInsert(d => d.VenueName, "")
             .SetOnInsert(d => d.StartsAt, default(DateTime));
 
         await Schedules.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, cancellationToken);
+
+        // Cancellation is a one-way tombstone, but an old/v1 cancellation still must not move the
+        // diagnostic revision backwards. Advance only when the incoming value is newer.
+        var revisionFilter = Builders<EventScheduleDocument>.Filter.And(
+            filter,
+            Builders<EventScheduleDocument>.Filter.Or(
+                Builders<EventScheduleDocument>.Filter.Lt(d => d.Revision, revision),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Revision, false)));
+        await Schedules.UpdateOneAsync(
+            revisionFilter,
+            Builders<EventScheduleDocument>.Update.Set(d => d.Revision, revision),
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -96,7 +128,7 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
     /// pattern for conditional upserts in MongoDB — there is no separate "no-op" return value the
     /// driver could give instead.
     /// </summary>
-    private async Task ApplyGuardedAsync(
+    private async Task<bool> ApplyGuardedAsync(
         Guid catalogEventId,
         UpdateDefinition<EventScheduleDocument> update,
         long revision,
@@ -118,11 +150,13 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
         try
         {
             await Schedules.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, cancellationToken);
+            return true;
         }
         catch (MongoWriteException exception) when (exception.WriteError?.Category == ServerErrorCategory.DuplicateKey)
         {
             // The stored document is tombstoned or already at a higher revision — this message
             // loses, which is the correct outcome, not a failure to surface.
+            return false;
         }
     }
 

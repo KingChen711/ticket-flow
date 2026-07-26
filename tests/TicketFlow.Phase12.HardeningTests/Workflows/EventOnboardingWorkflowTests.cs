@@ -33,7 +33,7 @@ public sealed class EventOnboardingWorkflowTests
         Assert.Equal("Failed", failed.Status);
         Assert.Equal(failAt.ToString(), failed.FailedStep);
 
-        var completed = await fixture.Service.ResumeAsync(failed.WorkflowId);
+        var completed = await fixture.Service.ResumeAsync(failed.WorkflowId, Organizer);
         Assert.Equal("Completed", completed.Status);
         Assert.Equal("Published", completed.LastCompletedStep);
 
@@ -65,6 +65,34 @@ public sealed class EventOnboardingWorkflowTests
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Another_organizer_cannot_read_resume_adopt_or_compensate_the_workflow()
+    {
+        var fixture = new Fixture(EventOnboardingStep.Published);
+        var request = Request("owner-scoped-workflow");
+        var failed = await fixture.Service.StartAsync(request, Organizer);
+        var stranger = new CatalogCaller(Guid.NewGuid(), IsAdmin: false);
+
+        await Assert.ThrowsAsync<WorkflowOwnershipException>(() =>
+            fixture.Service.GetAsync(failed.WorkflowId, stranger));
+        await Assert.ThrowsAsync<WorkflowOwnershipException>(() =>
+            fixture.Service.GetByCreationKeyAsync(request.CreationKey, stranger));
+        await Assert.ThrowsAsync<WorkflowOwnershipException>(() =>
+            fixture.Service.ResumeAsync(failed.WorkflowId, stranger));
+        await Assert.ThrowsAsync<WorkflowOwnershipException>(() =>
+            fixture.Service.CompensateAsync(failed.WorkflowId, stranger));
+        await Assert.ThrowsAsync<WorkflowOwnershipException>(() =>
+            fixture.Service.StartAsync(request, stranger));
+
+        Assert.Single(fixture.Events.Items);
+        Assert.Single(fixture.SeatMaps.Items);
+        Assert.Single(fixture.Venues.Items);
+
+        var admin = new CatalogCaller(Guid.NewGuid(), IsAdmin: true);
+        Assert.NotNull(await fixture.Service.GetAsync(failed.WorkflowId, admin));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Failed_draft_can_be_explicitly_compensated_including_uncertain_inventory()
     {
         var fixture = new Fixture(EventOnboardingStep.Published);
@@ -72,14 +100,14 @@ public sealed class EventOnboardingWorkflowTests
         Assert.Equal("ReservationInventory", failed.LastCompletedStep);
         Assert.Single(fixture.Reservation.ProvisionedEvents);
 
-        var compensated = await fixture.Service.CompensateAsync(failed.WorkflowId);
+        var compensated = await fixture.Service.CompensateAsync(failed.WorkflowId, Organizer);
         Assert.Equal("Compensated", compensated.Status);
         Assert.Empty(fixture.Events.Items);
         Assert.Empty(fixture.SeatMaps.Items);
         Assert.Empty(fixture.Venues.Items);
         Assert.Empty(fixture.Reservation.ProvisionedEvents);
 
-        var replay = await fixture.Service.CompensateAsync(failed.WorkflowId);
+        var replay = await fixture.Service.CompensateAsync(failed.WorkflowId, Organizer);
         Assert.Equal("Compensated", replay.Status);
     }
 
@@ -134,7 +162,7 @@ public sealed class EventOnboardingWorkflowTests
         Assert.Equal("Failed", failed.Status);
         Assert.Equal("ReservationInventory", failed.FailedStep);
 
-        var completed = await service.ResumeAsync(failed.WorkflowId);
+        var completed = await service.ResumeAsync(failed.WorkflowId, Organizer);
         Assert.Equal("Completed", completed.Status);
         Assert.Single(reservation.ProvisionedEvents);
         Assert.Equal(2, reservation.Calls);
@@ -151,7 +179,7 @@ public sealed class EventOnboardingWorkflowTests
         @event.Publish(DateTimeOffset.UtcNow);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            fixture.Service.CompensateAsync(failed.WorkflowId));
+            fixture.Service.CompensateAsync(failed.WorkflowId, Organizer));
 
         Assert.Contains(failed.EventId, fixture.Reservation.ProvisionedEvents);
         Assert.Single(fixture.Events.Items);

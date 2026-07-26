@@ -92,6 +92,40 @@ public sealed class NotificationReminderDurabilityIntegrationTests(HardeningEnvi
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_newer_Rescheduled_shell_must_accept_Published_metadata_without_rolling_back_time()
+    {
+        var eventId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var originalStart = DateTimeOffset.UtcNow.AddHours(12);
+        var rescheduledStart = DateTimeOffset.UtcNow.AddHours(20);
+
+        await ReadModel.ApplyRescheduledAsync(eventId, rescheduledStart, revision: 2);
+        await ReadModel.ApplyPublishedAsync(
+            eventId,
+            "Complete title",
+            "Complete artist",
+            "Complete venue",
+            originalStart,
+            revision: 1);
+        await ReadModel.AddRecipientAsync(
+            orderId,
+            eventId,
+            Guid.NewGuid(),
+            "Buyer",
+            "buyer@example.com");
+
+        var pending = await ReadModel.GetPendingRemindersAsync(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddDays(2));
+        var reminder = Assert.Single(pending, item => item.OrderId == orderId);
+        Assert.Equal("Complete title", reminder.EventTitle);
+        Assert.Equal("Complete artist", reminder.EventArtist);
+        Assert.Equal("Complete venue", reminder.EventVenueName);
+        Assert.Equal(rescheduledStart, reminder.StartsAt, TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task A_document_written_before_Commit_11_must_still_accept_a_revisioned_write()
     {
         var eventId = Guid.NewGuid();

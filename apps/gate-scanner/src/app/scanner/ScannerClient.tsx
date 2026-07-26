@@ -108,7 +108,7 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       const response = await fetchJson("/scanner/api/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ qrPayload, eventId }),
+        body: JSON.stringify({ qrPayload, eventId, gateId: gateLabel }),
         timeoutMs: 5_000,
         validate: parseValidateTicketResponse,
       });

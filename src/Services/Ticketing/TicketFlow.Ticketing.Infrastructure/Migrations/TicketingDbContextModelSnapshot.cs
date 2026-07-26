@@ -265,6 +265,38 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                     b.ToTable("event_owners", "ticketing");
                 });
 
+            modelBuilder.Entity("TicketFlow.Ticketing.Domain.Tickets.GateAssignment", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("GateId")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("gate_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<DateTimeOffset>("AssignedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("assigned_at");
+
+                    b.Property<Guid>("AssignedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assigned_by");
+
+                    b.HasKey("EventId", "GateId", "UserId")
+                        .HasName("pk_gate_assignments");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_gate_assignments_user_id");
+
+                    b.ToTable("gate_assignments", "ticketing");
+                });
+
             modelBuilder.Entity("TicketFlow.Ticketing.Domain.Tickets.Ticket", b =>
                 {
                     b.Property<Guid>("Id")
@@ -351,6 +383,10 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
 
+                    b.Property<DateTimeOffset?>("ArtifactsReconciledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("artifacts_reconciled_at");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -363,6 +399,16 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("customer_id");
 
+                    b.Property<string>("CustomerEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("customer_email");
+
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("customer_name");
+
                     b.Property<Guid>("EventId")
                         .HasColumnType("uuid")
                         .HasColumnName("event_id");
@@ -372,9 +418,31 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("failure_reason");
 
+                    b.Property<Guid[]>("ExpectedSeatIds")
+                        .IsRequired()
+                        .HasColumnType("uuid[]")
+                        .HasColumnName("expected_seat_ids");
+
+                    b.Property<DateTimeOffset>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<DateTimeOffset?>("LastRecoveryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_recovery_at");
+
+                    b.Property<string>("OperationKey")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("operation_key");
+
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uuid")
                         .HasColumnName("order_id");
+
+                    b.Property<long>("PriceSnapshotVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("price_snapshot_version");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -397,6 +465,12 @@ namespace TicketFlow.Ticketing.Infrastructure.Migrations
 
                     b.HasIndex("State")
                         .HasDatabaseName("ix_ticket_issuance_jobs_state");
+
+                    b.HasIndex("State", "CompletedAt", "ArtifactsReconciledAt")
+                        .HasDatabaseName("ix_ticket_issuance_jobs_state_completed_at_artifacts_reconcile");
+
+                    b.HasIndex("State", "LastAttemptAt", "LastRecoveryAt")
+                        .HasDatabaseName("ix_ticket_issuance_jobs_state_last_attempt_at_last_recovery_at");
 
                     b.ToTable("ticket_issuance_jobs", "ticketing");
                 });

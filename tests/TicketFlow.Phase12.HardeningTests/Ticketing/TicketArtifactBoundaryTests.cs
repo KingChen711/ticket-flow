@@ -94,6 +94,112 @@ public sealed class TicketArtifactBoundaryTests
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_late_permanent_failure_in_a_multi_ticket_batch_must_not_persist_or_replay_a_partial_success()
+    {
+        var repository = new EmptyTicketRepositoryFake();
+        var jobs = new RecordingIssuanceJobRepositoryFake();
+        var renderer = new FailOnSecondTicketRenderer();
+        await using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<ITicketRepository>(repository)
+            .AddSingleton<ITicketIssuanceJobRepository>(jobs)
+            .AddSingleton<TicketFlow.Ticketing.Application.Abstractions.IUnitOfWork, NoopTicketUnitOfWorkFake>()
+            .AddSingleton<ITicketPdfRenderer>(renderer)
+            .AddSingleton(TimeProvider.System)
+            .AddMassTransitTestHarness(configuration => configuration.AddConsumer<IssueTicketsConsumer>())
+            .BuildServiceProvider(validateScopes: true);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+
+        var command = new IssueTickets(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            [Guid.NewGuid(), Guid.NewGuid()],
+            "Buyer",
+            "buyer@example.com");
+        await harness.Bus.Publish(command, context => context.MessageId = Guid.NewGuid());
+        Assert.True(await harness.Published.Any<TicketingFailed>(x =>
+            x.Context.Message.OrderId == command.OrderId));
+
+        Assert.Equal(2, renderer.Attempts);
+        Assert.Empty(repository.Tickets);
+        Assert.Empty(harness.Published.Select<TicketsIssued>());
+
+        // A semantic duplicate observes the durable Failed job before looking at any legacy rows.
+        // It may replay the failure, but it must never turn a subset into TicketsIssued.
+        await harness.Bus.Publish(command, context => context.MessageId = Guid.NewGuid());
+        Assert.True(await AsyncTest.WaitUntilAsync(
+            () => harness.Consumed.Select<IssueTickets>().Count() >= 2,
+            TimeSpan.FromSeconds(10)));
+        Assert.Empty(repository.Tickets);
+        Assert.Empty(harness.Published.Select<TicketsIssued>());
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_legacy_partial_batch_renders_only_missing_seats_and_completes_the_durable_job()
+    {
+        var orderId = Guid.NewGuid();
+        var customerId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var existingSeatId = Guid.NewGuid();
+        var missingSeatId = Guid.NewGuid();
+        var repository = new EmptyTicketRepositoryFake();
+        repository.Add(Ticket.Issue(
+            orderId,
+            existingSeatId,
+            $"{orderId}:{existingSeatId}",
+            $"{orderId}/{existingSeatId}.pdf",
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            customerId,
+            eventId));
+        var jobs = new RecordingIssuanceJobRepositoryFake();
+        var job = TicketIssuanceJob.Claim(
+            orderId,
+            eventId,
+            customerId,
+            [existingSeatId, missingSeatId],
+            "Buyer",
+            "buyer@example.com",
+            operationKey: null,
+            priceSnapshotVersion: 0,
+            DateTimeOffset.UtcNow.AddMinutes(-1));
+        jobs.Add(job);
+        var render = new ControlledSideEffect<string>(() => $"{orderId}/{missingSeatId}.pdf");
+
+        await using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<ITicketRepository>(repository)
+            .AddSingleton<ITicketIssuanceJobRepository>(jobs)
+            .AddSingleton<TicketFlow.Ticketing.Application.Abstractions.IUnitOfWork, NoopTicketUnitOfWorkFake>()
+            .AddSingleton<ITicketPdfRenderer>(new ControlledTicketRendererFake(render))
+            .AddSingleton(TimeProvider.System)
+            .AddMassTransitTestHarness(configuration => configuration.AddConsumer<IssueTicketsConsumer>())
+            .BuildServiceProvider(validateScopes: true);
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+
+        await harness.Bus.Publish(
+            new IssueTickets(
+                orderId,
+                customerId,
+                eventId,
+                [existingSeatId, missingSeatId],
+                "Buyer",
+                "buyer@example.com"),
+            context => context.MessageId = Guid.NewGuid());
+
+        Assert.True(await harness.Published.Any<TicketsIssued>(published =>
+            published.Context.Message.OrderId == orderId &&
+            published.Context.Message.TicketPdfUrls.Count == 2));
+        Assert.Equal(1, render.Attempts);
+        Assert.Equal(2, repository.Tickets.Count);
+        Assert.Equal(TicketIssuanceJobState.Issued, job.State);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Cancellation_tombstone_prevents_late_ticket_issuance_and_acknowledges_zero_tickets()
     {
         var render = new ControlledSideEffect<string>(() => "should-not-render.pdf");
@@ -181,19 +287,61 @@ internal sealed class RecordingIssuanceJobRepositoryFake : ITicketIssuanceJobRep
             _jobs[job.OrderId] = job;
     }
 
+    public Task<IReadOnlyList<TicketIssuanceJob>> ListRecoverableAsync(
+        DateTimeOffset attemptCutoff,
+        DateTimeOffset recoveryCutoff,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_jobs)
+        {
+            IReadOnlyList<TicketIssuanceJob> result = _jobs.Values
+                .Where(job =>
+                    job.State == TicketIssuanceJobState.Pending &&
+                    job.LastAttemptAt <= attemptCutoff &&
+                    (job.LastRecoveryAt is null || job.LastRecoveryAt <= recoveryCutoff) &&
+                    job.HasRecoveryIntent)
+                .Take(take)
+                .ToList();
+            return Task.FromResult(result);
+        }
+    }
+
+    public Task<IReadOnlyList<TicketIssuanceJob>> ListTerminalArtifactsAsync(
+        DateTimeOffset completionCutoff,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_jobs)
+        {
+            IReadOnlyList<TicketIssuanceJob> result = _jobs.Values
+                .Where(job =>
+                    job.State is TicketIssuanceJobState.Failed or TicketIssuanceJobState.Cancelled &&
+                    job.CompletedAt <= completionCutoff &&
+                    job.ArtifactsReconciledAt is null)
+                .Take(take)
+                .ToList();
+            return Task.FromResult(result);
+        }
+    }
+
     public bool IsUniqueViolation(Exception exception) => false;
 }
 
 internal sealed class EmptyTicketRepositoryFake : ITicketRepository
 {
+    private readonly List<Ticket> _tickets = [];
+
+    public IReadOnlyList<Ticket> Tickets => _tickets;
+
     public Task<IReadOnlyList<Ticket>> GetByOrderIdAsync(Guid orderId, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<Ticket>>([]);
+        Task.FromResult<IReadOnlyList<Ticket>>(_tickets.Where(ticket => ticket.OrderId == orderId).ToList());
 
     public Task<Ticket?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-        Task.FromResult<Ticket?>(null);
+        Task.FromResult(_tickets.SingleOrDefault(ticket => ticket.Id == id));
 
     public Task<Ticket?> GetByQrPayloadAsync(string qrPayload, CancellationToken cancellationToken = default) =>
-        Task.FromResult<Ticket?>(null);
+        Task.FromResult(_tickets.SingleOrDefault(ticket => ticket.QrPayload == qrPayload));
 
     public Task<bool> TryClaimCheckInAsync(
         Guid ticketId,
@@ -203,10 +351,32 @@ internal sealed class EmptyTicketRepositoryFake : ITicketRepository
 
     public void Add(Ticket ticket)
     {
+        _tickets.Add(ticket);
     }
 }
 
 internal sealed class NoopTicketUnitOfWorkFake : TicketFlow.Ticketing.Application.Abstractions.IUnitOfWork
 {
     public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
+internal sealed class FailOnSecondTicketRenderer : ITicketPdfRenderer
+{
+    private int _attempts;
+
+    public int Attempts => Volatile.Read(ref _attempts);
+
+    public Task<string> RenderAndStoreAsync(
+        TicketPdfModel model,
+        string objectKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Increment(ref _attempts) == 2)
+        {
+            throw new PermanentMessageFaultException(
+                "The second seat has no renderable layout.");
+        }
+
+        return Task.FromResult(objectKey);
+    }
 }

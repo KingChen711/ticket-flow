@@ -80,6 +80,8 @@ public sealed class EventOnboardingWorkflowService(
             }
         }
 
+        EnsureCanAccess(workflow, caller);
+
         if (!string.Equals(workflow.RequestFingerprint, fingerprint, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -91,33 +93,43 @@ public sealed class EventOnboardingWorkflowService(
 
     public async Task<EventOnboardingWorkflowResponse> ResumeAsync(
         Guid workflowId,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var workflow = await GetRequiredAsync(workflowId, cancellationToken);
+        EnsureCanAccess(workflow, caller);
         return await ContinueAsync(workflow, cancellationToken);
     }
 
     public async Task<EventOnboardingWorkflowResponse?> GetAsync(
         Guid workflowId,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var workflow = await workflows.GetByIdAsync(workflowId, cancellationToken);
+        if (workflow is not null)
+            EnsureCanAccess(workflow, caller);
         return workflow is null ? null : Map(workflow);
     }
 
     public async Task<EventOnboardingWorkflowResponse?> GetByCreationKeyAsync(
         string creationKey,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var workflow = await workflows.GetByCreationKeyAsync(creationKey.Trim(), cancellationToken);
+        if (workflow is not null)
+            EnsureCanAccess(workflow, caller);
         return workflow is null ? null : Map(workflow);
     }
 
     public async Task<EventOnboardingWorkflowResponse> CompensateAsync(
         Guid workflowId,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var workflow = await GetRequiredAsync(workflowId, cancellationToken);
+        EnsureCanAccess(workflow, caller);
         if (workflow.Status == EventOnboardingStatus.Compensated)
             return Map(workflow);
 
@@ -374,6 +386,15 @@ public sealed class EventOnboardingWorkflowService(
     private async Task<EventOnboardingWorkflow> GetRequiredAsync(Guid id, CancellationToken cancellationToken) =>
         await workflows.GetByIdAsync(id, cancellationToken)
         ?? throw new InvalidOperationException($"Onboarding workflow '{id}' was not found.");
+
+    private static void EnsureCanAccess(EventOnboardingWorkflow workflow, CatalogCaller caller)
+    {
+        if (caller.IsAdmin)
+            return;
+
+        if (workflow.OrganizerId is null || workflow.OrganizerId != caller.OrganizerId)
+            throw new WorkflowOwnershipException(workflow.Id);
+    }
 
     private static StartEventOnboardingRequest Normalize(StartEventOnboardingRequest request)
     {

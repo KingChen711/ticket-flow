@@ -18,6 +18,7 @@
     "realm": [
       { "name": "customer", "description": "Buys tickets" },
       { "name": "organizer", "description": "Creates/manages events, views revenue" },
+      { "name": "gate-staff", "description": "Scans tickets only at explicitly assigned event gates" },
       { "name": "admin", "description": "Platform administrator" },
       { "name": "service", "description": "Internal service-to-service caller (Phase 12 Commit 14) — never granted to a human client, so no user token can satisfy RequireServicePrincipal" }
     ]

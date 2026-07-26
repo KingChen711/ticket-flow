@@ -1,7 +1,9 @@
 using Marten;
 using Npgsql;
+using TicketFlow.Contracts.Messaging.Workflows;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Application.Checkout;
+using TicketFlow.Ordering.Application.Workflows;
 
 namespace TicketFlow.Ordering.Api.Services;
 
@@ -81,6 +83,11 @@ public sealed class OrderDispatchRelay(
             try
             {
                 await publisher.PublishAsync(record.Payload, cancellationToken);
+                await WakeCancellationCampaignsAsync(
+                    session,
+                    publisher,
+                    record.Payload.EventId,
+                    cancellationToken);
                 record.MarkDispatched(timeProvider.GetUtcNow());
                 session.Store(record);
                 await session.SaveChangesAsync(cancellationToken);
@@ -106,6 +113,28 @@ public sealed class OrderDispatchRelay(
         }
 
         return dispatched;
+    }
+
+    private async Task WakeCancellationCampaignsAsync(
+        IDocumentSession session,
+        IIntegrationEventPublisher publisher,
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        // A campaign stops scheduling retries after a quiet completion. The durable checkout
+        // relay is the one component guaranteed to observe a dispatch committed later, so it also
+        // wakes every campaign for that event. Duplicate wakes are harmless and intentionally
+        // preferable to leaving a paid order outside cancellation forever.
+        var campaigns = await session.Query<EventCancellationCampaign>()
+            .Where(campaign => campaign.EventId == eventId)
+            .ToListAsync(cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        foreach (var campaign in campaigns)
+        {
+            await publisher.PublishAsync(
+                new RetryEventCancellation(campaign.Id, campaign.EventId, now),
+                cancellationToken);
+        }
     }
 
     private static async Task<bool> TryClaimAsync(

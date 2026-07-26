@@ -53,6 +53,7 @@ public sealed class EventService(
     public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
+        var wasPublished = @event.Status == EventStatus.Published;
         var schedule = EventSchedule.Create(
             request.StartsAt,
             request.EndsAt,
@@ -66,13 +67,19 @@ public sealed class EventService(
         // in-process only (Ignore(DomainEvents)) — this is the real cross-service contract, and
         // it must publish BEFORE SaveChangesAsync so the Outbox interceptor captures it in the
         // same transaction as the reschedule write.
-        await integrationEventPublisher.PublishAsync(
-            new CatalogEventRescheduled(
-                @event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt,
-                @event.AggregateVersion, timeProvider.GetUtcNow(), @event.Schedule.TimeZoneId),
-            cancellationToken);
+        // A Draft may be edited freely, but it is not yet a cross-service lifecycle fact. Emitting
+        // Rescheduled for it makes Search/Notification manufacture a public "Published" shell.
+        // PublishAsync later broadcasts the draft's final schedule and complete metadata.
+        if (wasPublished)
+        {
+            await integrationEventPublisher.PublishAsync(
+                new CatalogEventRescheduled(
+                    @event.Id, @event.Schedule.StartsAt, @event.Schedule.EndsAt,
+                    @event.AggregateVersion, timeProvider.GetUtcNow(), @event.Schedule.TimeZoneId),
+                cancellationToken);
+        }
 
-        if (@event.Status == EventStatus.Published)
+        if (wasPublished)
             await PublishSalePolicyAsync(@event, timeProvider.GetUtcNow(), cancellationToken);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);

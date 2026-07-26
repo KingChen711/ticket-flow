@@ -33,4 +33,8 @@
     <ProjectReference Include="..\TicketFlow.Ordering.Infrastructure\TicketFlow.Ordering.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TicketFlow.Phase12.HardeningTests" />
+  </ItemGroup>
+
 </Project>

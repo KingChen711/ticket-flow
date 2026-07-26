@@ -18,7 +18,11 @@ test("customer shell composes organizer and scanner zones without losing scanner
   expect(icon.headers()["content-type"]).toContain("image/svg+xml");
 
   const bff = await request.post("/scanner/api/validate", {
-    data: { qrPayload: "not-a-ticket", eventId: "11111111-1111-4111-8111-111111111111" },
+    data: {
+      qrPayload: "not-a-ticket",
+      eventId: "11111111-1111-4111-8111-111111111111",
+      gateId: "north",
+    },
   });
   expect(bff.status()).toBe(401);
   expect(await bff.json()).toMatchObject({ error: "Reauthentication required" });

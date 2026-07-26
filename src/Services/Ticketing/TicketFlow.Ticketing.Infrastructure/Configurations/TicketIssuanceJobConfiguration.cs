@@ -18,8 +18,14 @@ public sealed class TicketIssuanceJobConfiguration : IEntityTypeConfiguration<Ti
         builder.HasIndex(j => j.OrderId).IsUnique();
 
         builder.Property(j => j.State).HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(j => j.ExpectedSeatIds).HasColumnType("uuid[]").IsRequired();
+        builder.Property(j => j.CustomerName).HasMaxLength(200);
+        builder.Property(j => j.CustomerEmail).HasMaxLength(320);
+        builder.Property(j => j.OperationKey).HasMaxLength(500);
         builder.Property(j => j.FailureReason).HasMaxLength(500);
         builder.HasIndex(j => j.State);
+        builder.HasIndex(j => new { j.State, j.LastAttemptAt, j.LastRecoveryAt });
+        builder.HasIndex(j => new { j.State, j.CompletedAt, j.ArtifactsReconciledAt });
         builder.Property<uint>("xmin").HasColumnName("xmin").IsRowVersion();
     }
 }

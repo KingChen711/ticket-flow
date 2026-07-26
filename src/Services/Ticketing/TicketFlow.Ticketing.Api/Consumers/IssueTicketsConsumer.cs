@@ -53,24 +53,11 @@ public sealed class IssueTicketsConsumer(
             return;
         }
 
-        var existing = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
-        if (existing.Count > 0)
-        {
-            logger.LogInformation(
-                "[ticketing] duplicate IssueTickets for order {OrderId} — replaying {Count} existing ticket(s), not re-issuing.",
-                message.OrderId,
-                existing.Count);
-
-            await context.Publish(new TicketsIssued(
-                message.OrderId,
-                existing.Select(t => t.PdfObjectKey).ToList(),
-                existing.Max(t => t.IssuedAt)));
-            return;
-        }
-
         if (job is { State: TicketIssuanceJobState.Failed })
         {
-            // Already refused for good; re-running would only fail the same way.
+            // A failed job wins over any rows left by an older, partially-committed issuer. Checking
+            // for "at least one ticket" first would turn an incomplete batch into TicketsIssued on
+            // a semantic redelivery, after the saga had already been told to compensate the order.
             logger.LogWarning(
                 "[ticketing] IssueTickets for order {OrderId} was already refused: {Reason}",
                 message.OrderId,
@@ -79,9 +66,90 @@ public sealed class IssueTicketsConsumer(
             return;
         }
 
+        var expectedSeatIds = message.SeatIds.ToHashSet();
+        if (message.OrderId == Guid.Empty ||
+            message.EventId == Guid.Empty ||
+            message.UserId == Guid.Empty ||
+            expectedSeatIds.Count == 0 ||
+            expectedSeatIds.Contains(Guid.Empty) ||
+            expectedSeatIds.Count != message.SeatIds.Count ||
+            string.IsNullOrWhiteSpace(message.CustomerName) ||
+            message.CustomerName.Length > 200 ||
+            string.IsNullOrWhiteSpace(message.CustomerEmail) ||
+            message.CustomerEmail.Length > 320 ||
+            message.OperationKey?.Length > 500)
+        {
+            throw new PermanentMessageFaultException(
+                $"Order '{message.OrderId}' has an invalid ticket issuance command.");
+        }
+
+        var attemptAt = timeProvider.GetUtcNow();
+        if (job is not null)
+        {
+            if (!job.TryCaptureOrMatchIntent(
+                    message.EventId,
+                    message.UserId,
+                    message.SeatIds,
+                    message.CustomerName,
+                    message.CustomerEmail,
+                    message.OperationKey,
+                    message.PriceSnapshotVersion))
+            {
+                throw new PermanentMessageFaultException(
+                    $"Order '{message.OrderId}' was redelivered with a different issuance intent.");
+            }
+
+            job.RecordAttempt(attemptAt);
+        }
+
+        var existing = await repository.GetByOrderIdAsync(message.OrderId, context.CancellationToken);
+        var existingBySeat = existing.ToDictionary(ticket => ticket.SeatId);
+        if (existing.Count > 0 &&
+            (existingBySeat.Keys.Any(seatId => !expectedSeatIds.Contains(seatId)) ||
+             existing.Any(ticket => ticket.EventId != message.EventId || ticket.CustomerId != message.UserId)))
+        {
+            // Same OrderId with a different seat/customer/event tuple is a semantic collision, not
+            // a harmless broker duplicate. Do not publish success from somebody else's rows and do
+            // not mutate the durable job until an operator reconciles the conflicting intent.
+            throw new PermanentMessageFaultException(
+                $"Order '{message.OrderId}' already has tickets that do not match the issuance command.");
+        }
+
+        if (existingBySeat.Count == expectedSeatIds.Count &&
+            expectedSeatIds.All(existingBySeat.ContainsKey))
+        {
+            logger.LogInformation(
+                "[ticketing] duplicate IssueTickets for order {OrderId} — replaying {Count} existing ticket(s), not re-issuing.",
+                message.OrderId,
+                existing.Count);
+
+            // Captures recovery metadata on legacy issuance-job rows before replaying success.
+            if (job is not null)
+            {
+                if (job.State != TicketIssuanceJobState.Issued)
+                    job.MarkIssued(attemptAt);
+                await unitOfWork.SaveChangesAsync(context.CancellationToken);
+            }
+
+            await context.Publish(new TicketsIssued(
+                message.OrderId,
+                message.SeatIds.Select(seatId => existingBySeat[seatId].PdfObjectKey).ToList(),
+                existing.Max(t => t.IssuedAt)));
+            return;
+        }
+
         if (job is null)
         {
-            job = TicketIssuanceJob.Claim(message.OrderId, message.EventId, message.UserId, timeProvider.GetUtcNow());
+            job = TicketIssuanceJob.Claim(
+                message.OrderId,
+                message.EventId,
+                message.UserId,
+                message.SeatIds,
+                message.CustomerName,
+                message.CustomerEmail,
+                message.OperationKey,
+                message.PriceSnapshotVersion,
+                attemptAt);
             jobs.Add(job);
             try
             {
@@ -99,16 +167,25 @@ public sealed class IssueTicketsConsumer(
         }
         else
         {
-            job.RecordAttempt();
+            // Attempts and the full command snapshot must survive a renderer crash; otherwise a
+            // worker could find a Pending row but have no durable command to reconstruct.
+            await unitOfWork.SaveChangesAsync(context.CancellationToken);
         }
 
         try
         {
             var now = timeProvider.GetUtcNow();
             var pdfObjectKeys = new List<string>(message.SeatIds.Count);
+            var renderedTickets = new List<Ticket>(message.SeatIds.Count - existingBySeat.Count);
 
             foreach (var seatId in message.SeatIds)
             {
+                if (existingBySeat.TryGetValue(seatId, out var existingTicket))
+                {
+                    pdfObjectKeys.Add(existingTicket.PdfObjectKey);
+                    continue;
+                }
+
                 // No "tickets/" prefix — the bucket itself is already named "tickets" (Commit 1).
                 // Doubling it up as a key prefix too was the exact scratch-script bug caught
                 // (and NOT reproduced in production code) during Commit 3 verification.
@@ -129,9 +206,15 @@ public sealed class IssueTicketsConsumer(
                     ticket.Id, message.OrderId, message.EventId, seatId, message.CustomerName, qrPayload, now);
                 var storedKey = await renderer.RenderAndStoreAsync(pdfModel, objectKey, context.CancellationToken);
 
-                repository.Add(ticket);
+                // Do not attach a row to the EF change tracker until every missing artifact has
+                // rendered. A permanent failure on seat N must not make SaveChanges below persist
+                // seats 1..N-1 together with a Failed job.
+                renderedTickets.Add(ticket);
                 pdfObjectKeys.Add(storedKey);
             }
+
+            foreach (var ticket in renderedTickets)
+                repository.Add(ticket);
 
             job.MarkIssued(now);
             await unitOfWork.SaveChangesAsync(context.CancellationToken);
@@ -141,7 +224,13 @@ public sealed class IssueTicketsConsumer(
         catch (PermanentMessageFaultException exception)
         {
             // The only path that may fail the order. Everything else is left to redelivery.
-            job.MarkFailed(exception.Message, timeProvider.GetUtcNow());
+            var failedAt = timeProvider.GetUtcNow();
+            job.MarkFailed(exception.Message, failedAt);
+            // A legacy deployment may already have committed a subset before failing a later
+            // seat. Fence those rows in the same terminal transaction; the background
+            // reconciler is a second line of repair, not a window in which a failed ticket works.
+            foreach (var ticket in existing)
+                ticket.Revoke(exception.Message, failedAt);
             await unitOfWork.SaveChangesAsync(context.CancellationToken);
             TicketIssuanceMetrics.RecordFailed();
 

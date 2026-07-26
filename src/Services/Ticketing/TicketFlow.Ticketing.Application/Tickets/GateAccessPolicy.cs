@@ -1,4 +1,5 @@
 using TicketFlow.Ticketing.Application.Abstractions;
+using TicketFlow.Ticketing.Domain.Tickets;
 
 namespace TicketFlow.Ticketing.Application.Tickets;
 
@@ -10,12 +11,55 @@ namespace TicketFlow.Ticketing.Application.Tickets;
 /// this is the rule that stops one organizer burning another organizer's tickets, and it should not
 /// only be reachable through an HTTP fixture.
 /// </remarks>
-public sealed class GateAccessPolicy(IEventOwnerRepository eventOwners)
+public sealed class GateAccessPolicy(
+    IEventOwnerRepository eventOwners,
+    IGateAssignmentRepository gateAssignments)
 {
-    /// <param name="organizerId">The caller's verified subject, or null when it is unusable.</param>
+    /// <param name="subjectId">The caller's verified subject, or null when it is unusable.</param>
     /// <param name="isAdmin">Admin runs any gate.</param>
     public async Task<bool> CanScanAsync(
-        Guid? organizerId,
+        Guid? subjectId,
+        bool isAdmin,
+        bool isOrganizer,
+        bool isGateStaff,
+        Guid eventId,
+        string gateId,
+        CancellationToken cancellationToken = default)
+    {
+        if (isAdmin)
+            return true;
+
+        if (subjectId is null || subjectId == Guid.Empty)
+            return false;
+
+        if (isOrganizer)
+        {
+            // The owning organizer keeps an operational override across their own gates. This is
+            // also how they verify a gate before handing the device to assigned staff.
+            var owner = await eventOwners.GetAsync(eventId, cancellationToken);
+            if (owner is not null && owner.OrganizerId == subjectId.Value)
+                return true;
+        }
+
+        if (!isGateStaff)
+            return false;
+
+        try
+        {
+            return await gateAssignments.GetAsync(
+                eventId,
+                GateAssignment.NormalizeGateId(gateId),
+                subjectId.Value,
+                cancellationToken) is not null;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> CanManageAssignmentsAsync(
+        Guid? subjectId,
         bool isAdmin,
         Guid eventId,
         CancellationToken cancellationToken = default)
@@ -23,15 +67,10 @@ public sealed class GateAccessPolicy(IEventOwnerRepository eventOwners)
         if (isAdmin)
             return true;
 
-        if (organizerId is null || organizerId == Guid.Empty)
+        if (subjectId is null || subjectId == Guid.Empty)
             return false;
 
-        // No projected owner means Ticketing does not know whose event this is — refused, not
-        // allowed. Events published before Commit 14 carry no organizer and stay admin-only until
-        // Catalog republishes them (POST /admin/events/replay, Commit 11). Defaulting the other way
-        // would make every pre-existing event scannable by any organizer in the realm, which is the
-        // hole this commit is closing.
         var owner = await eventOwners.GetAsync(eventId, cancellationToken);
-        return owner is not null && owner.OrganizerId == organizerId.Value;
+        return owner is not null && owner.OrganizerId == subjectId.Value;
     }
 }

@@ -115,6 +115,7 @@ public sealed class EventCancellationCampaignConsumer(
         var discovered = states.Select(state => state.CorrelationId)
             .Concat(dispatches.Select(dispatch => dispatch.Id))
             .Distinct();
+        var addedLateOrder = false;
 
         foreach (var orderId in discovered)
         {
@@ -129,7 +130,14 @@ public sealed class EventCancellationCampaignConsumer(
                     : "DispatchPending",
             });
             campaign.LastOrderDiscoveredAt = timeProvider.GetUtcNow();
+            addedLateOrder = true;
         }
+
+        // CompletedAt is a snapshot of a quiet scan, not an irreversible business terminal. A
+        // checkout dispatch that commits after that snapshot reopens the campaign so the new order
+        // receives the same cancel/refund/revoke/notify fan-out as the original set.
+        if (addedLateOrder)
+            campaign.CompletedAt = null;
     }
 
     private async Task PersistThenDriveAsync<T>(

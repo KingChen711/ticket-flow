@@ -13,33 +13,44 @@ public sealed class GateAccessPolicyTests
 {
     private static readonly Guid OrganizerA = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
     private static readonly Guid OrganizerB = Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002");
+    private static readonly Guid GateStaff = Guid.Parse("cccccccc-0000-0000-0000-000000000003");
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Only_the_owning_organizer_and_an_admin_may_scan()
     {
         var eventId = Guid.NewGuid();
-        var policy = new GateAccessPolicy(new FakeEventOwnerRepository(
-            EventOwner.Create(eventId, OrganizerA, revision: 1, DateTimeOffset.UtcNow)));
+        var policy = CreatePolicy(
+            EventOwner.Create(eventId, OrganizerA, revision: 1, DateTimeOffset.UtcNow));
 
-        Assert.True(await policy.CanScanAsync(OrganizerA, isAdmin: false, eventId));
-        Assert.False(await policy.CanScanAsync(OrganizerB, isAdmin: false, eventId));
-        Assert.True(await policy.CanScanAsync(OrganizerB, isAdmin: true, eventId));
+        Assert.True(await policy.CanScanAsync(
+            OrganizerA, isAdmin: false, isOrganizer: true, isGateStaff: false, eventId, "north"));
+        Assert.False(await policy.CanScanAsync(
+            OrganizerB, isAdmin: false, isOrganizer: true, isGateStaff: false, eventId, "north"));
+        Assert.True(await policy.CanScanAsync(
+            OrganizerB, isAdmin: true, isOrganizer: false, isGateStaff: false, eventId, "north"));
         // No usable subject at all is not a free pass.
-        Assert.False(await policy.CanScanAsync(null, isAdmin: false, eventId));
+        Assert.False(await policy.CanScanAsync(
+            null, isAdmin: false, isOrganizer: true, isGateStaff: false, eventId, "north"));
+
+        Assert.True(await policy.CanManageAssignmentsAsync(OrganizerA, isAdmin: false, eventId));
+        Assert.False(await policy.CanManageAssignmentsAsync(OrganizerB, isAdmin: false, eventId));
+        Assert.True(await policy.CanManageAssignmentsAsync(OrganizerB, isAdmin: true, eventId));
     }
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task An_event_with_no_known_owner_is_refused_rather_than_open_to_every_organizer()
     {
-        var policy = new GateAccessPolicy(new FakeEventOwnerRepository());
+        var policy = CreatePolicy();
 
         // Events published before Commit 14 carry no organizer, so nothing projects an owner for
         // them. Defaulting to "allow" would leave exactly the hole this commit closes, on exactly
         // the events that already exist.
-        Assert.False(await policy.CanScanAsync(OrganizerA, isAdmin: false, Guid.NewGuid()));
-        Assert.True(await policy.CanScanAsync(OrganizerA, isAdmin: true, Guid.NewGuid()));
+        Assert.False(await policy.CanScanAsync(
+            OrganizerA, isAdmin: false, isOrganizer: true, isGateStaff: false, Guid.NewGuid(), "north"));
+        Assert.True(await policy.CanScanAsync(
+            OrganizerA, isAdmin: true, isOrganizer: false, isGateStaff: false, Guid.NewGuid(), "north"));
     }
 
     [Fact]
@@ -57,9 +68,83 @@ public sealed class GateAccessPolicyTests
         Assert.True(owner.TryApply(OrganizerB, revision: 6, DateTimeOffset.UtcNow));
         Assert.Equal(OrganizerB, owner.OrganizerId);
 
-        var policy = new GateAccessPolicy(new FakeEventOwnerRepository(owner));
-        Assert.False(await policy.CanScanAsync(OrganizerA, isAdmin: false, eventId));
-        Assert.True(await policy.CanScanAsync(OrganizerB, isAdmin: false, eventId));
+        var policy = CreatePolicy(owner);
+        Assert.False(await policy.CanScanAsync(
+            OrganizerA, isAdmin: false, isOrganizer: true, isGateStaff: false, eventId, "north"));
+        Assert.True(await policy.CanScanAsync(
+            OrganizerB, isAdmin: false, isOrganizer: true, isGateStaff: false, eventId, "north"));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Gate_staff_may_only_scan_the_exact_persisted_event_and_gate_assignment()
+    {
+        var eventId = Guid.NewGuid();
+        var otherEventId = Guid.NewGuid();
+        var assignment = GateAssignment.Create(
+            eventId,
+            "North",
+            GateStaff,
+            OrganizerA,
+            DateTimeOffset.UtcNow);
+        var policy = new GateAccessPolicy(
+            new FakeEventOwnerRepository(
+                EventOwner.Create(eventId, OrganizerA, revision: 1, DateTimeOffset.UtcNow)),
+            new FakeGateAssignmentRepository(assignment));
+
+        Assert.True(await policy.CanScanAsync(
+            GateStaff, isAdmin: false, isOrganizer: false, isGateStaff: true, eventId, " north "));
+        Assert.False(await policy.CanScanAsync(
+            GateStaff, isAdmin: false, isOrganizer: false, isGateStaff: true, eventId, "south"));
+        Assert.False(await policy.CanScanAsync(
+            GateStaff, isAdmin: false, isOrganizer: false, isGateStaff: true, otherEventId, "north"));
+
+        // An assignment row is not enough if the token no longer carries the gate-staff role.
+        Assert.False(await policy.CanScanAsync(
+            GateStaff, isAdmin: false, isOrganizer: false, isGateStaff: false, eventId, "north"));
+    }
+
+    private static GateAccessPolicy CreatePolicy(params EventOwner[] owners) =>
+        new(new FakeEventOwnerRepository(owners), new FakeGateAssignmentRepository());
+
+    private sealed class FakeGateAssignmentRepository(params GateAssignment[] assignments)
+        : IGateAssignmentRepository
+    {
+        private readonly List<GateAssignment> _assignments = [.. assignments];
+
+        public Task<GateAssignment?> GetAsync(
+            Guid eventId,
+            string gateId,
+            Guid userId,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedGateId = GateAssignment.NormalizeGateId(gateId);
+            return Task.FromResult(_assignments.FirstOrDefault(assignment =>
+                assignment.EventId == eventId &&
+                assignment.GateId == normalizedGateId &&
+                assignment.UserId == userId));
+        }
+
+        public Task<IReadOnlyList<GateAssignment>> ListAsync(
+            Guid eventId,
+            string gateId,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedGateId = GateAssignment.NormalizeGateId(gateId);
+            IReadOnlyList<GateAssignment> result = _assignments
+                .Where(assignment =>
+                    assignment.EventId == eventId &&
+                    assignment.GateId == normalizedGateId)
+                .ToList();
+            return Task.FromResult(result);
+        }
+
+        public void Add(GateAssignment assignment) => _assignments.Add(assignment);
+
+        public void Remove(GateAssignment assignment) => _assignments.Remove(assignment);
+
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeEventOwnerRepository(params EventOwner[] owners) : IEventOwnerRepository

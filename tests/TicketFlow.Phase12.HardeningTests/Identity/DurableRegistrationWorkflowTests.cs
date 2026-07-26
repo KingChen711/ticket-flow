@@ -111,7 +111,10 @@ public sealed class DurableRegistrationWorkflowTests
                 return Task.CompletedTask;
             },
         };
-        var service = CreateService(repository, keycloak, new FakeUnitOfWork());
+        var service = CreateService(repository, keycloak, new FakeUnitOfWork
+        {
+            BeforeCancelledSave = repository.RollBackUncommittedFinalSave,
+        });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RegisterAsync(
             new RegisterUserRequest("commit-cancel@example.com", "Commit Cancel", StrongPassword, Guid.NewGuid()),
@@ -133,6 +136,11 @@ public sealed class DurableRegistrationWorkflowTests
         var unitOfWork = new FakeUnitOfWork
         {
             Failure = call => call == 4 ? databaseError : null,
+            BeforeFailure = call =>
+            {
+                if (call == 4)
+                    repository.RollBackUncommittedFinalSave();
+            },
         };
         var keycloak = new FakeKeycloakAdminClient
         {
@@ -148,6 +156,35 @@ public sealed class DurableRegistrationWorkflowTests
         var registration = Assert.Single(repository.Registrations);
         Assert.Equal(UserRegistrationStatus.CompensationPending, registration.Status);
         Assert.Contains("Keycloak unavailable", registration.LastError);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Lost_acknowledgement_after_local_commit_must_not_delete_the_successful_Keycloak_user()
+    {
+        var ambiguous = new RegistrationDatabaseUnavailableException(
+            "connection dropped after COMMIT");
+        var repository = new FakeUserRepository();
+        var unitOfWork = new FakeUnitOfWork
+        {
+            // The repository mutations remain visible: this models COMMIT succeeding before the
+            // database acknowledgement is lost.
+            Failure = call => call == 4 ? ambiguous : null,
+        };
+        var keycloak = new FakeKeycloakAdminClient();
+        var service = CreateService(repository, keycloak, unitOfWork);
+
+        var registered = await service.RegisterAsync(new RegisterUserRequest(
+            "committed@example.com",
+            "Committed",
+            StrongPassword,
+            Guid.NewGuid()));
+
+        Assert.Equal("committed@example.com", registered.Email);
+        Assert.Equal(0, keycloak.DeleteCalls);
+        var registration = Assert.Single(repository.Registrations);
+        Assert.Equal(UserRegistrationStatus.Completed, registration.Status);
+        Assert.Equal(registered.Id, registration.KeycloakUserId);
     }
 
     [Theory]
@@ -206,17 +243,39 @@ public sealed class DurableRegistrationWorkflowTests
         public void Add(User user) => _users[user.Id] = user;
 
         public void Add(UserRegistration registration) => _registrations[registration.Id] = registration;
+
+        public void RollBackUncommittedFinalSave()
+        {
+            _users.Clear();
+            foreach (var registration in _registrations.Values)
+            {
+                if (registration.Status != UserRegistrationStatus.Completed)
+                    continue;
+
+                var keycloakUserId = registration.KeycloakUserId;
+                registration.ResetAfterCompensation(DateTimeOffset.UtcNow);
+                if (keycloakUserId is { } userId)
+                    registration.RecordKeycloakUser(userId, DateTimeOffset.UtcNow);
+            }
+        }
     }
 
     private sealed class FakeUnitOfWork : IUnitOfWork
     {
         private int _saveCalls;
         public Func<int, Exception?>? Failure { get; init; }
+        public Action<int>? BeforeFailure { get; init; }
+        public Action? BeforeCancelledSave { get; init; }
 
         public Task SaveChangesAsync(CancellationToken cancellationToken = default)
         {
+            if (cancellationToken.IsCancellationRequested)
+                BeforeCancelledSave?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
-            var failure = Failure?.Invoke(Interlocked.Increment(ref _saveCalls));
+            var call = Interlocked.Increment(ref _saveCalls);
+            var failure = Failure?.Invoke(call);
+            if (failure is not null)
+                BeforeFailure?.Invoke(call);
             return failure is null ? Task.CompletedTask : Task.FromException(failure);
         }
 

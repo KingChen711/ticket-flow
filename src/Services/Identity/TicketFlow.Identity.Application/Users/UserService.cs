@@ -157,6 +157,21 @@ public sealed class UserService(
         }
         catch (Exception originalError)
         {
+            var reconciliation = await ReconcileFinalCommitAsync(
+                registration.Id,
+                keycloakUserId.Value,
+                originalError);
+            if (reconciliation.User is not null)
+                return Map(reconciliation.User);
+
+            if (!reconciliation.LocalCommitProvenAbsent)
+            {
+                // The database could not tell us whether COMMIT won. Deleting the remote user in
+                // that state can corrupt a successful registration. The durable Keycloak
+                // checkpoint and ownership marker make a later retry/reconcile safe.
+                ExceptionDispatchInfo.Capture(originalError).Throw();
+            }
+
             await CompensateAndRethrowAsync(registration.Id, keycloakUserId.Value, originalError);
             throw; // unreachable: ExceptionDispatchInfo below preserves the original stack.
         }
@@ -270,6 +285,66 @@ public sealed class UserService(
         }
     }
 
+    private async Task<FinalCommitReconciliation> ReconcileFinalCommitAsync(
+        Guid registrationKey,
+        Guid keycloakUserId,
+        Exception originalError)
+    {
+        unitOfWork.DiscardChanges();
+
+        try
+        {
+            using var recovery = CreateRecoveryToken();
+            var registration = await userRepository.GetRegistrationByKeyAsync(
+                registrationKey,
+                recovery.Token);
+            if (registration is null)
+                return FinalCommitReconciliation.Unknown;
+
+            var user = await userRepository.GetByIdAsync(keycloakUserId, recovery.Token);
+            if (registration.KeycloakUserId == keycloakUserId && user is not null)
+            {
+                // A committed user is the authoritative outcome. Heal a rare checkpoint skew in
+                // place, but never delete the remote account that the local profile references.
+                if (registration.Status != UserRegistrationStatus.Completed)
+                {
+                    registration.Complete(timeProvider.GetUtcNow());
+                    await unitOfWork.SaveChangesAsync(recovery.Token);
+                }
+
+                logger.LogWarning(
+                    originalError,
+                    "Registration {RegistrationKey} final save returned an error after the durable user was committed; treating the committed state as success",
+                    registrationKey);
+                return FinalCommitReconciliation.Completed(user);
+            }
+
+            if (user is null &&
+                registration.Status != UserRegistrationStatus.Completed &&
+                (registration.KeycloakUserId is null || registration.KeycloakUserId == keycloakUserId))
+            {
+                return FinalCommitReconciliation.NotCommitted;
+            }
+
+            logger.LogError(
+                originalError,
+                "Registration {RegistrationKey} has an inconsistent local outcome; preserving Keycloak user {KeycloakUserId} for manual reconciliation",
+                registrationKey,
+                keycloakUserId);
+            return FinalCommitReconciliation.Unknown;
+        }
+        catch (Exception reconciliationError)
+        {
+            unitOfWork.DiscardChanges();
+            logger.LogWarning(
+                reconciliationError,
+                "Could not determine whether registration {RegistrationKey} committed locally after {ErrorType}; preserving the remote user",
+                registrationKey,
+                originalError.GetType().Name);
+            return FinalCommitReconciliation.Unknown;
+        }
+    }
+
     private async Task CompensateAndRethrowAsync(
         Guid registrationKey,
         Guid keycloakUserId,
@@ -321,6 +396,13 @@ public sealed class UserService(
 
     private CancellationTokenSource CreateRecoveryToken() =>
         new(workflowOptions.RecoveryTimeout);
+
+    private readonly record struct FinalCommitReconciliation(User? User, bool LocalCommitProvenAbsent)
+    {
+        public static FinalCommitReconciliation Completed(User user) => new(user, false);
+        public static FinalCommitReconciliation NotCommitted => new(null, true);
+        public static FinalCommitReconciliation Unknown => new(null, false);
+    }
 
     private static UserResponse Map(User user) => new(
         user.Id,

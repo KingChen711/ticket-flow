@@ -69,6 +69,49 @@ public sealed class SearchIndexDurabilityIntegrationTests(HardeningEnvironmentFi
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_newer_Rescheduled_shell_must_accept_metadata_from_the_older_Published_without_rolling_back_time()
+    {
+        var eventId = Guid.NewGuid();
+        var originalStart = DateTimeOffset.UtcNow.AddDays(20);
+        var rescheduledStart = DateTimeOffset.UtcNow.AddDays(30);
+
+        await Index.ApplyRescheduledAsync(eventId, rescheduledStart, revision: 2);
+        await Index.ApplyPublishedAsync(new SearchDocument(
+            eventId,
+            "Complete title",
+            "Complete artist",
+            "Complete venue",
+            "Saigon",
+            originalStart,
+            "Published",
+            Revision: 1));
+
+        var stored = await Index.GetByIdAsync(eventId);
+        Assert.NotNull(stored);
+        Assert.Equal("Complete title", stored.Title);
+        Assert.Equal("Complete artist", stored.Artist);
+        Assert.Equal("Complete venue", stored.VenueName);
+        Assert.Equal("Saigon", stored.City);
+        Assert.Equal(rescheduledStart, stored.StartsAt);
+        Assert.Equal(2, stored.Revision);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task A_missing_index_must_be_reported_as_an_outage_not_as_a_missing_event()
+    {
+        var indexName = $"phase12_missing_{Guid.NewGuid():N}";
+        await ElasticsearchIndexSetup.EnsureCreatedAsync(environment.SearchClient, indexName);
+        var index = new ElasticEventSearchIndex(environment.SearchClient, indexName);
+        var deleted = await environment.SearchClient.Indices.DeleteAsync(indexName);
+        Assert.True(deleted.IsValidResponse, deleted.DebugInformation);
+
+        await Assert.ThrowsAsync<SearchIndexUnavailableException>(() =>
+            index.GetByIdAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task A_document_indexed_before_Commit_11_must_still_accept_a_revisioned_write()
     {
         var eventId = Guid.NewGuid();

@@ -72,6 +72,7 @@ public static class AuthenticationExtensions
 
         services.AddAuthorizationBuilder()
             .AddPolicy("RequireOrganizer", p => p.RequireRole("organizer", "admin"))
+            .AddPolicy("RequireGateScanner", p => p.RequireRole("gate-staff", "organizer", "admin"))
             .AddPolicy("RequireAdmin", p => p.RequireRole("admin"))
             .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser())
             // Commit 14: endpoints one service calls on another, never a browser. Before this they

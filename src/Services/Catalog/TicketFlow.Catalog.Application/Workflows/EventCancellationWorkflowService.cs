@@ -90,9 +90,17 @@ public sealed class EventCancellationWorkflowService(
 
     public async Task<EventCancellationWorkflowResponse?> GetAsync(
         Guid workflowId,
+        CatalogCaller caller,
         CancellationToken cancellationToken = default)
     {
         var workflow = await workflows.GetByIdAsync(workflowId, cancellationToken);
+        if (workflow is null)
+            return null;
+
+        var @event = await events.GetByIdAsync(workflow.EventId, cancellationToken);
+        if (!caller.IsAdmin && (@event is null || !@event.IsOwnedBy(caller.OrganizerId)))
+            throw new WorkflowOwnershipException(workflow.Id);
+
         return workflow is null ? null : Map(workflow);
     }
 

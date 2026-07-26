@@ -22,7 +22,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<ITicketIssuanceJobRepository, TicketIssuanceJobRepository>();
         services.AddScoped<IEventOwnerRepository, EventOwnerRepository>();
+        services.AddScoped<IGateAssignmentRepository, GateAssignmentRepository>();
         services.AddScoped<GateAccessPolicy>();
+        services.AddScoped<TicketAccessPolicy>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<ITicketPdfRenderer, LambdaTicketRenderClient>();
 
