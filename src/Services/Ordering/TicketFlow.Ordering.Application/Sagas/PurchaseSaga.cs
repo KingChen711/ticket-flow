@@ -218,9 +218,11 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     DateTimeOffset.UtcNow))
                 .Finalize());
 
-        // A re-sent OrderSubmitted (the outbox is at-least-once) for an order already in flight.
+        // The outbox delivers OrderSubmitted at least once. A re-sent copy must never start a second
+        // purchase for the same order: ignore it while the saga is in flight, and keep finished
+        // instances in Final (no SetCompletedWhenFinalized) as a tombstone so a late copy after
+        // completion or cancellation is ignored too instead of creating a fresh instance.
         DuringAny(Ignore(OrderSubmittedEvent));
-
-        SetCompletedWhenFinalized();
+        During(Final, Ignore(OrderSubmittedEvent));
     }
 }

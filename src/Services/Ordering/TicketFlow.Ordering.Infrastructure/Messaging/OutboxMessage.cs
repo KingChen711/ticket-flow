@@ -11,4 +11,8 @@ public sealed class OutboxMessage
     public string Payload { get; set; } = null!;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? SentAt { get; set; }
+
+    /// <summary>Set when the message can never be sent (unknown type or unreadable payload).</summary>
+    public DateTimeOffset? FailedAt { get; set; }
+    public string? Error { get; set; }
 }
