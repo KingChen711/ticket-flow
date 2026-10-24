@@ -293,7 +293,7 @@ Chạy trên Kubernetes (kind + Helm): xem `infrastructure/k8s/` và job `deploy
 - **Ghi chéo nhiều store không nguyên tử ở vài chỗ**: reservation chốt Redis rồi mới lưu Postgres; cấp inventory lưu Postgres rồi mới nạp Redis.
 - **Outbox của ordering gửi ít nhất một lần và giả định chỉ chạy 1 instance ordering**. Saga giữ instance đã kết thúc ở trạng thái `Final` để bỏ qua `OrderSubmitted` gửi lại, nên bảng saga lớn dần theo số đơn; message không đọc được bị để riêng (`FailedAt`) và chưa có cảnh báo hay cơ chế dọn.
 - **Thanh toán giả lập, thông báo chỉ ghi log**, không gửi email/SMS thật.
-- **Service .NET không khởi động nếu Elasticsearch (nơi chứa log) không chạy**: sink Serilog dùng `BootstrapMethod.Failure`; Compose bắt mọi service chờ `es-ilm-init`.
+- **Docker Compose vẫn cần Elasticsearch để khởi động service**: mọi service `depends_on` `es-ilm-init`, mà `es-ilm-init` chờ Elasticsearch healthy. Service chạy trực tiếp (`dotnet run`, Helm) thì vẫn lên khi Elasticsearch chết, chỉ mất log trên Kibana.
 - **Full stack nặng** (khoảng 21 container, cần khoảng 8 GB RAM cho Docker) và phần Lambda cần token LocalStack.
 - **Còn 6 lỗ hổng high trong dependency bắc cầu chỉ dùng lúc lint/build** (`brace-expansion` qua eslint, `browserslist`), bị khóa bởi range của package cha, xem `docs/SECURITY-AUDIT.md`.
 - **Secret dev nằm trong repo** (realm Keycloak, Helm values, appsettings). Không dùng lại cho môi trường thật.

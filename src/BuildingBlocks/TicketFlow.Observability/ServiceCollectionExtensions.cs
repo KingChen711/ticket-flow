@@ -69,7 +69,10 @@ public static class ServiceCollectionExtensions
             .WriteTo.Elasticsearch(new[] { new Uri(elasticsearchUri) }, opts =>
             {
                 opts.DataStream = new DataStreamName("logs", $"ticketflow-{serviceName}", "local");
-                opts.BootstrapMethod = BootstrapMethod.Failure;
+                // Silent, not Failure: Elasticsearch only stores logs, so a service must still start
+                // (and keep logging to the console) when it is down. If it was down at startup, the
+                // data stream template is not created and logs land under ES's built-in logs-* template.
+                opts.BootstrapMethod = BootstrapMethod.Silent;
                 opts.IlmPolicy = "ticketflow-logs-retention";
             })
             .CreateLogger();
