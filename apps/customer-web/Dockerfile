@@ -1,6 +1,6 @@
 # Phase 11 Commit 2 — pnpm workspace monorepo build (no Turborepo, see docs/phase-8-plan.md mục
 # 6), `output: "standalone"` (next.config.ts) traces only the deps this app actually needs
-# (including the workspace-linked @ticketflow/types and @ticketflow/ui, which ship raw TS source
+# (including the workspace-linked @ticketflow/types, which ships raw TS source
 # with no build step of their own — transpilePackages handles them at Next's own build time).
 FROM node:22-alpine AS base
 WORKDIR /repo
@@ -12,7 +12,6 @@ COPY apps/customer-web/package.json apps/customer-web/
 COPY apps/organizer-dashboard/package.json apps/organizer-dashboard/
 COPY apps/gate-scanner/package.json apps/gate-scanner/
 COPY packages/types/package.json packages/types/
-COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

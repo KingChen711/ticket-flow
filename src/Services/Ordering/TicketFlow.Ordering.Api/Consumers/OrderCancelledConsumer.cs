@@ -24,6 +24,14 @@ public sealed class OrderCancelledConsumer(IOrderStore store, TimeProvider timeP
             return;
         }
 
+        // Outbox delivery is at-least-once: a re-sent OrderSubmitted starts a fresh saga whose hold
+        // is already used, which ends in a cancellation for an order that already finished.
+        if (order.Status is OrderStatus.Confirmed or OrderStatus.Cancelled)
+        {
+            logger.LogWarning("OrderCancelledIntegrationEvent for already {Status} order {OrderId} — skipping.", order.Status, context.Message.OrderId);
+            return;
+        }
+
         store.Append(context.Message.OrderId, new OrderCancelled(context.Message.OrderId, context.Message.Reason, timeProvider.GetUtcNow()));
         await store.SaveChangesAsync(context.CancellationToken);
     }

@@ -37,7 +37,7 @@ public sealed class OrderSeatsConfirmedConsumer(IOrderStore store, TimeProvider 
             return;
         }
 
-        store.Append(context.Message.OrderId, new OrderSeatsConfirmed(context.Message.OrderId, timeProvider.GetUtcNow()));
+        store.Append(context.Message.OrderId, new OrderSeatsConfirmed(context.Message.OrderId, timeProvider.GetUtcNow(), context.Message.SeatIds));
         await store.SaveChangesAsync(context.CancellationToken);
     }
 }

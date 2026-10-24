@@ -16,36 +16,30 @@ public sealed record PlaceOrderCommand(
     Guid CustomerId,
     Guid CatalogEventId,
     IReadOnlyList<Guid> SeatIds,
-    decimal TotalAmount,
-    string? Currency,
     Guid HoldId,
     string PaymentMethod,
     string CustomerName,
     string CustomerEmail);
 
-public sealed class PlaceOrderCommandHandler(IOrderStore store, IIntegrationEventPublisher publisher, TimeProvider timeProvider)
+public sealed class PlaceOrderCommandHandler(
+    IOrderStore store,
+    IIntegrationEventPublisher publisher,
+    ISeatPricingSource pricingSource,
+    TimeProvider timeProvider)
     : ICommandHandler<PlaceOrderCommand, OrderResponse>
 {
     public async Task<OrderResponse> HandleAsync(PlaceOrderCommand command, CancellationToken cancellationToken = default)
     {
-        var total = Money.Create(command.TotalAmount, command.Currency ?? "VND");
+        var seatSectionsTask = pricingSource.GetSeatSectionsAsync(command.CatalogEventId, command.SeatIds, cancellationToken);
+        var sectionPricesTask = pricingSource.GetSectionPricesAsync(command.CatalogEventId, cancellationToken);
+        await Task.WhenAll(seatSectionsTask, sectionPricesTask);
+        var total = OrderPricing.Calculate(command.SeatIds, seatSectionsTask.Result, sectionPricesTask.Result);
         var placed = Order.Place(command.CustomerId, command.CatalogEventId, command.SeatIds, total, timeProvider.GetUtcNow());
 
-        // No aggregate exists yet to Load — StartStream both creates the stream and stages its
-        // first event; SaveChangesAsync is what actually commits it to Postgres.
+        // Both writes go into the same Marten session: the outbox publisher stages OrderSubmitted
+        // as a document, so SaveChangesAsync commits the order stream and the message atomically
+        // and the outbox dispatcher sends it afterwards. Nothing reaches the bus if the commit fails.
         store.StartStream(placed.OrderId, placed);
-        await store.SaveChangesAsync(cancellationToken);
-
-        // Best-effort, NOT a transactional outbox: MassTransit.Marten (Commit 4) only ships a
-        // saga repository, no Marten-backed equivalent of MassTransit.EntityFrameworkCore's
-        // AddEntityFrameworkOutbox/UseBusOutbox (confirmed via the same package reflection probe
-        // used to find MartenRepository — no Outbox-related type exists in it). A crash between
-        // the SaveChangesAsync above and this Publish leaves an orphaned Pending order that never
-        // starts a saga. Documented gap, not fixed here — the idiomatic Marten-native fix would
-        // be an async daemon subscription (durable, checkpointed, survives crashes) relaying
-        // OrderPlaced -> OrderSubmitted, mirroring the exact "Inline vs async projection"
-        // trade-off already deferred for MyOrdersProjection in Phase 4. Backlog, not blocking:
-        // Phase 5's DoD is about saga compensation (Commit 10), not this specific crash window.
         await publisher.PublishAsync(new OrderSubmitted(
             placed.OrderId,
             command.CatalogEventId,
@@ -57,6 +51,7 @@ public sealed class PlaceOrderCommandHandler(IOrderStore store, IIntegrationEven
             command.CustomerName,
             command.CustomerEmail,
             timeProvider.GetUtcNow()), cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
 
         return OrderResponseMapper.Map(Order.Load([placed]));
     }

@@ -21,7 +21,7 @@ RULE_NAME="ticketflow-event-reminder-rule"
 # EVENT_REMINDER_SCHEDULE="rate(24 hours)".
 SCHEDULE_EXPRESSION="${EVENT_REMINDER_SCHEDULE:-rate(1 minute)}"
 
-# See 01-deploy-functions.sh for the LocalStack dotnet10 waiter compatibility detail.
+# See 02-deploy-media.sh for the LocalStack dotnet10 waiter compatibility detail.
 wait_for_function() {
   local function_name="$1"
   until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do

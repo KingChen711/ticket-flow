@@ -71,6 +71,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     context.Saga.CatalogEventId = message.EventId;
                     context.Saga.HoldId = message.HoldId;
                     context.Saga.SeatIds = [.. message.SeatIds];
+                    context.Saga.RequestedSeatIds = [.. message.SeatIds];
                     context.Saga.Amount = message.Amount;
                     context.Saga.PaymentMethod = message.PaymentMethod;
                     context.Saga.CustomerName = message.CustomerName;
@@ -86,12 +87,31 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 
         During(AwaitingSeats,
             When(SeatsConfirmedEvent)
-                .Publish(context => new ProcessPayment(
-                    context.Saga.CorrelationId,
-                    context.Saga.UserId,
-                    context.Saga.Amount,
-                    context.Saga.PaymentMethod))
-                .TransitionTo(AwaitingPayment),
+                // From here on the saga works with the seats reservation actually confirmed from
+                // the hold, not the ids the client listed in the order request: IssueTickets and
+                // the ReleaseSeats compensation (which un-sells every listed seat) must never act
+                // on a seat that belongs to someone else's hold or sale.
+                .Then(context => context.Saga.RecordConfirmedSeats(context.Message.SeatIds))
+                .IfElse(context => context.Saga.ConfirmedAllRequestedSeats(),
+                    confirmed => confirmed
+                        .Publish(context => new ProcessPayment(
+                            context.Saga.CorrelationId,
+                            context.Saga.UserId,
+                            context.Saga.Amount,
+                            context.Saga.PaymentMethod))
+                        .TransitionTo(AwaitingPayment),
+                    // Part of the hold expired (or the request listed seats outside it). The amount
+                    // was priced for every requested seat, so charging it would overcharge: give
+                    // back what was confirmed and cancel, nothing has been charged yet.
+                    partial => partial
+                        .Then(context => context.Saga.CancellationReason =
+                            "Only part of the requested seats could be confirmed from the hold.")
+                        .Publish(context => new ReleaseSeats(
+                            context.Saga.CorrelationId,
+                            context.Saga.CatalogEventId,
+                            context.Saga.HoldId,
+                            context.Saga.SeatIds))
+                        .TransitionTo(CompensatingSeats)),
             // Hold expired/missing before checkout completed — nothing charged, nothing to
             // release. Straight to Cancelled, no compensation commands needed (DoD scenario 3).
             When(SeatsConfirmationFailedEvent)
@@ -198,6 +218,11 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     DateTimeOffset.UtcNow))
                 .Finalize());
 
-        SetCompletedWhenFinalized();
+        // The outbox delivers OrderSubmitted at least once. A re-sent copy must never start a second
+        // purchase for the same order: ignore it while the saga is in flight, and keep finished
+        // instances in Final (no SetCompletedWhenFinalized) as a tombstone so a late copy after
+        // completion or cancellation is ignored too instead of creating a fresh instance.
+        DuringAny(Ignore(OrderSubmittedEvent));
+        During(Final, Ignore(OrderSubmittedEvent));
     }
 }
