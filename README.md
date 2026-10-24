@@ -28,7 +28,7 @@ Cổng thanh toán là giả lập, thông báo chỉ ghi log, "serverless" ch�
 - Giá đơn hàng tính ở server: ordering lấy khu của từng ghế (reservation) và hạng giá (catalog), cộng lại; ghế ngoài sự kiện, khu chưa có giá, lẫn tiền tệ đều bị từ chối.
 - `PurchaseSaga` (MassTransit state machine trên RabbitMQ): chốt ghế, thanh toán, phát vé, thông báo; bù trừ khi lỗi (hoàn tiền, nhả ghế, hủy đơn). Chỉ thu tiền khi ghế chốt được từ hold đúng bằng ghế đã tính giá; lệch (hold hết hạn một phần, hoặc đơn liệt kê ghế khác hold) thì nhả ghế đã chốt và hủy đơn.
 - Đơn hàng lưu bằng event sourcing (Marten), read model "đơn của tôi" tách riêng (CQRS), dựng lại được từ event.
-- Transactional outbox (EF Core) cho các event của catalog và payment.
+- Transactional outbox: EF Core cho catalog và payment; ordering dùng outbox tự viết trên Marten (message lưu cùng transaction với event của đơn, background service gửi lên RabbitMQ, đơn vẫn đặt được khi broker tạm chết).
 - Payment bọc Polly: retry, circuit breaker, timeout.
 - Tìm kiếm sự kiện (Elasticsearch), gợi ý theo nghệ sĩ/venue/phổ biến (MongoDB), doanh số qua Kafka sang ClickHouse.
 - Lambda (LocalStack): render PDF vé, thumbnail poster, nhắc lịch trước 24h theo EventBridge.
@@ -205,11 +205,11 @@ dotnet test src/Services/Ordering/TicketFlow.Ordering.Application.Tests         
 | `Reservation.Application.Tests` | giữ ghế, giữ trùng, chốt, nhả, bù trừ, tình trạng ghế, tra khu ghế | 19 |
 | `Reservation.IntegrationTests` | Lua script trên Redis thật, nhiều người giành 1 ghế | 5 |
 | `Ordering.Domain.Tests` | dựng đơn hàng từ event | 11 |
-| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 22 |
+| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 24 |
 | `Payment.Domain.Tests`, `Payment.Infrastructure.Tests` | trạng thái giao dịch, pipeline Polly | 9 + 3 |
 | `Ticketing.Domain.Tests` | vé, check-in | 6 |
 
-Tổng 110 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
+Tổng 112 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
 `tests/TicketFlow.FlashSale.LoadTests`) chạy tay với stack đang chạy, xem README trong thư mục đó.
 Frontend chưa có test, chỉ có ESLint và type check khi build. CI chạy lint, build, test cho mọi PR (`.github/workflows/ci.yml`).
 
@@ -290,7 +290,8 @@ Chạy trên Kubernetes (kind + Helm): xem `infrastructure/k8s/` và job `deploy
 
 ## Hạn chế đã biết
 
-- **Ghi chéo nhiều store không nguyên tử ở vài chỗ**: ordering lưu Marten rồi mới publish `OrderSubmitted` (chưa có outbox); reservation chốt Redis rồi mới lưu Postgres; cấp inventory lưu Postgres rồi mới nạp Redis.
+- **Ghi chéo nhiều store không nguyên tử ở vài chỗ**: reservation chốt Redis rồi mới lưu Postgres; cấp inventory lưu Postgres rồi mới nạp Redis.
+- **Outbox của ordering gửi ít nhất một lần và giả định chỉ chạy 1 instance ordering**. Saga giữ instance đã kết thúc ở trạng thái `Final` để bỏ qua `OrderSubmitted` gửi lại, nên bảng saga lớn dần theo số đơn; message không đọc được bị để riêng (`FailedAt`) và chưa có cảnh báo hay cơ chế dọn.
 - **Thanh toán giả lập, thông báo chỉ ghi log**, không gửi email/SMS thật.
 - **Service .NET không khởi động nếu Elasticsearch (nơi chứa log) không chạy**: sink Serilog dùng `BootstrapMethod.Failure`; Compose bắt mọi service chờ `es-ilm-init`.
 - **Full stack nặng** (khoảng 21 container, cần khoảng 8 GB RAM cho Docker) và phần Lambda cần token LocalStack.

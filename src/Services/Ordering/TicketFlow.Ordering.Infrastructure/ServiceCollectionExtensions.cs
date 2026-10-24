@@ -29,11 +29,14 @@ public static class ServiceCollectionExtensions
             // (eventual consistency, higher throughput) are a documented backlog item, not
             // needed here.
             options.Projections.Add<MyOrdersProjection>(ProjectionLifecycle.Inline);
+
+            options.Schema.For<OutboxMessage>().Index(message => message.SentAt);
         });
 
         services.AddScoped<IOrderStore, MartenOrderStore>();
         services.AddScoped<IOrderViewStore, MartenOrderViewStore>();
-        services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
+        services.AddScoped<IIntegrationEventPublisher, MartenOutboxPublisher>();
+        services.AddHostedService<OutboxDispatcher>();
 
         var catalogBaseUrl = configuration["Catalog:BaseUrl"]
             ?? throw new InvalidOperationException("Configuration 'Catalog:BaseUrl' was not found.");

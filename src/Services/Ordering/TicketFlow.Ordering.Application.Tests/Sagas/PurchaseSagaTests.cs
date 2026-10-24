@@ -81,8 +81,8 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         Assert.True(await _harness.Published.Any<OrderCompleted>(x => x.Context.Message.OrderId == orderId));
         Assert.True(await _harness.Published.Any<NotifyOrderCompleted>(x => x.Context.Message.OrderId == orderId));
 
-        // SetCompletedWhenFinalized() removes the instance — no longer found in any known state.
-        Assert.Null(await sagaHarness.NotExists(orderId));
+        // Finished instances stay in Final as a tombstone against re-sent OrderSubmitted.
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
 
         // The analytics fact (Kafka, Commit 6): exactly one SaleRecorded for this completed order,
         // fields mapped correctly from saga state. Also locks in that the .ThenAsync(...) publish
@@ -122,7 +122,7 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         await _harness.Bus.Publish(new SeatsReleased(orderId, release.Context.Message.HoldId, DateTimeOffset.UtcNow));
 
         // Wait for the saga to finish before asserting on what it published last.
-        Assert.Null(await sagaHarness.NotExists(orderId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x => x.Context.Message.OrderId == orderId));
 
         // Negative check last: it waits out the harness inactivity timeout.
@@ -192,6 +192,54 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Resent_OrderSubmitted_after_the_saga_finished_does_not_start_a_second_purchase()
+    {
+        var orderId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+        var submitted = new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()], 100m, "CreditCard",
+            "H", "h@example.com", DateTimeOffset.UtcNow);
+
+        await _harness.Bus.Publish(submitted);
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+        await _harness.Bus.Publish(new SeatsConfirmationFailed(orderId, submitted.HoldId, "Hold expired."));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
+
+        // A late outbox redelivery: without the tombstone this would start a new saga that tries
+        // to confirm the already-used hold and then cancels an order that may have been paid.
+        await _harness.Bus.Publish(submitted);
+
+        Assert.True(await sagaHarness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception == null));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
+        Assert.Single(_harness.Published.Select<ConfirmSeats>(x => x.Context.Message.OrderId == orderId));
+        Assert.False(await _harness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception != null));
+    }
+
+    [Fact]
+    public async Task Resent_OrderSubmitted_while_in_flight_is_ignored()
+    {
+        var orderId = Guid.NewGuid();
+        var seatId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+        var submitted = new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [seatId], 100m, "CreditCard",
+            "G", "g@example.com", DateTimeOffset.UtcNow);
+
+        await _harness.Bus.Publish(submitted);
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [seatId], DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+
+        // The outbox may deliver the same message again.
+        await _harness.Bus.Publish(submitted);
+
+        Assert.True(await sagaHarness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception == null));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+        Assert.Single(_harness.Published.Select<ConfirmSeats>(x => x.Context.Message.OrderId == orderId));
+        Assert.False(await _harness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception != null));
+    }
+
+    [Fact]
     public async Task SeatsConfirmationFailed_cancels_directly_no_compensation_needed()
     {
         var orderId = Guid.NewGuid();
@@ -210,7 +258,7 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         // No compensation commands — nothing was ever charged or issued.
         Assert.False(await _harness.Published.Any<ReleaseSeats>(x => x.Context.Message.OrderId == orderId));
         Assert.False(await _harness.Published.Any<RefundPayment>(x => x.Context.Message.OrderId == orderId));
-        Assert.Null(await sagaHarness.NotExists(orderId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
     }
 
     [Fact]
@@ -237,7 +285,7 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         await _harness.Bus.Publish(new SeatsReleased(orderId, holdId, DateTimeOffset.UtcNow));
 
         // Wait for the saga to finish before asserting on what it published last.
-        Assert.Null(await sagaHarness.NotExists(orderId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "Gateway declined the charge."));
     }
@@ -275,7 +323,7 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         await _harness.Bus.Publish(new SeatsReleased(orderId, holdId, DateTimeOffset.UtcNow));
 
         // Wait for the saga to finish before asserting on what it published last.
-        Assert.Null(await sagaHarness.NotExists(orderId));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Final));
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "MinIO unreachable."));
 
