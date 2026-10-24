@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [master]
+  # Every pull request, whatever its base branch, gets install + lint + build + test. The GHCR
+  # push and Kind deploy jobs below stay restricted to non-PR events.
   pull_request:
-    branches: [master]
   workflow_dispatch:
 
 # A newer push to the same branch supersedes an in-flight build/deployment. Keeping the group
@@ -53,12 +54,48 @@ jobs:
       - name: Restore
         run: dotnet restore TicketFlow.slnx
 
+      # Whitespace only: the full `dotnet format` style check still reports existing using-order
+      # differences that have not been fixed repo-wide.
+      - name: Lint
+        run: dotnet format whitespace TicketFlow.slnx --verify-no-changes
+
+      - name: Build
+        run: dotnet build TicketFlow.slnx --configuration Release --no-restore
+
       - name: Test
-        run: dotnet test TicketFlow.slnx --configuration Release --no-restore --logger "console;verbosity=normal"
+        run: dotnet test TicketFlow.slnx --configuration Release --no-build --logger "console;verbosity=normal"
+
+  web:
+    name: Lint and build web apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
 
   build-and-push:
     name: Build ${{ matrix.name }}
-    needs: [image-matrix, test]
+    needs: [image-matrix, test, web]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
