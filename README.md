@@ -40,6 +40,14 @@ Chỉ chạy test không cần Docker:
 dotnet test TicketFlow.slnx -c Release --filter "FullyQualifiedName!~IntegrationTests"
 ```
 
+Chạy riêng test của luồng mua vé:
+
+```bash
+dotnet test src/Services/Reservation/TicketFlow.Reservation.Application.Tests   # giữ / chốt / nhả ghế
+dotnet test src/Services/Reservation/TicketFlow.Reservation.IntegrationTests    # Redis thật, chống bán trùng (cần Docker)
+dotnet test src/Services/Ordering/TicketFlow.Ordering.Application.Tests         # đặt đơn + PurchaseSaga
+```
+
 ## 2. Chạy backend bằng Docker Compose
 
 ```bash
