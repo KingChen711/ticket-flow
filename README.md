@@ -231,7 +231,7 @@ curl http://localhost:8080/health          # gateway
 curl http://localhost:8080/catalog/events  # danh sách sự kiện (route ẩn danh)
 ```
 
-Các service tự chạy migration và catalog tự seed dữ liệu mẫu khi khởi động.
+Các service tự chạy migration và catalog tự seed dữ liệu mẫu khi khởi động. Database của ordering (Marten) được tạo bởi `infrastructure/docker/postgres-init/` khi volume Postgres còn mới; nếu bạn đã có volume cũ từ trước thì chạy `docker compose down -v` một lần.
 
 Không có `LOCALSTACK_AUTH_TOKEN` thì container LocalStack không lên; mọi thứ khác vẫn chạy, nhưng bước phát vé của
 saga gọi Lambda sẽ lỗi nên đơn hàng đi vào nhánh bù trừ (hoàn tiền, nhả ghế, hủy đơn) thay vì `Confirmed`.
