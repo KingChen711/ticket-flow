@@ -33,7 +33,10 @@ public sealed partial class MyOrdersProjection : SingleStreamProjection<MyOrderV
         null);
 
     public MyOrderView Apply(OrderSeatsConfirmed e, MyOrderView current) =>
-        WithIntermediateStatus(current, OrderStatus.SeatsConfirmed);
+        WithIntermediateStatus(current, OrderStatus.SeatsConfirmed) with
+        {
+            SeatIds = e.SeatIds is { Count: > 0 } ? e.SeatIds : current.SeatIds
+        };
 
     public MyOrderView Apply(OrderPaymentAuthorized e, MyOrderView current) =>
         WithIntermediateStatus(current, OrderStatus.PaymentAuthorized);
