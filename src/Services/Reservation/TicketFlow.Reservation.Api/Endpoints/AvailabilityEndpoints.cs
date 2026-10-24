@@ -12,5 +12,15 @@ public static class AvailabilityEndpoints
             CancellationToken ct) =>
             Results.Ok(await service.GetAvailabilityAsync(eventId, ct))
         ).WithTags("Availability");
+
+        // Service-to-service lookup used by ordering to price an order (POST because the id list
+        // can be long).
+        app.MapPost("/events/{eventId:guid}/seat-sections", async (
+            Guid eventId,
+            SeatSectionsRequest request,
+            ReservationService service,
+            CancellationToken ct) =>
+            Results.Ok(await service.GetSeatSectionsAsync(eventId, request.SeatIds, ct))
+        ).WithTags("Availability");
     }
 }

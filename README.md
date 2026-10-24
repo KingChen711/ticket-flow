@@ -26,7 +26,7 @@ Cổng thanh toán là giả lập, thông báo chỉ ghi log, "serverless" ch�
 **Backend**
 - Chống bán trùng: giữ ghế bằng Lua script nguyên tử trên Redis (all-or-nothing, TTL), chốt bán lưu Postgres.
 - Giá đơn hàng tính ở server: ordering lấy khu của từng ghế (reservation) và hạng giá (catalog), cộng lại; ghế ngoài sự kiện, khu chưa có giá, lẫn tiền tệ đều bị từ chối.
-- `PurchaseSaga` (MassTransit state machine trên RabbitMQ): chốt ghế, thanh toán, phát vé, thông báo; bù trừ khi lỗi (hoàn tiền, nhả ghế, hủy đơn).
+- `PurchaseSaga` (MassTransit state machine trên RabbitMQ): chốt ghế, thanh toán, phát vé, thông báo; bù trừ khi lỗi (hoàn tiền, nhả ghế, hủy đơn). Chỉ thu tiền khi ghế chốt được từ hold đúng bằng ghế đã tính giá; lệch thì nhả ghế và hủy đơn.
 - Đơn hàng lưu bằng event sourcing (Marten), read model "đơn của tôi" tách riêng (CQRS), dựng lại được từ event.
 - Transactional outbox (EF Core) cho các event của catalog và payment.
 - Payment bọc Polly: retry, circuit breaker, timeout.
@@ -111,7 +111,8 @@ Luồng `PurchaseSaga` (lấy từ `src/Services/Ordering/TicketFlow.Ordering.Ap
 ```mermaid
 stateDiagram-v2
     [*] --> AwaitingSeats: OrderSubmitted / ConfirmSeats
-    AwaitingSeats --> AwaitingPayment: SeatsConfirmed / ProcessPayment
+    AwaitingSeats --> AwaitingPayment: SeatsConfirmed (đủ ghế) / ProcessPayment
+    AwaitingSeats --> CompensatingSeats: SeatsConfirmed (thiếu ghế) / ReleaseSeats
     AwaitingSeats --> [*]: SeatsConfirmationFailed / OrderCancelled
     AwaitingPayment --> AwaitingTickets: PaymentProcessed / IssueTickets
     AwaitingPayment --> CompensatingSeats: PaymentFailed / ReleaseSeats
@@ -201,14 +202,14 @@ dotnet test src/Services/Ordering/TicketFlow.Ordering.Application.Tests         
 | Project | Kiểm cái gì | Số test |
 |---|---|---|
 | `Catalog.Domain.Tests` | aggregate sự kiện, venue, sơ đồ ghế, giá | 35 |
-| `Reservation.Application.Tests` | giữ ghế, giữ trùng, chốt, nhả, bù trừ, tình trạng ghế | 18 |
+| `Reservation.Application.Tests` | giữ ghế, giữ trùng, chốt, nhả, bù trừ, tình trạng ghế, tra khu ghế | 19 |
 | `Reservation.IntegrationTests` | Lua script trên Redis thật, nhiều người giành 1 ghế | 5 |
 | `Ordering.Domain.Tests` | dựng đơn hàng từ event | 9 |
-| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 20 |
+| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 22 |
 | `Payment.Domain.Tests`, `Payment.Infrastructure.Tests` | trạng thái giao dịch, pipeline Polly | 9 + 3 |
 | `Ticketing.Domain.Tests` | vé, check-in | 6 |
 
-Tổng 105 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
+Tổng 108 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
 `tests/TicketFlow.FlashSale.LoadTests`) chạy tay với stack đang chạy, xem README trong thư mục đó.
 Frontend chưa có test, chỉ có ESLint và type check khi build. CI chạy lint, build, test cho mọi PR (`.github/workflows/ci.yml`).
 

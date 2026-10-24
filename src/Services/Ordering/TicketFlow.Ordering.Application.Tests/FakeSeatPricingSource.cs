@@ -20,8 +20,9 @@ public sealed class FakeSeatPricingSource : ISeatPricingSource
         return source;
     }
 
-    public Task<IReadOnlyDictionary<Guid, Guid>> GetSeatSectionsAsync(Guid catalogEventId, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyDictionary<Guid, Guid>>(SeatSections);
+    public Task<IReadOnlyDictionary<Guid, Guid>> GetSeatSectionsAsync(Guid catalogEventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyDictionary<Guid, Guid>>(
+            SeatSections.Where(pair => seatIds.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value));
 
     public Task<IReadOnlyList<SectionPrice>> GetSectionPricesAsync(Guid catalogEventId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<SectionPrice>>(SectionPrices);
