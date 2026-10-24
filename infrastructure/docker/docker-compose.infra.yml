@@ -1,7 +1,6 @@
 services:
   postgres:
-    image: postgres:16
-    container_name: ticketflow-postgres
+    image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
     environment:
       POSTGRES_USER: ticketflow
       POSTGRES_PASSWORD: ticketflow
@@ -10,7 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - ../postgres/init/01-create-databases.sql:/docker-entrypoint-initdb.d/01-create-databases.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ticketflow"]
       interval: 5s
@@ -18,10 +17,12 @@ services:
       retries: 10
 
   redis:
-    image: redis:7
-    container_name: ticketflow-redis
+    image: redis:7@sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50
     ports:
       - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--aof-use-rdb-preamble", "yes"]
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -29,14 +30,25 @@ services:
       retries: 10
 
   rabbitmq:
-    image: rabbitmq:3-management
-    container_name: ticketflow-rabbitmq
+    # Commit 9 needs the rabbitmq_delayed_message_exchange plugin, which the stock
+    # rabbitmq:3-management image does not ship — without it the saga cannot schedule a deadline
+    # and a silent participant would once again hang an order forever. This image is
+    # rabbitmq:3-management with that one plugin already enabled (verified: `rabbitmq-plugins list`
+    # reports rabbitmq_delayed_message_exchange v4.3.1).
+    image: masstransit/rabbitmq@sha256:b09de6c97585b9e14103ff8827a9f25784de81a3a6464df532947dd8f2299005
+    # RabbitMQ persists Mnesia under its node name. A recreated container gets a different
+    # generated hostname unless this is fixed, then the same volume looks like an unrelated
+    # empty broker. Keep both hostname and nodename stable across container recreation.
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ticketflow
       RABBITMQ_DEFAULT_PASS: ticketflow
+      RABBITMQ_NODENAME: rabbit@rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -44,8 +56,7 @@ services:
       retries: 10
 
   kafka:
-    image: apache/kafka:3.8.0
-    container_name: ticketflow-kafka
+    image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -56,6 +67,10 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     ports:
       # No host publish for 9092 (PLAINTEXT, container-internal — other containers reach it via
       # kafka:9092 through the Docker network regardless of host port mapping) — it also happened
@@ -63,10 +78,31 @@ services:
       # and dropping it is simpler than remapping a port nothing on the host actually needs.
       # PLAINTEXT_HOST://localhost:29092 is the listener that exists specifically for host access.
       - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+
+  kafka-init:
+    image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["bash", "-ceu", "--"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic sale-recorded --partitions 6 --replication-factor 1 --config retention.ms=604800000
+        partitions=$$(/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --topic sale-recorded --describe | sed -n 's/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' | head -1)
+        if [ "$$partitions" -lt 6 ]; then /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --alter --topic sale-recorded --partitions 6; fi
+        if [ "$$partitions" -gt 6 ]; then echo "Refusing destructive partition shrink" >&2; exit 1; fi
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --alter --entity-type topics --entity-name sale-recorded --add-config retention.ms=604800000
+    restart: "no"
 
   minio:
-    image: minio/minio:latest
-    container_name: ticketflow-minio
+    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     environment:
       MINIO_ROOT_USER: ticketflow
       MINIO_ROOT_PASSWORD: ticketflow
@@ -91,8 +127,7 @@ services:
       retries: 10
 
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
-    container_name: ticketflow-elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3@sha256:01c1732062b4a846c5ca687b0094b89bad0bfed00c6d71626db32fb8f3131a78
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
@@ -115,8 +150,7 @@ services:
       retries: 30
 
   mongodb:
-    image: mongo:7
-    container_name: ticketflow-mongodb
+    image: mongo:7@sha256:9bdaeb6dac6e7e762e84e2f84103d1f9bb078fa1ba6bde8bb9d2274f655ad173
     environment:
       MONGO_INITDB_ROOT_USERNAME: ticketflow
       MONGO_INITDB_ROOT_PASSWORD: ticketflow
@@ -131,8 +165,7 @@ services:
       retries: 10
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    container_name: ticketflow-clickhouse
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
     environment:
       CLICKHOUSE_USER: ticketflow
       CLICKHOUSE_PASSWORD: ticketflow
@@ -150,14 +183,22 @@ services:
       retries: 10
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7
-    container_name: ticketflow-keycloak
+    image: quay.io/keycloak/keycloak:26.7@sha256:2eb3cd316835c990e69e26ade292ffa78f6fb0db7d5fc6377463c162e1979ac0
     command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
       KC_HTTP_PORT: "8180"
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_PORT: "5432"
+      KC_DB_URL_DATABASE: ticketflow_keycloak
+      KC_DB_USERNAME: ticketflow
+      KC_DB_PASSWORD: ticketflow
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8180:8180"
       # 9000 is already MinIO's host port (same conflict class as ClickHouse's native port
@@ -178,15 +219,14 @@ services:
     # Unified image since the March-2026 Community/Pro image merge (docs/phase-9-plan.md
     # Commit 1) — the old no-account `localstack/localstack` free image is archived; this one
     # requires LOCALSTACK_AUTH_TOKEN even on the free non-commercial Hobby plan.
-    image: localstack/localstack:latest
-    container_name: ticketflow-localstack
+    image: localstack/localstack@sha256:2a81e5da4c32bb53e8d86e92050a12937f9be1915c5a4afad0931f75c112fc7e
     environment:
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN}
       SERVICES: lambda,events,logs,iam,sts,s3
       # Lambda's Docker executor spawns sibling containers via the mounted socket below; without
       # this they land on the default bridge network and can't reach rabbitmq/minio/etc. by
       # service name (needed starting Commit 3/4) — join the same network this whole stack uses.
-      LAMBDA_DOCKER_NETWORK: ticketflow-network
+      LAMBDA_DOCKER_NETWORK: ${COMPOSE_PROJECT_NAME:-ticket-flow}_default
       # Phase 11 Commit 2: keep the Compose-network DNS default for normal Phase 9 development,
       # but permit the external-LocalStack/Kubernetes fallback to route Lambda PDF rendering back
       # into kind's MinIO through a temporary host port-forward (host.docker.internal:<port>).
@@ -194,6 +234,10 @@ services:
       # The reminder timer is useful in the Compose stack. A K8s smoke run can override this to
       # a long cadence so its Lambda does not repeatedly try to reach a Compose-only RabbitMQ.
       EVENT_REMINDER_SCHEDULE: ${EVENT_REMINDER_SCHEDULE:-rate(1 minute)}
+      # Same opt-out for the Phase 9 HelloTimer probe: the Kubernetes fallback verifies PDF
+      # rendering, not timer throughput, and should not spawn competing Lambda executors while
+      # LocalStack is still publishing all functions on a memory-constrained machine.
+      HELLO_TIMER_SCHEDULE: ${HELLO_TIMER_SCHEDULE:-rate(1 minute)}
       DEBUG: "1"
     ports:
       - "4566:4566"
@@ -214,12 +258,11 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:
+  rabbitmq-data:
+  kafka-data:
   minio-data:
   es-data:
   mongo-data:
   clickhouse-data:
   localstack-data:
-
-networks:
-  default:
-    name: ticketflow-network

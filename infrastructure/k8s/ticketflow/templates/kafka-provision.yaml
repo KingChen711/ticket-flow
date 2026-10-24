@@ -1,0 +1,77 @@
+{{- if .Values.runtime.kafka.provisionTopics }}
+{{- $provisionHash := (toJson (dict "runtime" .Values.runtime.kafka "brokerImage" .Values.infra.kafka.image "topics" .Values.infra.kafka.topics "secret" .Values.secrets.name) | sha256sum | trunc 10) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A content-addressed name avoids immutable Job template failures on helm upgrade. The old
+  # completed Job is removed and a changed topic/client contract gets a fresh execution.
+  name: ticketflow-kafka-provision-{{ $provisionHash }}
+  labels: { app: kafka-provision }
+spec:
+  backoffLimit: {{ .Values.workloads.migrationBackoffLimit }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: kafka-provision }
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: provision
+          image: {{ .Values.infra.kafka.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_HOST
+              value: {{ .Values.runtime.kafka.host | quote }}
+          command: ["bash", "-ceu", "--"]
+          args:
+            - |
+              kafka_topics=/opt/kafka/bin/kafka-topics.sh
+              kafka_configs=/opt/kafka/bin/kafka-configs.sh
+              client_config=(--command-config /etc/ticketflow/kafka/client.properties)
+              until "$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --list >/dev/null 2>&1; do sleep 2; done
+              {{- range .Values.infra.kafka.topics }}
+              topic={{ .name | quote }}
+              expected_partitions={{ .partitions }}
+              # Helm/YAML may hold large unquoted numbers as float64 and render 604800000 as
+              # 6.048e+08. Kafka requires a base-10 LONG for retention.ms.
+              expected_retention={{ .retentionMs | int64 }}
+              if ! "$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --topic "$topic" --describe >/dev/null 2>&1; then
+                "$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --create --if-not-exists \
+                  --topic "$topic" --partitions "$expected_partitions" \
+                  --replication-factor {{ .replicationFactor }} --config "retention.ms=$expected_retention"
+              fi
+              actual_partitions=$("$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --topic "$topic" --describe | sed -n 's/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' | head -1)
+              if [ "$actual_partitions" -lt "$expected_partitions" ]; then
+                "$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --alter --topic "$topic" --partitions "$expected_partitions"
+              elif [ "$actual_partitions" -gt "$expected_partitions" ]; then
+                echo "Topic $topic has $actual_partitions partitions; refusing destructive shrink to $expected_partitions" >&2
+                exit 1
+              fi
+              "$kafka_configs" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --alter --entity-type topics \
+                --entity-name "$topic" --add-config "retention.ms=$expected_retention"
+              "$kafka_topics" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --topic "$topic" --describe | grep -q "PartitionCount: $expected_partitions"
+              "$kafka_configs" --bootstrap-server "$KAFKA_HOST" "${client_config[@]}" --describe --entity-type topics \
+                --entity-name "$topic" | grep -q "retention.ms=$expected_retention"
+              {{- end }}
+          volumeMounts:
+            - { name: kafka-client, mountPath: /etc/ticketflow/kafka, readOnly: true }
+            {{- if .Values.runtime.kafka.caSecretName }}
+            - { name: kafka-ca, mountPath: /etc/ticketflow/kafka-ca, readOnly: true }
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            runAsNonRoot: true
+            runAsUser: 1000
+          resources:
+{{ toYaml .Values.workloads.resources | indent 12 }}
+      volumes:
+        - name: kafka-client
+          secret:
+            secretName: {{ .Values.secrets.name }}
+            items: [{ key: kafka-client-properties, path: client.properties }]
+        {{- if .Values.runtime.kafka.caSecretName }}
+        - name: kafka-ca
+          secret: { secretName: {{ .Values.runtime.kafka.caSecretName }} }
+        {{- end }}
+{{- end }}

@@ -13,4 +13,6 @@ public sealed class VenueRepository(CatalogDbContext dbContext) : IVenueReposito
         await dbContext.Venues.AsNoTracking().ToListAsync(cancellationToken);
 
     public void Add(Venue venue) => dbContext.Venues.Add(venue);
+
+    public void Remove(Venue venue) => dbContext.Venues.Remove(venue);
 }

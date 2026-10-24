@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TicketFlow.Identity.Application.Abstractions;
+using TicketFlow.Identity.Application.Users;
 using TicketFlow.Identity.Infrastructure.Keycloak;
 
 namespace TicketFlow.Identity.Infrastructure;
@@ -18,6 +19,14 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        var recoveryTimeoutSeconds = configuration.GetValue("Registration:RecoveryTimeoutSeconds", 10);
+        if (recoveryTimeoutSeconds <= 0)
+            throw new InvalidOperationException("Registration:RecoveryTimeoutSeconds must be greater than zero.");
+        services.AddSingleton(new RegistrationWorkflowOptions
+        {
+            RecoveryTimeout = TimeSpan.FromSeconds(recoveryTimeoutSeconds),
+        });
 
         var keycloakServerUrl = configuration["Keycloak:ServerUrl"]
             ?? throw new InvalidOperationException("Configuration 'Keycloak:ServerUrl' was not found.");

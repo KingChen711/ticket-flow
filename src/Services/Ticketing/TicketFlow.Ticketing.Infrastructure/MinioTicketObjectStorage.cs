@@ -6,8 +6,8 @@ namespace TicketFlow.Ticketing.Infrastructure;
 
 /// <summary>
 /// Commit 3 — no longer creates the bucket (that moved to RenderTicketPdfFunction, the only
-/// writer left; see its EnsureBucketExistsAsync). This class is now read-only, backing the
-/// ticket-download endpoint only.
+/// writer left; see its EnsureBucketExistsAsync). Ticketing reads customer PDFs and may list/delete
+/// only deterministic order prefixes while reconciling abandoned issuance attempts.
 /// </summary>
 public sealed class MinioTicketObjectStorage(IMinioClient minioClient, string bucketName) : ITicketObjectStorage
 {
@@ -23,4 +23,27 @@ public sealed class MinioTicketObjectStorage(IMinioClient minioClient, string bu
 
         return memoryStream.ToArray();
     }
+
+    public async Task<IReadOnlyList<string>> ListKeysAsync(
+        string prefix,
+        CancellationToken cancellationToken = default)
+    {
+        var keys = new List<string>();
+        var args = new ListObjectsArgs()
+            .WithBucket(bucketName)
+            .WithPrefix(prefix)
+            .WithRecursive(true);
+
+        await foreach (var item in minioClient.ListObjectsEnumAsync(args, cancellationToken))
+            keys.Add(item.Key);
+
+        return keys;
+    }
+
+    public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default) =>
+        minioClient.RemoveObjectAsync(
+            new RemoveObjectArgs()
+                .WithBucket(bucketName)
+                .WithObject(objectKey),
+            cancellationToken);
 }

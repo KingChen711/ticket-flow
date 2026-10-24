@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "TicketFlow — Gate Scanner",
   description: "Scan ticket QR codes to check attendees in at the gate",
-  manifest: "/manifest.json",
+  manifest: "/scanner/manifest.webmanifest",
 };
 
 export const viewport = {
@@ -35,36 +35,38 @@ export default async function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <header className="flex items-center justify-between border-b px-6 py-4">
-          <span className="text-lg font-semibold">TicketFlow — Gate Scanner</span>
-          {session ? (
-            <div className="flex items-center gap-4 text-sm">
-              <span>{session.user?.email}</span>
+      <body className="flex min-h-full flex-col">
+        <header className="sticky top-0 z-40 border-b border-border bg-surface/90 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-4 px-4 py-3">
+            <span className="text-lg font-bold tracking-tight">TicketFlow — Gate Scanner</span>
+            {session && !session.error ? (
+              <div className="flex items-center gap-3 text-sm">
+                <span className="hidden max-w-40 truncate text-muted sm:inline">{session.user?.email}</span>
+                <form
+                  action={async () => {
+                    "use server";
+                    await signOut({ redirectTo: "/scanner/" });
+                  }}
+                >
+                  <button type="submit" className="btn-secondary">
+                    Sign out
+                  </button>
+                </form>
+              </div>
+            ) : (
               <form
                 action={async () => {
                   "use server";
-                  await signOut({ redirectTo: "/scanner" });
+                  // See organizer-dashboard/src/app/layout.tsx for why redirectTo is needed here.
+                  await signIn("keycloak", { redirectTo: "/scanner/" });
                 }}
               >
-                <button type="submit" className="text-blue-600 underline">
-                  Sign out
+                <button type="submit" className="btn-primary">
+                  {session?.error ? "Session expired — sign in again" : "Sign in"}
                 </button>
               </form>
-            </div>
-          ) : (
-            <form
-              action={async () => {
-                "use server";
-                // See organizer-dashboard/src/app/layout.tsx for why redirectTo is needed here.
-                await signIn("keycloak", { redirectTo: "/scanner" });
-              }}
-            >
-              <button type="submit" className="text-blue-600 underline">
-                Sign in
-              </button>
-            </form>
-          )}
+            )}
+          </div>
         </header>
         <main className="flex-1">{children}</main>
       </body>

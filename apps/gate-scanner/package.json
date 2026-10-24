@@ -10,7 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ticketflow/http-client": "workspace:*",
     "@ticketflow/types": "workspace:*",
+    "@ticketflow/web-auth": "workspace:*",
     "jsqr": "^1.4.0",
     "next": "16.4.2",
     "next-auth": "5.0.0-beta.32",

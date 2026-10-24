@@ -12,4 +12,7 @@ namespace TicketFlow.Contracts.Messaging.Catalog;
 public sealed record CatalogEventRescheduled(
     Guid CatalogEventId,
     DateTimeOffset StartsAt,
-    DateTimeOffset EndsAt);
+    DateTimeOffset EndsAt,
+    long AggregateVersion = 0,
+    DateTimeOffset? OccurredAt = null,
+    string? TimeZoneId = null);

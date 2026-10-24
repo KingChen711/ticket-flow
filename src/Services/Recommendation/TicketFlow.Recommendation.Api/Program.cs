@@ -1,14 +1,30 @@
+using MongoDB.Driver;
 using Scalar.AspNetCore;
 using TicketFlow.Messaging;
+using TicketFlow.Observability;
 using TicketFlow.Recommendation.Api.Consumers;
 using TicketFlow.Recommendation.Api.Endpoints;
 using TicketFlow.Recommendation.Infrastructure;
-using TicketFlow.Observability;
 using TicketFlow.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (EfMigrationRunner.IsRequested(args))
+{
+    MongoSerializationConfig.EnsureConfigured();
+    var connectionString = builder.Configuration["Mongo:ConnectionString"]
+        ?? throw new InvalidOperationException("Configuration 'Mongo:ConnectionString' was not found.");
+    var databaseName = builder.Configuration["Mongo:Database"] ?? "recommendation";
+    var client = new MongoClient(connectionString);
+    await PurchaseHistoryIndexInitializer.EnsureCreatedAsync(client.GetDatabase(databaseName));
+    return;
+}
+
 builder.Services.AddTicketFlowWeb();
+// Commit 14: this service validates its own token now. It held none before, so its only
+// protection was the gateway route in front of it — exactly the "trust the network" boundary
+// quyết định 8 rules out.
+builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddTicketFlowObservability(builder.Configuration, "recommendation");
 builder.Services.AddOpenApi();
 builder.Services.AddRecommendationInfrastructure(builder.Configuration);

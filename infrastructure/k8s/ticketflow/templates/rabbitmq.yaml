@@ -1,51 +1,76 @@
-# No PVC — matches docker-compose.infra.yml (rabbitmq has no named volume there either).
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rabbitmq
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: rabbitmq
-  template:
-    metadata:
-      labels:
-        app: rabbitmq
-    spec:
-      containers:
-        - name: rabbitmq
-          image: {{ .Values.infra.rabbitmq.image }}
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: RABBITMQ_DEFAULT_USER
-              value: {{ .Values.infra.rabbitmq.user | quote }}
-            - name: RABBITMQ_DEFAULT_PASS
-              value: {{ .Values.infra.rabbitmq.password | quote }}
-          ports:
-            - containerPort: 5672
-            - containerPort: 15672
-          readinessProbe:
-            exec:
-              command: ["rabbitmq-diagnostics", "-q", "ping"]
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            # Real finding: K8s' default timeoutSeconds (1s) is too short for this exec probe —
-            # rabbitmq-diagnostics is a JVM tool, observed failing "timed out after 1s" under
-            # this machine's resource pressure even once the broker itself was already healthy.
-            timeoutSeconds: 10
+{{- if .Values.infra.rabbitmq.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: rabbitmq-config }
+data:
+  rabbitmq.conf: |
+    management.load_definitions = /etc/rabbitmq/definitions/definitions.json
+    default_queue_type = quorum
+    disk_free_limit.absolute = 256MB
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: rabbitmq
+metadata: { name: rabbitmq }
 spec:
-  selector:
-    app: rabbitmq
+  clusterIP: None
+  selector: { app: rabbitmq }
   ports:
-    - name: amqp
-      port: 5672
-      targetPort: 5672
-    - name: management
-      port: 15672
-      targetPort: 15672
+    - { name: amqp, port: 5672, targetPort: 5672 }
+    - { name: management, port: 15672, targetPort: 15672 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: rabbitmq }
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels: { app: rabbitmq }
+  template:
+    metadata:
+      labels: { app: rabbitmq }
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.infra.rabbitmq.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: RABBITMQ_DEFAULT_USER, value: {{ .Values.infra.rabbitmq.adminUser | quote }} }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.name }}, key: rabbitmq-admin-password }
+          ports:
+            - { name: amqp, containerPort: 5672 }
+            - { name: management, containerPort: 15672 }
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_running"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            timeoutSeconds: 10
+          resources:
+{{ toYaml .Values.infra.rabbitmq.resources | indent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/rabbitmq }
+            - { name: config, mountPath: /etc/rabbitmq/rabbitmq.conf, subPath: rabbitmq.conf, readOnly: true }
+            - { name: definitions, mountPath: /etc/rabbitmq/definitions, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: rabbitmq-config }
+        - name: definitions
+          secret: { secretName: {{ .Values.secrets.rabbitDefinitionsName }} }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: { storage: {{ .Values.infra.rabbitmq.storage }} }
+{{- end }}

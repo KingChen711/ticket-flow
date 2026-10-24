@@ -31,7 +31,10 @@ internal static class ReleaseHoldScript
 
         for _, seat_id in ipairs(seat_ids) do
             local hold_key = 'hold:' .. event_id .. ':' .. seat_id
-            if redis.call('GET', hold_key) == hold_id then
+            local current = redis.call('GET', hold_key)
+            local typed_prefix = 'H|' .. hold_id .. '|'
+            if current == hold_id
+                or (current and string.sub(current, 1, string.len(typed_prefix)) == typed_prefix) then
                 redis.call('DEL', hold_key)
                 table.insert(released, seat_id)
             end
@@ -40,5 +43,56 @@ internal static class ReleaseHoldScript
         redis.call('DEL', hold_seats_key)
 
         return released
+        """;
+
+    /// <summary>
+    /// Phase 12 owner/generation-aware exact release. Every key touched is supplied by the
+    /// caller, so a stale release can never delete a newer holder's token.
+    /// </summary>
+    public const string TypedSource = """
+        local hold_seats_key = KEYS[1]
+        local hold_id = ARGV[1]
+        local owner_id = ARGV[2]
+        local generation = ARGV[3]
+        local seat_count = #KEYS - 1
+        local expected = 'H|' .. hold_id .. '|' .. owner_id .. '|' .. generation
+        local hold_prefix = 'H|' .. hold_id .. '|'
+        local reverse_count = redis.call('SCARD', hold_seats_key)
+
+        if reverse_count > 0 and reverse_count ~= seat_count then
+            return {'CONFLICT', 'reverse seat count mismatch'}
+        end
+
+        if reverse_count > 0 then
+            for i = 1, seat_count do
+                if redis.call('SISMEMBER', hold_seats_key, ARGV[i + 3]) == 0 then
+                    return {'CONFLICT', 'reverse seat set mismatch'}
+                end
+            end
+        end
+
+        local owned_count = 0
+        for i = 1, seat_count do
+            local current = redis.call('GET', KEYS[i + 1])
+            if current == expected then
+                owned_count = owned_count + 1
+            elseif current and string.sub(current, 1, string.len(hold_prefix)) == hold_prefix then
+                return {'CONFLICT', 'owner or generation mismatch'}
+            elseif reverse_count > 0 and current then
+                return {'CONFLICT', 'seat is owned by another hold'}
+            end
+        end
+
+        for i = 1, seat_count do
+            if redis.call('GET', KEYS[i + 1]) == expected then
+                redis.call('DEL', KEYS[i + 1])
+            end
+        end
+        redis.call('DEL', hold_seats_key)
+
+        if owned_count == 0 then
+            return {'ALREADY_RELEASED'}
+        end
+        return {'APPLIED'}
         """;
 }

@@ -1,0 +1,50 @@
+{{- $root := . }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.schemaGate }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "migration-%s-%s" $name ($root.Values.appImages.tag | lower | replace "." "-" | trunc 24 | trimSuffix "-") }}
+  labels: { app: {{ $name }}-migration }
+spec:
+  backoffLimit: {{ $root.Values.workloads.migrationBackoffLimit }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: {{ $name }}-migration }
+    spec:
+      restartPolicy: OnFailure
+      {{- if $svc.postgresUriSecretKey }}
+      initContainers:
+        - name: wait-for-database
+          image: {{ $root.Values.infra.postgres.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $svc.postgresUriSecretKey }} }
+          command: ["sh", "-ceu", "--"]
+          args:
+            - until pg_isready -d "$DATABASE_URL"; do sleep 2; done
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "ticketflow.appImage" (dict "root" $root "image" $svc.image) | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["dotnet", {{ $svc.dll | quote }}, "--migrate"]
+          env:
+{{ include "ticketflow.serviceEnv" (dict "root" $root "service" $svc "name" $name) | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            runAsNonRoot: true
+            runAsUser: 1654
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
+---
+{{- end }}
+{{- end }}

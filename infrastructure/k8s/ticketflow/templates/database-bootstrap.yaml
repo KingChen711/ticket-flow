@@ -1,0 +1,68 @@
+{{- if .Values.infra.postgres.enabled }}
+{{- $bootstrapHash := (toJson (dict "image" .Values.infra.postgres.image "adminUser" .Values.infra.postgres.adminUser "secret" .Values.secrets.name "release" .Values.appImages.tag) | sha256sum | trunc 10) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ticketflow-database-bootstrap-{{ $bootstrapHash }}
+  labels: { app: database-bootstrap }
+spec:
+  backoffLimit: {{ .Values.workloads.migrationBackoffLimit }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: database-bootstrap }
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ .Values.infra.postgres.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PGHOST, value: postgres }
+            - { name: PGPORT, value: "5432" }
+            - { name: PGDATABASE, value: postgres }
+            - { name: PGUSER, value: {{ .Values.infra.postgres.adminUser | quote }} }
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.name }}, key: postgres-admin-password }
+            {{- range $name := list "catalog" "identity" "reservation" "ordering" "payment" "ticketing" "keycloak" }}
+            - name: {{ printf "DB_%s_PASSWORD" ($name | upper) }}
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.secrets.name }}, key: {{ printf "db-%s-password" $name }} }
+            {{- end }}
+          command: ["bash", "-ceu", "--"]
+          args:
+            - |
+              until pg_isready -d postgres; do sleep 2; done
+              ensure_role() {
+                local role="$1" password="$2"
+                psql -v ON_ERROR_STOP=1 --set=role="$role" --set=password="$password" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'role', :'password')
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'role') \gexec
+              SELECT format('ALTER ROLE %I PASSWORD %L', :'role', :'password') \gexec
+              SQL
+              }
+              ensure_database() {
+                local database="$1" owner="$2"
+                psql -v ON_ERROR_STOP=1 --set=database="$database" --set=owner="$owner" <<'SQL'
+              SELECT format('CREATE DATABASE %I OWNER %I', :'database', :'owner')
+              WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'database') \gexec
+              SQL
+              }
+              ensure_role ticketflow_catalog "$DB_CATALOG_PASSWORD"
+              ensure_role ticketflow_identity "$DB_IDENTITY_PASSWORD"
+              ensure_role ticketflow_reservation "$DB_RESERVATION_PASSWORD"
+              ensure_role ticketflow_ordering "$DB_ORDERING_PASSWORD"
+              ensure_role ticketflow_payment "$DB_PAYMENT_PASSWORD"
+              ensure_role ticketflow_ticketing "$DB_TICKETING_PASSWORD"
+              ensure_role ticketflow_keycloak "$DB_KEYCLOAK_PASSWORD"
+              ensure_database ticketflow_catalog ticketflow_catalog
+              ensure_database ticketflow_identity ticketflow_identity
+              ensure_database ticketflow_reservation ticketflow_reservation
+              ensure_database ticketflow_ordering ticketflow_ordering
+              ensure_database ticketflow_payment ticketflow_payment
+              ensure_database ticketflow_ticketing ticketflow_ticketing
+              ensure_database ticketflow_keycloak ticketflow_keycloak
+          resources:
+{{ toYaml .Values.workloads.resources | indent 12 }}
+{{- end }}

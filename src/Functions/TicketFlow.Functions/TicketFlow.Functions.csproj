@@ -40,6 +40,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Commit 14: ImageLimits is internal (it is not part of any Lambda's contract) but the
+         decompression-bomb guard is worth testing directly rather than through an S3 round trip. -->
+    <InternalsVisibleTo Include="TicketFlow.Phase12.HardeningTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
     <ProjectReference Include="..\..\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
   </ItemGroup>

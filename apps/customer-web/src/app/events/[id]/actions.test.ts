@@ -18,22 +18,55 @@ function form(fields: Record<string, string | string[]>): FormData {
   return data;
 }
 
+const quote = {
+  holdId: "hold-9",
+  eventId: "ev-1",
+  ownerUserId: "user-1",
+  seatIds: ["s-1", "s-2"],
+  amount: 600000,
+  currency: "VND",
+  priceSnapshotVersion: 3,
+  generation: 7,
+  expiresAt: "2026-10-24T12:10:00Z",
+};
+
+function holdResult(overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    holdId: "hold-9",
+    expiresAt: "2026-10-24T12:10:00Z",
+    unavailableSeatIds: [],
+    quote,
+    reason: "None",
+    reasonDetail: null,
+    ...overrides,
+  };
+}
+
 const fetchMock = vi.fn();
+const redirectOf = (action: Promise<unknown>) => action.then(() => null, (e: Error) => e.message.replace("REDIRECT:", ""));
 
 beforeEach(() => {
   auth.mockReset();
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
-  auth.mockResolvedValue({ accessToken: "token-123" });
+  auth.mockResolvedValue({ serverAccessToken: "token-123" });
 });
 
 describe("holdSeatsAction", () => {
-  const fields = { eventId: "ev-1", seatIds: ["s-1", "s-2"], totalAmount: "600000", currency: "VND" };
+  const fields = { eventId: "ev-1", seatIds: ["s-1", "s-2"] };
 
   it("sends anonymous users to sign in without calling the gateway", async () => {
     auth.mockResolvedValue(null);
 
-    await expect(holdSeatsAction(form(fields))).rejects.toThrow("REDIRECT:/api/auth/signin");
+    expect(await redirectOf(holdSeatsAction(form(fields)))).toBe("/api/auth/signin");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends users whose refresh token failed back to sign in", async () => {
+    auth.mockResolvedValue({ serverAccessToken: "stale", error: "RefreshTokenError" });
+
+    expect(await redirectOf(holdSeatsAction(form(fields)))).toBe("/api/auth/signin");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -43,12 +76,10 @@ describe("holdSeatsAction", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("holds the selected seats with the user's token and moves to checkout", async () => {
-    fetchMock.mockResolvedValue(
-      Response.json({ success: true, holdId: "hold-9", expiresAt: "2026-10-24T12:10:00Z", unavailableSeatIds: [] }),
-    );
+  it("holds only the selected seats and moves to checkout with the hold, never a client price", async () => {
+    fetchMock.mockResolvedValue(Response.json(holdResult()));
 
-    const error = (await holdSeatsAction(form(fields)).catch((e: Error) => e)) as Error;
+    const target = new URL((await redirectOf(holdSeatsAction(form({ ...fields, totalAmount: "1" }))))!, "http://x");
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toMatch(/\/reservation\/holds$/);
@@ -56,27 +87,31 @@ describe("holdSeatsAction", () => {
     expect(init.headers.Authorization).toBe("Bearer token-123");
     expect(JSON.parse(init.body)).toEqual({ eventId: "ev-1", seatIds: ["s-1", "s-2"] });
 
-    const target = new URL(error.message.replace("REDIRECT:", ""), "http://x");
     expect(target.pathname).toBe("/checkout");
-    expect(Object.fromEntries(target.searchParams)).toEqual({
-      eventId: "ev-1",
-      holdId: "hold-9",
-      seatIds: "s-1,s-2",
-      expiresAt: "2026-10-24T12:10:00Z",
-      totalAmount: "600000",
-      currency: "VND",
-    });
+    expect([...target.searchParams.keys()].sort()).toEqual(["holdId", "idempotencyKey"]);
+    expect(target.searchParams.get("holdId")).toBe("hold-9");
+    expect(target.searchParams.get("idempotencyKey")).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("returns to the event page when another buyer took a seat first", async () => {
-    fetchMock.mockResolvedValue(Response.json({ success: false, unavailableSeatIds: ["s-2"] }));
+  it("returns to the event page with a conflict when another buyer took a seat first", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(holdResult({ success: false, holdId: null, expiresAt: null, quote: null, reason: "SeatsUnavailable", unavailableSeatIds: ["s-2"] })),
+    );
 
-    await expect(holdSeatsAction(form(fields))).rejects.toThrow("REDIRECT:/events/ev-1?holdFailed=1");
+    expect(await redirectOf(holdSeatsAction(form(fields)))).toBe("/events/ev-1?holdFailed=conflict");
   });
 
-  it("fails loudly when the gateway errors", async () => {
+  it("reads a rate-limit verdict from the gateway's error body", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(holdResult({ success: false, holdId: null, expiresAt: null, quote: null, reason: "RateLimited" }), { status: 429 }),
+    );
+
+    expect(await redirectOf(holdSeatsAction(form(fields)))).toBe("/events/ev-1?holdFailed=rate-limited");
+  });
+
+  it("degrades to 'unavailable' when the gateway fails without a hold verdict", async () => {
     fetchMock.mockResolvedValue(new Response("boom", { status: 503 }));
 
-    await expect(holdSeatsAction(form(fields))).rejects.toThrow("Gateway /reservation/holds responded 503");
+    expect(await redirectOf(holdSeatsAction(form(fields)))).toBe("/events/ev-1?holdFailed=unavailable");
   });
 });

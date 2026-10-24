@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using MongoDB.Driver;
 using TicketFlow.Recommendation.Application.Abstractions;
 using TicketFlow.Recommendation.Application.Recommendations;
@@ -20,6 +21,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(databaseName));
 
         services.AddSingleton<IPurchaseHistoryStore, MongoPurchaseHistoryStore>();
+        if (configuration.GetValue("Mongo:InitializeIndexesOnStartup", true))
+            services.AddHostedService<PurchaseHistoryIndexInitializer>();
 
         var searchBaseUrl = configuration["Search:BaseUrl"]
             ?? throw new InvalidOperationException("Configuration 'Search:BaseUrl' was not found.");
@@ -27,7 +30,8 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<GetRecommendationsQueryHandler>();
 
-        services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
+        services.AddHealthChecks().AddCheck<MongoHealthCheck>(
+            "mongodb", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
     }

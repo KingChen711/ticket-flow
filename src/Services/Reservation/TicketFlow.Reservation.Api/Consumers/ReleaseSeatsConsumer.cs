@@ -1,29 +1,66 @@
 using MassTransit;
+using TicketFlow.Contracts.Messaging;
 using TicketFlow.Contracts.Messaging.Reservation;
+using TicketFlow.Reservation.Application.Seats;
 using ApplicationReservationService = TicketFlow.Reservation.Application.Seats.ReservationService;
 
 namespace TicketFlow.Reservation.Api.Consumers;
 
 /// <summary>
-/// Compensation step (Commit 9: PaymentFailed direct, or TicketingFailed after refund).
-/// ReleaseAsync is already idempotent (Phase 2 doc comment on ReleaseSeats): releasing an
-/// unknown/already-released hold is a no-op. But by the time PurchaseSaga sends ReleaseSeats,
-/// ConfirmSeats has ALWAYS already run (it's the step before ProcessPayment/IssueTickets in the
-/// happy path) — the seats are Sold, not merely Held, so ReleaseAsync alone (which only ever
-/// operates on an active Redis hold) is a no-op that does NOT actually free the seats. Real gap
-/// found while implementing Commit 9 — calls both: ReleaseAsync for the (here, hypothetical)
-/// still-held case, UnsellAsync for the actual confirmed-sale case. Both are idempotent no-ops
-/// when they don't apply, so calling both unconditionally is simpler and safe.
+/// The only compensation entry point. Phase 12 Commit 5 replaced the previous
+/// <c>ReleaseAsync + UnsellAsync</c> pair — which asserted nothing about ownership and therefore
+/// freed whichever seat happened to carry the id — with one owner-scoped operation guarded by a
+/// durable receipt.
 /// </summary>
-public sealed class ReleaseSeatsConsumer(ApplicationReservationService reservationService, TimeProvider timeProvider)
+/// <remarks>
+/// <c>SeatsReleased</c> is published even when the service could not release anything (stale
+/// compensation, hold owned by another order, authority mismatch). That is deliberate: those
+/// outcomes mean this order has nothing left to take back, and withholding the event would leave
+/// the saga stuck in <c>CompensatingSeats</c> forever instead of reaching <c>Cancelled</c>. The
+/// unreleased case is not silent — it increments
+/// <c>ticketflow.reservation.compensation_total{outcome=stale_noop|conflict}</c> and logs a
+/// warning. Turning those into an explicit ManualReview state belongs to Commit 9's saga
+/// deadlines/recovery tooling, not here.
+/// </remarks>
+public sealed class ReleaseSeatsConsumer(
+    ApplicationReservationService reservationService,
+    TimeProvider timeProvider,
+    ILogger<ReleaseSeatsConsumer> logger)
     : IConsumer<ReleaseSeats>
 {
     public async Task Consume(ConsumeContext<ReleaseSeats> context)
     {
         var message = context.Message;
-        await reservationService.ReleaseAsync(message.EventId, message.HoldId, context.CancellationToken);
-        await reservationService.UnsellAsync(message.EventId, message.SeatIds, context.CancellationToken);
+        ContractVersionMetrics.RecordInbound(nameof(ReleaseSeats), message.OperationKey is null ? 0 : 1);
 
-        await context.Publish(new SeatsReleased(message.OrderId, message.HoldId, timeProvider.GetUtcNow()));
+        var result = await reservationService.CompensateAsync(
+            new ReleaseSeatAllocationRequest(
+                message.OrderId,
+                message.EventId,
+                message.HoldId,
+                message.SeatIds,
+                message.OwnerUserId,
+                message.Generation,
+                message.OperationKey),
+            context.CancellationToken);
+
+        if (!result.Succeeded || result.StaleSeatIds.Count > 0)
+        {
+            logger.LogWarning(
+                "[reservation] compensation for order {OrderId} hold {HoldId} released {ReleasedCount} seat(s) " +
+                "and refused {StaleCount} seat(s) owned by a newer allocation ({FailureCode}: {FailureReason}).",
+                message.OrderId,
+                message.HoldId,
+                result.ReleasedSeatIds.Count,
+                result.StaleSeatIds.Count,
+                result.FailureCode ?? "None",
+                result.FailureReason ?? "n/a");
+        }
+
+        await context.Publish(new SeatsReleased(
+            message.OrderId,
+            message.HoldId,
+            timeProvider.GetUtcNow(),
+            message.OperationKey));
     }
 }

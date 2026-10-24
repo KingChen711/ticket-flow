@@ -1,0 +1,91 @@
+# Production contract. Secret values are intentionally absent: an ExternalSecret/CSI driver or
+# operator-created Secret must populate `ticketflow-production-runtime` before Helm install.
+profile: production
+
+appImages:
+  registry: registry.example.invalid/ticketflow
+  tag: immutable-release-sha-required
+
+secrets:
+  create: false
+  name: ticketflow-production-runtime
+  rabbitDefinitionsName: ticketflow-production-rabbitmq-definitions
+
+runtime:
+  environment: Production
+  gatewayUrl: https://api.ticketflow.example
+  publicGatewayUrl: https://api.ticketflow.example
+  cors:
+    allowedOrigins:
+      - https://ticketflow.example
+  rabbitmq:
+    host: rabbitmq.production.internal
+    virtualHost: ticketflow
+    useSsl: true
+    serverName: rabbitmq.production.internal
+  kafka:
+    host: kafka.production.internal:9093
+    provisionTopics: true
+    useSsl: true
+    useSasl: true
+    saslMechanism: ScramSha512
+    # Set when the managed broker uses a private CA. Public/system-trusted CAs need no mount.
+    caSecretName: ""
+    caSecretKey: ca.crt
+    reconnectBackoffMs: 250
+    reconnectBackoffMaxMs: 10000
+  mongo:
+    notificationDatabase: notification
+    recommendationDatabase: recommendation
+  clickhouse:
+    host: clickhouse.production.internal
+    port: 9440
+    secure: true
+    user: ticketflow_analytics
+    database: analytics
+  keycloak:
+    authority: https://auth.ticketflow.example/realms/ticketflow
+    serverUrl: https://auth.ticketflow.example
+    browserIssuer: https://auth.ticketflow.example/realms/ticketflow
+    healthUrl: https://auth.ticketflow.example/health/ready
+    tokenEndpoint: https://auth.ticketflow.example/realms/ticketflow/protocol/openid-connect/token
+    serviceClientId: ticketflow-internal
+  elasticsearchUri: https://elasticsearch.production.internal:9200
+  otlpEndpoint: https://otel.production.internal:4317
+  minio:
+    endpoint: objects.production.internal:443
+    healthUrl: https://objects.production.internal/minio/health/ready
+    useSsl: true
+  functions:
+    serviceUrl: https://lambda-emulator.production.internal
+    healthUrl: https://lambda-emulator.production.internal/health/ready
+    externalName: lambda-emulator.production.internal
+    port: 443
+  notification:
+    provider: Http
+    baseUrl: https://notification-provider.production.internal
+    healthUrl: https://notification-provider.production.internal/health/ready
+
+# Production uses managed/HA stateful services. The default values still provide a durable
+# single-node kind implementation for restart/reconciliation drills.
+infra:
+  postgres: { enabled: false }
+  redis: { enabled: false }
+  rabbitmq: { enabled: false }
+  kafka: { enabled: false }
+  minio: { enabled: false }
+  elasticsearch: { enabled: false }
+  mongodb: { enabled: false }
+  clickhouse: { enabled: false }
+  keycloak: { enabled: false, importDevelopmentRealm: false }
+
+monitoring:
+  enabled: false
+
+frontends:
+  customer-web:
+    authUrl: https://ticketflow.example
+  organizer-dashboard:
+    authUrl: https://ticketflow.example/organizer/api/auth
+  gate-scanner:
+    authUrl: https://ticketflow.example/scanner/api/auth

@@ -13,4 +13,10 @@ public sealed record ConfirmSeats(
     Guid OrderId,
     Guid EventId,
     Guid HoldId,
-    IReadOnlyList<Guid> SeatIds);
+    IReadOnlyList<Guid> SeatIds,
+    string? OperationKey = null,
+    long PriceSnapshotVersion = 0,
+    decimal? Amount = null,
+    string? Currency = null,
+    Guid? OwnerUserId = null,
+    long Generation = 0);

@@ -9,4 +9,6 @@ namespace TicketFlow.Contracts.Messaging.Reservation;
 public sealed record SeatsConfirmationFailed(
     Guid OrderId,
     Guid HoldId,
-    string Reason);
+    string Reason,
+    string? OperationKey = null,
+    long Generation = 0);

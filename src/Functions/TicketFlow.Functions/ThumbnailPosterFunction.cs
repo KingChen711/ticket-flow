@@ -31,6 +31,17 @@ public sealed class ThumbnailPosterFunction
             await getResponse.ResponseStream.CopyToAsync(input);
             input.Position = 0;
 
+            // Commit 14: re-checked here rather than trusted from the upload path. This function is
+            // triggered by an S3 notification, so its real input is "whatever is in the bucket
+            // under originals/", not "whatever UploadPosterFunction accepted" — anything else that
+            // can write to that prefix would otherwise reach SKBitmap.Decode unguarded.
+            if (!ImageLimits.TryValidate(input.ToArray(), out var limitError))
+            {
+                context.Logger.LogWarning($"ThumbnailPoster: refusing to decode {key} — {limitError}");
+                continue;
+            }
+
+            input.Position = 0;
             using var original = SKBitmap.Decode(input);
             if (original is null)
             {

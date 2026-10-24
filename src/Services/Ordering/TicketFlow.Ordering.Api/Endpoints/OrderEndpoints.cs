@@ -1,16 +1,20 @@
 using System.Security.Claims;
+using TicketFlow.Contracts.Messaging;
+using TicketFlow.Contracts.Messaging.Checkout;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Orders;
 
 namespace TicketFlow.Ordering.Api.Endpoints;
 
-// Request-body-only fields for placing an order. The total is priced on the server from catalog
-// price tiers, so a totalAmount/currency sent by older clients is ignored. CustomerId/Name/Email no
+// Request-body-only fields for placing an order — CustomerId/CustomerName/CustomerEmail no
 // longer come from the body (Phase 7 Commit 4 closes the gap PlaceOrderCommand's own doc
 // comment flagged since Phase 5): the endpoint below reads them from the caller's JWT claims
 // instead, since AddTicketFlowAuth's MapInboundClaims=false keeps raw claim names (sub/name/email).
 public sealed record PlaceOrderRequest(
     Guid CatalogEventId,
     IReadOnlyList<Guid> SeatIds,
+    decimal TotalAmount,
+    string? Currency,
     Guid HoldId,
     string PaymentMethod);
 
@@ -20,18 +24,58 @@ public static class OrderEndpoints
     {
         var group = app.MapGroup("/orders").WithTags("Orders").RequireAuthorization("RequireAuthenticated");
 
-        group.MapPost("/", async (PlaceOrderRequest request, ClaimsPrincipal user, PlaceOrderCommandHandler handler, CancellationToken ct) =>
+        group.MapPost("/", async (
+            CheckoutIntentV2 request,
+            ClaimsPrincipal user,
+            PlaceOrderV2CommandHandler handler,
+            CancellationToken ct) =>
         {
             var customerId = Guid.Parse(user.FindFirstValue("sub")!);
             var customerName = user.FindFirstValue("name") ?? "";
             var customerEmail = user.FindFirstValue("email") ?? "";
 
-            var command = new PlaceOrderCommand(
-                customerId, request.CatalogEventId, request.SeatIds, request.HoldId, request.PaymentMethod, customerName, customerEmail);
+            var command = new PlaceOrderV2Command(
+                customerId,
+                request.HoldId,
+                request.PaymentMethod,
+                request.IdempotencyKey,
+                customerName,
+                customerEmail);
 
-            var order = await handler.HandleAsync(command, ct);
-            return Results.Created($"/orders/{order.OrderId}", order);
+            // A reused idempotency key carrying a different intent is the caller's mistake, not a
+            // server fault: 409 rather than silently handing back the first order (Commit 7).
+            try
+            {
+                var order = await handler.HandleAsync(command, ct);
+                return Results.Created($"/orders/{order.OrderId}", order);
+            }
+            catch (CheckoutConflictException exception)
+            {
+                return Results.Conflict(new { error = exception.Message });
+            }
         });
+
+        if (app.Environment.IsDevelopment())
+        {
+            group.MapPost("/legacy", async (
+                PlaceOrderRequest request,
+                ClaimsPrincipal user,
+                PlaceOrderCommandHandler handler,
+                CancellationToken ct) =>
+            {
+                ContractVersionMetrics.RecordInbound("ordering.checkout.http", 0);
+                var customerId = Guid.Parse(user.FindFirstValue("sub")!);
+                var customerName = user.FindFirstValue("name") ?? "";
+                var customerEmail = user.FindFirstValue("email") ?? "";
+
+                var command = new PlaceOrderCommand(
+                    customerId, request.CatalogEventId, request.SeatIds, request.TotalAmount, request.Currency,
+                    request.HoldId, request.PaymentMethod, customerName, customerEmail);
+
+                var order = await handler.HandleAsync(command, ct);
+                return Results.Created($"/orders/{order.OrderId}", order);
+            });
+        }
 
         // Admin-override only as of Commit 5 (Phase 5) — the customer-facing purchase flow now
         // goes through PurchaseSaga (POST / -> PlaceOrder -> OrderSubmitted starts the saga),

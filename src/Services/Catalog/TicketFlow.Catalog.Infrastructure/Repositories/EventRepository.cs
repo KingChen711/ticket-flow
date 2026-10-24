@@ -13,4 +13,6 @@ public sealed class EventRepository(CatalogDbContext dbContext) : IEventReposito
         await dbContext.Events.AsNoTracking().ToListAsync(cancellationToken);
 
     public void Add(Event @event) => dbContext.Events.Add(@event);
+
+    public void Remove(Event @event) => dbContext.Events.Remove(@event);
 }

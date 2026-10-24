@@ -1,3 +1,4 @@
+{{- if .Values.infra.elasticsearch.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -49,6 +50,14 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+{{ toYaml .Values.infra.elasticsearch.resources | indent 12 }}
           volumeMounts:
             - name: data
               mountPath: /usr/share/elasticsearch/data
@@ -67,3 +76,4 @@ spec:
   ports:
     - port: 9200
       targetPort: 9200
+{{- end }}

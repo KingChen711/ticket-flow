@@ -5,8 +5,7 @@ services:
     # No separate OpenTelemetry Collector in front of it (docs/phase-10-plan.md mục 2) — Jaeger
     # all-in-one accepts OTLP natively, a collector hop adds zero value for a single-node local
     # backend and is the kind of gold-plating scope.md mục 12 warns against.
-    image: jaegertracing/all-in-one:latest
-    container_name: ticketflow-jaeger
+    image: jaegertracing/all-in-one@sha256:ab6f1a1f0fb49ea08bcd19f6b84f6081d0d44b364b6de148e1798eb5816bacac
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
@@ -22,8 +21,7 @@ services:
   prometheus:
     # Pull model (docs/phase-10-plan.md mục 3) — scrapes /metrics on all 11 API/gateway targets
     # listed in prometheus.yml, no push/OTLP path for metrics (that's Jaeger's job for traces).
-    image: prom/prometheus:latest
-    container_name: ticketflow-prometheus
+    image: prom/prometheus@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893
     volumes:
       - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -52,8 +50,7 @@ services:
     # UTF-8 dotted metric names, and every query in ticketflow-overview.json are all confirmed
     # correct end-to-end. What's unverified is only the browser's own canvas rendering, which
     # looks like a limitation of this specific sandboxed browser tool, not a real dashboard bug.
-    image: grafana/grafana:11.4.0
-    container_name: ticketflow-grafana
+    image: grafana/grafana:11.4.0@sha256:d8ea37798ccc41061a62ab080f2676dda6bf7815558499f901bdb0f533a456fb
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
@@ -85,8 +82,7 @@ services:
     # ~10-minute poll cycle picks up the policy after the fact. Every one of the 11 API/gateway
     # processes depends_on this completing (docker-compose.yml) so retention is live from each
     # service's very first log line, not eventually-consistent.
-    image: curlimages/curl:8.11.0
-    container_name: ticketflow-es-ilm-init
+    image: curlimages/curl:8.11.0@sha256:83a505ba2ba62f208ed6e410c268b7b9aa48f0f7b403c8108b9773b44199dbba
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -103,8 +99,7 @@ services:
   kibana:
     # Pinned to match the ES server's exact version (8.15.3, docker-compose.infra.yml) — Kibana
     # enforces a compatible-version check against the cluster it connects to at startup.
-    image: docker.elastic.co/kibana/kibana:8.15.3
-    container_name: ticketflow-kibana
+    image: docker.elastic.co/kibana/kibana:8.15.3@sha256:43dffccc4085ebca96ed8a8da30116fa3a246c9e204b028949d2a8e733544987
     environment:
       ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
       # No security/xpack auth configured cluster-side (docker-compose.infra.yml sets
@@ -125,7 +120,3 @@ services:
 volumes:
   prometheus-data:
   grafana-data:
-
-networks:
-  default:
-    name: ticketflow-network

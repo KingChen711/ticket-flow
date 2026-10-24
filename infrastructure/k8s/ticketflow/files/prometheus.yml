@@ -1,6 +1,5 @@
-# 11 static targets (10 API services + gateway) — Docker DNS container names are stable inside
-# ticketflow-network, no service discovery needed for a fixed-size local compose stack (same
-# reasoning docker-compose.yml's own service names already give every consumer of this file).
+# 11 static targets (10 API services + gateway) — service DNS names are stable inside the
+# namespace; no discovery is needed for this fixed-size stack.
 # Each target's /metrics comes from the same Kestrel listener as its main HTTP port — no separate
 # metrics port, mirrors how /health already works (TicketFlow.Web.UseTicketFlowWeb).
 #

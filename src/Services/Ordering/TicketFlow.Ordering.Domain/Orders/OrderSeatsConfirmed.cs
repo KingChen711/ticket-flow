@@ -8,8 +8,4 @@ namespace TicketFlow.Ordering.Domain.Orders;
 /// the same file scope. Same class of naming hazard as the Commit 2 Payment/Payment bug and the
 /// Commit 4 Event&lt;T&gt; property naming.
 /// </summary>
-/// <remarks>
-/// SeatIds are the seats reservation actually confirmed from the hold. Nullable because events
-/// stored before this field existed deserialize without it; those orders keep their requested seats.
-/// </remarks>
-public sealed record OrderSeatsConfirmed(Guid OrderId, DateTimeOffset ConfirmedAt, IReadOnlyList<Guid>? SeatIds = null);
+public sealed record OrderSeatsConfirmed(Guid OrderId, DateTimeOffset ConfirmedAt);

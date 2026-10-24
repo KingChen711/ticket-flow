@@ -1,0 +1,59 @@
+# Phase 12 Commit 14. Backend services are reachable only from the gateway, from each other, and
+# from Prometheus — not from anything else that happens to land in the namespace.
+#
+# The gap this closes is the same one docker-compose had: authorization policies live on the
+# gateway's routes, so anything that could open a socket straight to catalog:8002 or
+# reservation:8003 simply did not meet them. Quyết định 8 states the rule directly — network
+# reachability is not a security boundary — and these policies are the K8s half of making the
+# service-side checks (RequireServicePrincipal, resource ownership) the thing that actually decides.
+#
+# HONEST CAVEAT: kind's default CNI (kindnet) does not implement NetworkPolicy, so on the CI
+# cluster these objects are created and then ignored. They are correct for any enforcing CNI
+# (Calico, Cilium), and the service-side authorization added in this same commit is what holds the
+# line either way — which is the right order of defences anyway. Do not read a green CI run as
+# evidence that this policy was enforced.
+#
+# Ingress only, deliberately: an egress policy here would also have to enumerate DNS, Keycloak,
+# Postgres, Redis, RabbitMQ, Kafka, Mongo, ClickHouse, Elasticsearch, MinIO and the external
+# LocalStack, and one omission turns into a service that starts and then fails in a way that looks
+# like an application bug. Ingress is where the bypass actually was.
+{{- $root := . }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled (ne $name "gateway") }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-allow-internal
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ $name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # The gateway is the only front door for user traffic.
+        - podSelector:
+            matchLabels:
+              app: gateway
+        {{- range $peer, $peerSvc := $root.Values.services }}
+        {{- if and $peerSvc.enabled (ne $peer "gateway") }}
+        # Peer services: catalog -> reservation/recommendation, ordering -> reservation (gRPC).
+        # Listed rather than left open because "any pod in the namespace" would include the
+        # frontends, which have no business reaching a service directly.
+        - podSelector:
+            matchLabels:
+              app: {{ $peer }}
+        {{- end }}
+        {{- end }}
+        # Prometheus scrapes /metrics on every service port; without this the dashboards added in
+        # Phase 10 go blank the moment the policy is enforced.
+        - podSelector:
+            matchLabels:
+              app: prometheus
+---
+{{- end }}
+{{- end }}
+# The gateway itself stays open: it is the ingress point, reached by the frontends and by whatever
+# is in front of the cluster (NodePort/port-forward locally). Its protection is its authorization
+# policies, not its reachability.

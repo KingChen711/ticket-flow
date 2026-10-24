@@ -10,4 +10,6 @@ namespace TicketFlow.Contracts.Messaging.Ticketing;
 public sealed record TicketsIssued(
     Guid OrderId,
     IReadOnlyList<string> TicketPdfUrls,
-    DateTimeOffset IssuedAt);
+    DateTimeOffset IssuedAt,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

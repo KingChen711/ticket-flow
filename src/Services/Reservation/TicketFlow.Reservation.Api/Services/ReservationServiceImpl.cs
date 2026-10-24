@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Microsoft.AspNetCore.Authorization;
 using TicketFlow.Contracts.Reservation;
 using ApplicationReservationService = TicketFlow.Reservation.Application.Seats.ReservationService;
 
@@ -11,6 +12,17 @@ namespace TicketFlow.Reservation.Api.Services;
 /// ReservationService (from the .proto's own "service ReservationService") — both live in
 /// scope here, so the bare name would be ambiguous.
 /// </summary>
+/// <remarks>
+/// Commit 14: the whole gRPC surface requires a service principal. It was unauthenticated, and
+/// <c>GetHoldQuote</c> takes <c>OwnerUserId</c> as a request field — so anyone able to reach the
+/// gRPC port could read any customer's hold quote (exact seats, amount, expiry) just by naming
+/// them. Taking the owner from a caller-supplied field is still correct HERE and only here,
+/// because the caller is Ordering, which read that id from its own verified token before making
+/// the call; what was missing was any proof that the caller really is Ordering. That is what the
+/// service principal supplies, and it is why this policy must not accept a human token: an
+/// on-behalf-of parameter is only safe when the caller cannot be the person it names.
+/// </remarks>
+[Authorize(Policy = "RequireServicePrincipal")]
 public sealed class ReservationServiceImpl(ApplicationReservationService reservationService)
     : ReservationService.ReservationServiceBase
 {
@@ -35,6 +47,35 @@ public sealed class ReservationServiceImpl(ApplicationReservationService reserva
         var response = new CheckSeatAvailabilityResponse { AllAvailable = result.AllAvailable };
         response.UnavailableSeatIds.AddRange(result.UnavailableSeatIds.Select(id => id.ToString()));
 
+        return response;
+    }
+
+    public override async Task<GetHoldQuoteResponse> GetHoldQuote(
+        GetHoldQuoteRequest request,
+        ServerCallContext context)
+    {
+        if (!Guid.TryParse(request.HoldId, out var holdId))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"'{request.HoldId}' is not a valid hold id."));
+
+        if (!Guid.TryParse(request.OwnerUserId, out var ownerUserId))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"'{request.OwnerUserId}' is not a valid user id."));
+
+        var quote = await reservationService.GetQuoteAsync(holdId, ownerUserId, context.CancellationToken);
+        if (quote is null)
+            throw new RpcException(new Status(StatusCode.NotFound, "Hold quote was not found, is expired, cancelled, or belongs to another user."));
+
+        var response = new GetHoldQuoteResponse
+        {
+            HoldId = quote.HoldId.ToString(),
+            EventId = quote.EventId.ToString(),
+            OwnerUserId = quote.OwnerUserId.ToString(),
+            Amount = quote.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Currency = quote.Currency,
+            PriceSnapshotVersion = quote.PriceSnapshotVersion,
+            Generation = quote.Generation,
+            ExpiresAt = quote.ExpiresAt.ToString("O"),
+        };
+        response.SeatIds.AddRange(quote.SeatIds.Select(id => id.ToString()));
         return response;
     }
 }

@@ -7,4 +7,13 @@ namespace TicketFlow.Contracts.Messaging.Analytics;
 /// consumers can replay, not a one-shot command/notification. Denormalized fact record (no
 /// lookups needed downstream) — Analytics (Commit 7) inserts this shape directly into ClickHouse.
 /// </summary>
-public sealed record SaleRecorded(Guid OrderId, Guid EventId, int SeatCount, decimal Amount, DateTimeOffset CompletedAt);
+public sealed record SaleRecorded(
+    Guid OrderId,
+    Guid EventId,
+    int SeatCount,
+    decimal Amount,
+    DateTimeOffset CompletedAt,
+    string Currency = "VND",
+    long PriceSnapshotVersion = 0,
+    long AggregateVersion = 0,
+    DateTimeOffset? OccurredAt = null);

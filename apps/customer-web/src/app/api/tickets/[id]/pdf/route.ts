@@ -8,12 +8,20 @@ const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await auth();
-  if (!session?.accessToken) return new Response("Unauthorized", { status: 401 });
+  if (!session?.serverAccessToken || session.error) return new Response("Reauthentication required", { status: 401 });
 
-  const res = await fetch(`${GATEWAY_URL}/ticketing/tickets/${id}/pdf`, {
-    headers: { Authorization: `Bearer ${session.accessToken}` },
-    cache: "no-store",
-  });
+  const timeout = AbortSignal.timeout(8_000);
+  const signal = AbortSignal.any([_request.signal, timeout]);
+  let res: Response;
+  try {
+    res = await fetch(`${GATEWAY_URL}/ticketing/tickets/${id}/pdf`, {
+      headers: { Authorization: `Bearer ${session.serverAccessToken}` },
+      cache: "no-store",
+      signal,
+    });
+  } catch {
+    return new Response("Ticket PDF is temporarily unavailable", { status: 503 });
+  }
 
   if (!res.ok) return new Response(await res.text(), { status: res.status });
 

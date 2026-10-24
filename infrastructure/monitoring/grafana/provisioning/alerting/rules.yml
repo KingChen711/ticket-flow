@@ -140,3 +140,111 @@ groups:
           service: payment
           severity: warning
         isPaused: false
+
+
+  - orgId: 1
+    name: phase12-hardening
+    folder: TicketFlow Alerts
+    interval: 1m
+    rules:
+      - uid: phase12-saga-manual-review
+        title: Phase 12 order needs manual review
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              expr: sum(increase({"ticketflow.saga.manual_review_total"}[5m])) + sum(increase({"ticketflow.payment.manual_review_total"}[5m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A purchase or ambiguous payment exhausted automatic recovery and requires an operator.
+        labels: { service: ordering-payment, severity: critical }
+        isPaused: false
+
+      - uid: phase12-payment-unknown
+        title: Phase 12 payment outcome unknown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              expr: sum(increase({"ticketflow.payment.charge_total", "outcome"="unknown"}[5m])) + sum(increase({"ticketflow.payment.refund_total", "outcome"="unknown"}[5m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A charge or refund has no authoritative provider answer and is queued for reconciliation.
+        labels: { service: payment, severity: critical }
+        isPaused: false
+
+      - uid: phase12-saga-deadline
+        title: Phase 12 purchase participant deadline fired
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              expr: sum(increase({"ticketflow.saga.deadlines_total"}[5m]))
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations:
+          summary: A purchase participant missed its durable saga deadline; recovery or compensation has started.
+        labels: { service: ordering, severity: warning }
+        isPaused: false

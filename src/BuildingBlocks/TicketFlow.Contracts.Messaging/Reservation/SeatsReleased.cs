@@ -8,4 +8,6 @@ namespace TicketFlow.Contracts.Messaging.Reservation;
 public sealed record SeatsReleased(
     Guid OrderId,
     Guid HoldId,
-    DateTimeOffset ReleasedAt);
+    DateTimeOffset ReleasedAt,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

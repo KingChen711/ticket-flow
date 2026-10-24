@@ -2,10 +2,10 @@ export {};
 
 declare module "next-auth" {
   interface Session {
-    accessToken?: string;
+    serverAccessToken?: string;
     userId?: string;
     roles?: string[];
-    error?: string;
+    error?: "RefreshTokenError";
   }
 }
 
@@ -15,6 +15,6 @@ declare module "next-auth/jwt" {
     refreshToken?: string;
     expiresAt?: number;
     roles?: string[];
-    error?: string;
+    error?: "RefreshTokenError";
   }
 }

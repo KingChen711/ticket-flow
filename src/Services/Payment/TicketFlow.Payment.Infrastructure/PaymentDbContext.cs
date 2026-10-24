@@ -7,6 +7,8 @@ namespace TicketFlow.Payment.Infrastructure;
 public sealed class PaymentDbContext(DbContextOptions<PaymentDbContext> options) : DbContext(options)
 {
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
+    public DbSet<PaymentAttempt> PaymentAttempts => Set<PaymentAttempt>();
+    public DbSet<PaymentRefund> PaymentRefunds => Set<PaymentRefund>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

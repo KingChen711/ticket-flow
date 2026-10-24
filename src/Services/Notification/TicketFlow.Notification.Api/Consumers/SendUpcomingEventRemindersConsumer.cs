@@ -20,6 +20,7 @@ namespace TicketFlow.Notification.Api.Consumers;
 /// </summary>
 public sealed class SendUpcomingEventRemindersConsumer(
     IEventReminderReadModel readModel,
+    NotificationDeliveryService deliveries,
     IOptions<ReminderOptions> reminderOptions,
     ILogger<SendUpcomingEventRemindersConsumer> logger) : IConsumer<SendUpcomingEventReminders>
 {
@@ -32,11 +33,24 @@ public sealed class SendUpcomingEventRemindersConsumer(
 
         foreach (var reminder in pending)
         {
-            var firstTimeReminded = await readModel.TryMarkRemindedAsync(reminder.OrderId, now, context.CancellationToken);
+            await deliveries.DeliverAsync(
+                new NotificationDeliveryRequest(
+                    $"reminder:{reminder.OrderId:N}",
+                    $"reminder:{reminder.OrderId:N}",
+                    reminder.CustomerEmail,
+                    "upcoming-event-reminder",
+                    $"Nhắc lịch: {reminder.EventTitle}",
+                    $"{reminder.CustomerName}, sự kiện {reminder.EventTitle} ({reminder.EventArtist} @ {reminder.EventVenueName}) bắt đầu lúc {reminder.StartsAt:O}."),
+                context.CancellationToken);
+
+            // Business completion follows provider confirmation. A crash between these two writes
+            // replays the already-delivered attempt without sending a second provider message.
+            var firstTimeReminded = await readModel.TryMarkRemindedAsync(
+                reminder.OrderId,
+                now,
+                context.CancellationToken);
             if (!firstTimeReminded)
-            {
                 continue;
-            }
 
             logger.LogInformation(
                 "[notification] nhắc {CustomerName} <{CustomerEmail}> — sự kiện '{EventTitle}' ({Artist} @ {VenueName}) bắt đầu lúc {StartsAt}, order {OrderId}",

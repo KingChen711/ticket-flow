@@ -1,13 +1,19 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using MongoDB.Driver;
+using TicketFlow.Notification.Application;
 using TicketFlow.Notification.Application.Abstractions;
 
 namespace TicketFlow.Notification.Infrastructure;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddNotificationInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddNotificationInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         MongoSerializationConfig.EnsureConfigured();
 
@@ -19,8 +25,97 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(databaseName));
 
         services.AddSingleton<IEventReminderReadModel, MongoEventReminderReadModel>();
-        services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
+        services.AddSingleton<INotificationDeliveryStore, MongoNotificationDeliveryStore>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<NotificationDeliveryService>();
+
+        var provider = ValidateDeliveryConfiguration(configuration, environment.EnvironmentName);
+        if (string.Equals(provider, "Http", StringComparison.OrdinalIgnoreCase))
+        {
+            var baseUrl = configuration["Delivery:BaseUrl"]!;
+            var apiKey = configuration["Delivery:ApiKey"]!;
+            services.AddHttpClient<INotificationProvider, HttpNotificationProvider>(client =>
+            {
+                client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+                client.Timeout = TimeSpan.FromSeconds(15);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("X-Api-Key", apiKey);
+            });
+        }
+        else
+        {
+            services.AddSingleton<INotificationProvider, DevelopmentNotificationProvider>();
+        }
+
+        services.AddHealthChecks().AddCheck<MongoHealthCheck>(
+            "mongodb", HealthStatus.Unhealthy, ["ready"], TimeSpan.FromSeconds(3));
 
         return services;
+    }
+
+    public static string ValidateDeliveryConfiguration(IConfiguration configuration, string environmentName)
+    {
+        var production = string.Equals(environmentName, Environments.Production, StringComparison.OrdinalIgnoreCase);
+        var stubAllowed = string.Equals(environmentName, Environments.Development, StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(environmentName, "Test", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(environmentName, "Testing", StringComparison.OrdinalIgnoreCase);
+        var provider = configuration["Delivery:Provider"];
+        if (!stubAllowed && !string.Equals(provider, "Http", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Environment '{environmentName}' requires Delivery:Provider=Http; " +
+                "the development stub is allowed only in Development or test.");
+        }
+
+        provider = string.IsNullOrWhiteSpace(provider) && stubAllowed ? "DevelopmentStub" : provider;
+        if (string.Equals(provider, "Http", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(configuration["Delivery:BaseUrl"], UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("http" or "https"))
+                throw new InvalidOperationException("Delivery:BaseUrl must be an absolute HTTP(S) URI.");
+            if (production && uri.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("Production Delivery:BaseUrl must use HTTPS.");
+            if (string.IsNullOrWhiteSpace(configuration["Delivery:ApiKey"]))
+                throw new InvalidOperationException("Delivery:ApiKey is required for the HTTP provider.");
+            if (production &&
+                (!Uri.TryCreate(configuration["Delivery:HealthUrl"], UriKind.Absolute, out var healthUri) ||
+                 healthUri.Scheme != Uri.UriSchemeHttps))
+                throw new InvalidOperationException("Production Delivery:HealthUrl must be an absolute HTTPS URI.");
+            return "Http";
+        }
+
+        if (!string.Equals(provider, "DevelopmentStub", StringComparison.OrdinalIgnoreCase) ||
+            production || !stubAllowed)
+            throw new InvalidOperationException($"Unsupported notification delivery provider '{provider}'.");
+        return "DevelopmentStub";
+    }
+
+    /// <summary>
+    /// Returns the external provider health endpoint only when delivery actually uses that
+    /// provider. DevelopmentStub has no external dependency and therefore must not become
+    /// permanently unready because a deliberately non-routable placeholder URL was supplied by
+    /// the development Helm profile.
+    /// </summary>
+    public static Uri? ResolveDeliveryHealthEndpoint(
+        IConfiguration configuration,
+        string environmentName)
+    {
+        if (!string.Equals(configuration["Delivery:Provider"], "Http", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!Uri.TryCreate(configuration["Delivery:HealthUrl"], UriKind.Absolute, out var endpoint) ||
+            endpoint.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException(
+                "Delivery:HealthUrl must be an absolute HTTP(S) URI for the HTTP provider.");
+        }
+
+        if (string.Equals(environmentName, Environments.Production, StringComparison.OrdinalIgnoreCase) &&
+            endpoint.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException(
+                "Production Delivery:HealthUrl must be an absolute HTTPS URI.");
+        }
+
+        return endpoint;
     }
 }

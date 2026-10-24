@@ -27,6 +27,8 @@
   <ItemGroup>
     <ProjectReference Include="..\TicketFlow.Catalog.Application\TicketFlow.Catalog.Application.csproj" />
     <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Messaging\TicketFlow.Messaging.csproj" />
+    <!-- Commit 14: ServiceTokenHandler, so outbound internal calls carry a service principal. -->
+    <ProjectReference Include="..\..\..\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
   </ItemGroup>
 
 </Project>

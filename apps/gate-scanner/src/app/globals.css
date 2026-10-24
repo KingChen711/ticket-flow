@@ -1,26 +1,187 @@
 @import "tailwindcss";
 
+/*
+ * Shared TicketFlow theme. The same file is used by customer-web, organizer-dashboard and
+ * gate-scanner so the three zones read as one product when stitched together by Multi-Zones.
+ * Components use the semantic tokens below (bg-surface, text-muted, bg-primary...), never raw
+ * palette colors, so light and dark mode stay in one place. Text pairs meet WCAG AA (4.5:1).
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-muted: #f1f5f9;
+  --fg: #0f172a;
+  --muted: #475569;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --on-primary: #ffffff;
+  --primary-soft: #eef2ff;
+  --success: #15803d;
+  --success-soft: #f0fdf4;
+  --warning: #b45309;
+  --warning-soft: #fffbeb;
+  --danger: #b91c1c;
+  --danger-soft: #fef2f2;
+  --ring: #4f46e5;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #020617;
+    --surface: #0f172a;
+    --surface-muted: #1e293b;
+    --fg: #f8fafc;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --border-strong: #334155;
+    --primary: #818cf8;
+    --primary-hover: #a5b4fc;
+    --on-primary: #0f172a;
+    --primary-soft: #1e1b4b;
+    --success: #4ade80;
+    --success-soft: #052e16;
+    --warning: #fbbf24;
+    --warning-soft: #422006;
+    --danger: #f87171;
+    --danger-soft: #450a0a;
+    --ring: #a5b4fc;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-on-primary: var(--on-primary);
+  --color-primary-soft: var(--primary-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility container-page {
+  @apply mx-auto w-full max-w-5xl px-4 py-8 sm:px-6;
+}
+
+@utility btn {
+  @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-primary text-on-primary hover:bg-primary-hover disabled:hover:bg-primary;
+}
+
+@utility btn-secondary {
+  @apply btn border border-border-strong bg-surface text-fg hover:bg-surface-muted;
+}
+
+@utility btn-ghost {
+  @apply btn text-fg hover:bg-surface-muted;
+}
+
+@utility link {
+  @apply cursor-pointer font-medium text-primary underline-offset-4 hover:underline;
+}
+
+@utility field {
+  @apply flex flex-col gap-1.5;
+}
+
+@utility label {
+  @apply text-sm font-medium text-fg;
+}
+
+@utility hint {
+  @apply text-xs text-muted;
+}
+
+@utility input {
+  @apply min-h-11 w-full rounded-lg border border-border-strong bg-surface px-3 text-base text-fg placeholder:text-muted;
+}
+
+@utility card {
+  @apply rounded-xl border border-border bg-surface p-5 shadow-sm;
+}
+
+@utility badge {
+  @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold;
+}
+
+@utility badge-neutral {
+  @apply badge bg-surface-muted text-muted;
+}
+
+@utility badge-success {
+  @apply badge bg-success-soft text-success;
+}
+
+@utility badge-warning {
+  @apply badge bg-warning-soft text-warning;
+}
+
+@utility badge-danger {
+  @apply badge bg-danger-soft text-danger;
+}
+
+@utility badge-info {
+  @apply badge bg-primary-soft text-primary;
+}
+
+@utility alert {
+  @apply rounded-lg border p-3 text-sm;
+}
+
+@utility alert-warning {
+  @apply alert border-warning/40 bg-warning-soft text-fg;
+}
+
+@utility alert-danger {
+  @apply alert border-danger/40 bg-danger-soft text-fg;
+}
+
+@utility alert-info {
+  @apply alert border-primary/30 bg-primary-soft text-fg;
 }

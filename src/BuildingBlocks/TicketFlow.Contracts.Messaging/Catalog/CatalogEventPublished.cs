@@ -18,6 +18,13 @@ namespace TicketFlow.Contracts.Messaging.Catalog;
 /// already rejects. Catalog already has both Event.Artist and the Venue aggregate on hand at
 /// publish time — denormalizing here is the correct pub/sub idiom, not a shortcut. Backward
 /// compatible: existing consumers (notification) that don't read these fields are unaffected.
+///
+/// <see cref="OrganizerId"/> added in Phase 12 Commit 14, expand-only at the end of the record
+/// (mục 10), and it is what lets Ticketing and Analytics answer "does this caller own this event?"
+/// locally. The alternative — threading OrganizerId through quote → order → saga → tickets/sales,
+/// or having a gate scanner call Catalog on every scan — would either touch six services for one
+/// fact or put a synchronous dependency on the turnstile. Nullable because events published before
+/// this commit have no owner, and an absent owner must not read as "owned by the caller".
 /// </remarks>
 public sealed record CatalogEventPublished(
     Guid CatalogEventId,
@@ -27,4 +34,8 @@ public sealed record CatalogEventPublished(
     DateTimeOffset PublishedAt,
     string Artist,
     string VenueName,
-    string City);
+    string City,
+    long AggregateVersion = 0,
+    DateTimeOffset? OccurredAt = null,
+    Guid? OrganizerId = null,
+    string? TimeZoneId = null);

@@ -14,9 +14,17 @@ public sealed class GetRecommendationsQueryHandler(IPurchaseHistoryStore history
     private const int PopularTake = 10;
     private const int MaxRecommendations = 10;
 
-    public async Task<IReadOnlyList<RecommendedEvent>> HandleAsync(Guid userId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// <paramref name="userId"/> is null for an unidentified caller (Commit 14) — that is not an
+    /// error, it is the cold-start case, and it takes the same popular-events path as a known user
+    /// with no purchase history.
+    /// </summary>
+    public async Task<IReadOnlyList<RecommendedEvent>> HandleAsync(Guid? userId, CancellationToken cancellationToken = default)
     {
-        var history = await historyStore.GetAsync(userId, cancellationToken);
+        if (userId is null)
+            return await GetPopularAsync(cancellationToken);
+
+        var history = await historyStore.GetAsync(userId.Value, cancellationToken);
         if (history is null || history.PurchasedEventIds.Count == 0)
             return await GetPopularAsync(cancellationToken);
 

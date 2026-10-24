@@ -1,3 +1,4 @@
+{{- if .Values.infra.clickhouse.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -32,7 +33,8 @@ spec:
             - name: CLICKHOUSE_USER
               value: {{ .Values.infra.clickhouse.user | quote }}
             - name: CLICKHOUSE_PASSWORD
-              value: {{ .Values.infra.clickhouse.password | quote }}
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.name }}, key: clickhouse-password }
             - name: CLICKHOUSE_DB
               value: {{ .Values.infra.clickhouse.db | quote }}
           ports:
@@ -44,6 +46,14 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8123
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+{{ toYaml .Values.infra.clickhouse.resources | indent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/clickhouse
@@ -66,3 +76,4 @@ spec:
     - name: native
       port: 9000
       targetPort: 9000
+{{- end }}

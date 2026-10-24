@@ -1,37 +1,40 @@
 import Link from "next/link";
+import { parseMyOrderViews } from "@ticketflow/types";
 import { redirect } from "next/navigation";
-import type { MyOrderView } from "@ticketflow/types";
 import { auth } from "@/auth";
+import { fetchGateway } from "@/lib/gateway";
+import { formatMoney, orderBadge, statusLabel } from "@/lib/status";
 
-const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
-
-// GET /ordering/orders — identity from claims (sub), no query param (Phase 8 Commit 2).
 export default async function MyOrdersPage() {
   const session = await auth();
-  if (!session?.accessToken) redirect("/api/auth/signin");
+  if (!session?.serverAccessToken || session.error) redirect("/api/auth/signin");
 
-  const res = await fetch(`${GATEWAY_URL}/ordering/orders`, {
-    headers: { Authorization: `Bearer ${session.accessToken}` },
-    cache: "no-store",
+  const orders = await fetchGateway("/ordering/orders", parseMyOrderViews, {
+    accessToken: session.serverAccessToken,
   });
-  if (!res.ok) throw new Error(`Gateway /ordering/orders responded ${res.status}`);
-
-  const orders = (await res.json()) as MyOrderView[];
-
   return (
-    <div className="mx-auto max-w-2xl p-6">
-      <h1 className="text-xl font-bold">My orders</h1>
+    <div className="container-page max-w-3xl">
+      <h1 className="text-2xl font-bold tracking-tight">My orders</h1>
       {orders.length === 0 ? (
-        <p className="mt-4 text-gray-500">No orders yet.</p>
+        <div className="card mt-6 text-center">
+          <p className="font-medium">No orders yet.</p>
+          <Link href="/" className="btn-primary mt-4">Browse events</Link>
+        </div>
       ) : (
-        <ul className="mt-4 flex flex-col gap-2">
+        <ul className="mt-6 flex flex-col gap-3">
           {orders.map((order) => (
             <li key={order.id}>
-              <Link href={`/orders/${order.id}`} className="flex items-center justify-between rounded border p-3 text-sm hover:bg-gray-50">
-                <span>
-                  {order.seatIds.length} seat(s) — {order.totalAmount.toLocaleString()} {order.currency}
-                </span>
-                <span className="font-medium">{order.status}</span>
+              <Link
+                href={`/orders/${order.id}`}
+                className="card flex flex-wrap items-center justify-between gap-3 p-4 transition-colors duration-150 hover:border-primary"
+              >
+                <div>
+                  <p className="font-semibold">Order {order.id.slice(0, 8)}</p>
+                  <p className="text-sm text-muted">
+                    {new Date(order.placedAt).toLocaleString()} · {order.seatIds.length} seat(s) · {formatMoney(order.totalAmount, order.currency)}
+                  </p>
+                </div>
+                <span className={orderBadge(order.status)}>{statusLabel(order.status)}</span>
               </Link>
             </li>
           ))}

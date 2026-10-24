@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import jsQR from "jsqr";
-import type { ValidateTicketResponse } from "@ticketflow/types";
+import { fetchJson } from "@ticketflow/http-client";
+import { parseValidateTicketResponse, type ValidateTicketResponse } from "@ticketflow/types";
 
 // The Shape Detection API's BarcodeDetector isn't in TS's DOM lib and isn't available on every
 // browser (probed in this dev environment's desktop Chromium: absent — docs/phase-8-plan.md
@@ -20,31 +21,54 @@ declare global {
 
 type Phase = "idle" | "camera" | "result";
 
-export function ScannerClient() {
+export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLabel: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const detectorRef = useRef<BarcodeDetectorLike | null>(null);
   const scanningRef = useRef(false);
+  const decodeInFlightRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const startingCameraRef = useRef(false);
+  const mountedRef = useRef(false);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<ValidateTicketResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    mountedRef.current = true;
     if (window.BarcodeDetector) {
       detectorRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
     }
+
+    // Decoding a frame can outlive a route transition. Stop immediately when the tab is no
+    // longer visible, instead of keeping a physical camera and an animation loop alive behind
+    // another app or a locked phone screen.
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopCamera();
+        if (mountedRef.current) setPhase("idle");
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopCamera();
+    };
   }, []);
 
-  useEffect(() => () => stopCamera(), []);
-
   function stopCamera() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    scanningRef.current = false;
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    const video = videoRef.current;
+    if (video) video.srcObject = null;
   }
 
   async function decodeFrame(
@@ -71,55 +95,110 @@ export function ScannerClient() {
   }
 
   async function submitScan(qrPayload: string) {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     scanningRef.current = false;
     stopCamera();
     try {
-      const res = await fetch("/api/validate", {
+      if (!navigator.onLine) {
+        throw new Error("Offline validation is unavailable. Reconnect before scanning a ticket.");
+      }
+      // This public path remains under the scanner mount and resolves to the scanner's physically
+      // prefixed BFF route through either the customer shell or the standalone deployment.
+      const response = await fetchJson("/scanner/api/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ qrPayload }),
+        body: JSON.stringify({ qrPayload, eventId, gateId: gateLabel }),
+        timeoutMs: 5_000,
+        validate: parseValidateTicketResponse,
       });
-      if (!res.ok) throw new Error(`Validate request failed (${res.status})`);
-      setResult((await res.json()) as ValidateTicketResponse);
-      setPhase("result");
+      if (mountedRef.current) {
+        setResult(response);
+        setPhase("result");
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Scan failed");
-      setPhase("idle");
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : "Scan failed");
+        setPhase("idle");
+      }
+    } finally {
+      submitInFlightRef.current = false;
     }
   }
 
   function loop() {
-    if (!scanningRef.current) return;
+    if (!scanningRef.current || decodeInFlightRef.current) return;
     const video = videoRef.current;
     if (video && video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
-      decodeFrame(video, video.videoWidth, video.videoHeight).then((text) => {
-        if (text && scanningRef.current) {
-          submitScan(text);
-          return;
-        }
-        rafRef.current = requestAnimationFrame(loop);
-      });
+      decodeInFlightRef.current = true;
+      void decodeFrame(video, video.videoWidth, video.videoHeight)
+        .then((text) => {
+          if (text && scanningRef.current) {
+            void submitScan(text);
+          }
+        })
+        .catch((e: unknown) => {
+          if (mountedRef.current) {
+            setError(e instanceof Error ? e.message : "Could not decode camera frame");
+          }
+        })
+        .finally(() => {
+          decodeInFlightRef.current = false;
+          if (scanningRef.current) rafRef.current = requestAnimationFrame(loop);
+        });
       return;
     }
     rafRef.current = requestAnimationFrame(loop);
   }
 
   async function startCamera() {
+    if (
+      startingCameraRef.current
+      || scanningRef.current
+      || streamRef.current
+      || decodeInFlightRef.current
+      || submitInFlightRef.current
+    ) return;
+    startingCameraRef.current = true;
     setError(null);
+    let acquiredStream: MediaStream | null = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
       });
-      streamRef.current = stream;
+      acquiredStream = stream;
+      // The user can leave the page or hide its tab while permission is open. Never retain a
+      // stream whose requesting component no longer owns it.
+      if (!mountedRef.current || document.hidden) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
       video.srcObject = stream;
       await video.play();
+      if (!mountedRef.current || document.hidden || streamRef.current !== stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        if (streamRef.current === stream) streamRef.current = null;
+        if (video.srcObject === stream) video.srcObject = null;
+        return;
+      }
       setPhase("camera");
       scanningRef.current = true;
       loop();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not access camera");
+      acquiredStream?.getTracks().forEach((track) => track.stop());
+      if (streamRef.current === acquiredStream) streamRef.current = null;
+      const video = videoRef.current;
+      if (video?.srcObject === acquiredStream) video.srcObject = null;
+      scanningRef.current = false;
+      if (mountedRef.current) setError(e instanceof Error ? e.message : "Could not access camera");
+    } finally {
+      startingCameraRef.current = false;
     }
   }
 
@@ -127,20 +206,31 @@ export function ScannerClient() {
   // path used to verify this feature in an environment with no physical camera (real ticket PDF
   // rasterized to an image and fed in here, docs/phase-8-plan.md Commit 8).
   async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
-    setError(null);
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (startingCameraRef.current || submitInFlightRef.current || decodeInFlightRef.current) return;
+    decodeInFlightRef.current = true;
+    setError(null);
+    stopCamera();
     try {
       const bitmap = await createImageBitmap(file);
-      const text = await decodeFrame(bitmap, bitmap.width, bitmap.height);
-      if (text) {
-        await submitScan(text);
-      } else {
-        setError("No QR code found in this image.");
+      try {
+        const text = await decodeFrame(bitmap, bitmap.width, bitmap.height);
+        if (text) {
+          await submitScan(text);
+        } else if (mountedRef.current) {
+          setError("No QR code found in this image.");
+        }
+      } finally {
+        // ImageBitmap owns decoded image memory outside JS heap. It has no useful lifetime after
+        // one decode, so release it even if BarcodeDetector or canvas conversion throws.
+        bitmap.close();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not read image");
+      if (mountedRef.current) setError(e instanceof Error ? e.message : "Could not read image");
+    } finally {
+      decodeInFlightRef.current = false;
     }
   }
 
@@ -156,33 +246,44 @@ export function ScannerClient() {
 
   return (
     <div className="mx-auto flex max-w-md flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">Scan ticket</h1>
-      {error && <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>}
+      <h1 className="text-2xl font-bold tracking-tight">Scan ticket</h1>
+      <dl className="card grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 p-4 text-sm">
+        <dt className="text-muted">Event</dt>
+        <dd className="truncate font-mono">{eventId}</dd>
+        <dt className="text-muted">Gate</dt>
+        <dd className="font-semibold">{gateLabel}</dd>
+      </dl>
+      <p className="hint">
+        Online validation required. This scanner does not validate tickets offline.
+      </p>
+      {error && <p role="alert" className="alert-danger">{error}</p>}
 
+      <video
+        ref={videoRef}
+        className={phase === "camera" ? "aspect-square w-full rounded-xl border border-border object-cover" : "hidden"}
+        playsInline
+        muted
+      />
       {phase === "camera" ? (
-        <div className="flex flex-col gap-2">
-          <video ref={videoRef} className="w-full rounded border" playsInline muted />
-          <button
-            type="button"
-            onClick={() => {
-              scanningRef.current = false;
-              stopCamera();
-              setPhase("idle");
-            }}
-            className="rounded border px-4 py-2"
-          >
-            Stop camera
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            stopCamera();
+            setPhase("idle");
+          }}
+          className="btn-secondary min-h-14 text-base"
+        >
+          Stop camera
+        </button>
       ) : (
-        <button type="button" onClick={startCamera} className="rounded bg-black px-4 py-2 text-white">
+        <button type="button" onClick={startCamera} className="btn-primary min-h-14 text-base">
           Start camera scan
         </button>
       )}
 
-      <label className="flex w-fit cursor-pointer flex-col gap-1 text-sm text-blue-600 underline">
+      <label className="btn-ghost min-h-12 border border-dashed border-border-strong has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring">
         Upload QR image instead
-        <input type="file" accept="image/*" onChange={handleUpload} className="hidden" />
+        <input type="file" accept="image/*" onChange={handleUpload} className="sr-only" />
       </label>
 
       <canvas ref={canvasRef} className="hidden" />
@@ -197,25 +298,46 @@ function ResultPanel({
   result: ValidateTicketResponse;
   onScanNext: () => void;
 }) {
+  // Verdict colors are paired with an icon and a word so staff can read them in glare or with
+  // color-vision deficiency. Amber uses dark text: white on amber fails contrast.
   const style = {
-    Valid: { bg: "bg-green-600", label: "VALID — checked in" },
-    AlreadyCheckedIn: { bg: "bg-yellow-500", label: "ALREADY CHECKED IN" },
-    NotFound: { bg: "bg-red-600", label: "NOT FOUND" },
+    Valid: { bg: "bg-green-700 text-white", label: "VALID — checked in", icon: "check" },
+    AlreadyCheckedIn: { bg: "bg-amber-400 text-slate-950", label: "ALREADY CHECKED IN", icon: "warn" },
+    NotFound: { bg: "bg-red-700 text-white", label: "NOT FOUND", icon: "cross" },
+    WrongEvent: { bg: "bg-red-700 text-white", label: "WRONG EVENT", icon: "cross" },
+    Revoked: { bg: "bg-red-700 text-white", label: "REVOKED", icon: "cross" },
   }[result.status];
 
   return (
     <div
-      className={`flex min-h-[70vh] flex-col items-center justify-center gap-4 p-6 text-white ${style.bg}`}
+      role="alert"
+      className={`flex min-h-[80vh] flex-col items-center justify-center gap-5 p-6 text-center ${style.bg}`}
     >
-      <p className="text-3xl font-bold">{style.label}</p>
+      <VerdictIcon kind={style.icon} />
+      <p className="text-4xl font-black tracking-tight">{style.label}</p>
       {result.checkedInAt && (
-        <p className="text-sm opacity-90">
+        <p className="text-base opacity-90">
           Checked in at {new Date(result.checkedInAt).toLocaleString()}
         </p>
       )}
-      <button type="button" onClick={onScanNext} className="mt-4 rounded bg-white px-6 py-2 font-medium text-black">
+      <button
+        type="button"
+        onClick={onScanNext}
+        autoFocus
+        className="mt-4 min-h-14 cursor-pointer rounded-xl bg-white px-10 text-lg font-semibold text-slate-950 shadow-lg"
+      >
         Scan next
       </button>
     </div>
+  );
+}
+
+function VerdictIcon({ kind }: { kind: string }) {
+  const path = kind === "check" ? "m5 12 5 5 9-10" : kind === "warn" ? "M12 8v5m0 3.5v.5" : "M7 7l10 10M17 7 7 17";
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="size-24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d={path} />
+    </svg>
   );
 }

@@ -1,39 +1,59 @@
-# No PVC — same as docker-compose.infra.yml (redis has no named volume there either); it's a
-# distributed lock/cache for reservation holds, not a system of record.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-        - name: redis
-          image: {{ .Values.infra.redis.image }}
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 6379
-          readinessProbe:
-            exec:
-              command: ["redis-cli", "ping"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 10
----
+{{- if .Values.infra.redis.enabled }}
 apiVersion: v1
 kind: Service
-metadata:
-  name: redis
+metadata: { name: redis }
 spec:
-  selector:
-    app: redis
+  clusterIP: None
+  selector: { app: redis }
   ports:
-    - port: 6379
-      targetPort: 6379
+    - { name: redis, port: 6379, targetPort: 6379 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: redis }
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: {{ .Values.infra.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.name }}, key: redis-password }
+          command: ["sh", "-ceu", "--"]
+          args:
+            - exec redis-server --appendonly yes --appendfsync everysec --aof-use-rdb-preamble yes --dir /data --requirepass "$REDIS_PASSWORD"
+          ports:
+            - { name: redis, containerPort: 6379 }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+{{ toYaml .Values.infra.redis.resources | indent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: { storage: {{ .Values.infra.redis.storage }} }
+{{- end }}

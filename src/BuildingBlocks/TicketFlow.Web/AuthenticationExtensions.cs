@@ -24,12 +24,23 @@ public static class AuthenticationExtensions
         var validIssuers = keycloak.GetSection("ValidIssuers").Get<string[]>();
         if (validIssuers is null || validIssuers.Length == 0)
             throw new InvalidOperationException("Missing configuration: Keycloak:ValidIssuers");
+        var production = string.Equals(
+            configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
+        if (production && (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
+                           authorityUri.Scheme != Uri.UriSchemeHttps ||
+                           validIssuers.Any(issuer =>
+                               !Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) ||
+                               issuerUri.Scheme != Uri.UriSchemeHttps)))
+        {
+            throw new InvalidOperationException(
+                "Production Keycloak authority and every valid issuer must use HTTPS.");
+        }
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
                 options.Authority = authority;
-                options.RequireHttpsMetadata = false; // dev: Keycloak này chạy HTTP thuần, không TLS
+                options.RequireHttpsMetadata = production;
                 options.MapInboundClaims = false; // giữ tên claim gốc (email/sub/name) — mặc định remap sang URI kiểu cũ (xem mục 6 phase-7-plan.md)
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
@@ -61,8 +72,17 @@ public static class AuthenticationExtensions
 
         services.AddAuthorizationBuilder()
             .AddPolicy("RequireOrganizer", p => p.RequireRole("organizer", "admin"))
+            .AddPolicy("RequireGateScanner", p => p.RequireRole("gate-staff", "organizer", "admin"))
             .AddPolicy("RequireAdmin", p => p.RequireRole("admin"))
-            .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser());
+            .AddPolicy("RequireAuthenticated", p => p.RequireAuthenticatedUser())
+            // Commit 14: endpoints one service calls on another, never a browser. Before this they
+            // were simply unauthenticated and relied on "only our containers can reach this port"
+            // — the exact "tin Docker network" the plan rules out as a security boundary (quyết
+            // định 8). The `service` realm role is deliberately NOT granted to any human-facing
+            // client, so a customer or organizer token can never satisfy this policy no matter how
+            // it was obtained; admin is not an escape hatch here either, because these routes take
+            // an already-verified identity as a parameter and would let a human impersonate one.
+            .AddPolicy("RequireServicePrincipal", p => p.RequireRole("service"));
 
         return services;
     }

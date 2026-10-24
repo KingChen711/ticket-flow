@@ -6,4 +6,24 @@ namespace TicketFlow.Reservation.Application.Abstractions;
 public interface ISeatMapNotifier
 {
     Task SeatsUpdatedAsync(Guid eventId, IReadOnlyList<Guid> seatIds, string status, CancellationToken cancellationToken = default);
+
+    // Backward-compatible overload for durable, versioned notifications. Existing test fakes and
+    // pre-Phase-12 callers can keep implementing/calling the original method; production SignalR
+    // implements this overload so clients receive the allocation generation.
+    Task SeatsUpdatedAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        string status,
+        long generation,
+        CancellationToken cancellationToken = default) =>
+        SeatsUpdatedAsync(eventId, seatIds, status, cancellationToken);
+
+    Task SeatsUpdatedAsync(
+        Guid eventId,
+        IReadOnlyList<Guid> seatIds,
+        string status,
+        long generation,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken = default) =>
+        SeatsUpdatedAsync(eventId, seatIds, status, generation, cancellationToken);
 }

@@ -114,13 +114,7 @@ public sealed class Order : Entity<Guid>
         Status = OrderStatus.Pending;
     }
 
-    public void Apply(OrderSeatsConfirmed e)
-    {
-        if (e.SeatIds is { Count: > 0 })
-            SeatIds = e.SeatIds;
-
-        Status = OrderStatus.SeatsConfirmed;
-    }
+    public void Apply(OrderSeatsConfirmed e) => Status = OrderStatus.SeatsConfirmed;
 
     public void Apply(OrderPaymentAuthorized e) => Status = OrderStatus.PaymentAuthorized;
 

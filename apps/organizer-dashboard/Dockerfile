@@ -8,7 +8,9 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/customer-web/package.json apps/customer-web/
 COPY apps/organizer-dashboard/package.json apps/organizer-dashboard/
 COPY apps/gate-scanner/package.json apps/gate-scanner/
+COPY packages/http-client/package.json packages/http-client/
 COPY packages/types/package.json packages/types/
+COPY packages/web-auth/package.json packages/web-auth/
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build

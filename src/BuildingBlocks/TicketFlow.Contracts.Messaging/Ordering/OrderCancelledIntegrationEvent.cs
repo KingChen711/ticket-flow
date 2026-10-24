@@ -11,4 +11,8 @@ public sealed record OrderCancelledIntegrationEvent(
     Guid OrderId,
     Guid UserId,
     string Reason,
-    DateTimeOffset CancelledAt);
+    DateTimeOffset CancelledAt,
+    Guid? CatalogEventId = null,
+    Guid? CancellationWorkflowId = null,
+    string? CustomerName = null,
+    string? CustomerEmail = null);

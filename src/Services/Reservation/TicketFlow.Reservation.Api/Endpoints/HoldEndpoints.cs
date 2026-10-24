@@ -1,43 +1,63 @@
+using System.Security.Claims;
 using TicketFlow.Reservation.Application.Seats;
 
 namespace TicketFlow.Reservation.Api.Endpoints;
 
-/// <summary>
-/// Confirm/release only need EventId in the body — the Redis key scheme (hold:{eventId}:{seatId})
-/// requires it to locate the right keys, and the client already has it in context (it's the
-/// same event it just held seats for). See docs/phase-2-plan.md for why holdId alone isn't enough.
-/// </summary>
-public sealed record HoldActionRequest(Guid EventId);
+public sealed record CreateHoldRequest(Guid EventId, IReadOnlyList<Guid> SeatIds);
 
 public static class HoldEndpoints
 {
     public static void MapHoldEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/holds").WithTags("Holds");
+        var group = app.MapGroup("/holds").WithTags("Holds").RequireAuthorization("RequireAuthenticated");
 
-        group.MapPost("/", async (HoldSeatsRequest request, ReservationService service, CancellationToken ct) =>
-        {
-            var result = await service.HoldAsync(request, ct);
-            return result.Success ? Results.Ok(result) : Results.Conflict(result);
-        });
-
-        group.MapPost("/{holdId:guid}/confirm", async (
-            Guid holdId,
-            HoldActionRequest request,
+        group.MapPost("/", async (
+            CreateHoldRequest request,
+            ClaimsPrincipal user,
             ReservationService service,
             CancellationToken ct) =>
         {
-            var confirmed = await service.ConfirmAsync(request.EventId, holdId, ct);
-            return confirmed.Count > 0 ? Results.Ok() : Results.NotFound();
+            if (!Guid.TryParse(user.FindFirstValue("sub"), out var ownerUserId))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var result = await service.HoldAsync(
+                new HoldSeatsRequest(request.EventId, request.SeatIds, ownerUserId), ct);
+
+            // A throttled caller must be able to tell "you are asking for too much" apart from
+            // "these seats are gone" — otherwise a per-user cap is indistinguishable from a real
+            // sold-out event for both the UI and anyone probing availability (Commit 5 delta).
+            return result.Reason switch
+            {
+                HoldRejectionReason.RateLimited => Results.Json(result, statusCode: StatusCodes.Status429TooManyRequests),
+                HoldRejectionReason.HoldCapExceeded => Results.Json(result, statusCode: StatusCodes.Status409Conflict),
+                HoldRejectionReason.SeatsUnavailable => Results.Conflict(result),
+                _ => Results.Ok(result),
+            };
+        });
+
+        group.MapGet("/{holdId:guid}/quote", async (
+            Guid holdId,
+            ClaimsPrincipal user,
+            ReservationService service,
+            CancellationToken ct) =>
+        {
+            if (!Guid.TryParse(user.FindFirstValue("sub"), out var ownerUserId))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var quote = await service.GetQuoteAsync(holdId, ownerUserId, ct);
+            return quote is null ? Results.NotFound() : Results.Ok(quote);
         });
 
         group.MapPost("/{holdId:guid}/release", async (
             Guid holdId,
-            HoldActionRequest request,
+            ClaimsPrincipal user,
             ReservationService service,
             CancellationToken ct) =>
         {
-            var released = await service.ReleaseAsync(request.EventId, holdId, ct);
+            if (!Guid.TryParse(user.FindFirstValue("sub"), out var ownerUserId))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var released = await service.ReleaseOwnedHoldAsync(holdId, ownerUserId, ct);
             return released ? Results.NoContent() : Results.NotFound();
         });
     }

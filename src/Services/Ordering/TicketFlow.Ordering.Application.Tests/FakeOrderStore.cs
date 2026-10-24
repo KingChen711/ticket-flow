@@ -22,5 +22,23 @@ public sealed class FakeOrderStore : IOrderStore
 
     public void Append(Guid orderId, object @event) => _streams[orderId].Add(@event);
 
+    /// <summary>
+    /// Models the version-checked write path the admin handlers use (Commit 9 audit). The version
+    /// itself is not contended in these tests — what matters is that the handlers go through this
+    /// path at all, rather than loading and appending blindly.
+    /// </summary>
+    public Task<IOrderStreamWriter?> FetchForWritingAsync(Guid orderId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IOrderStreamWriter?>(
+            _streams.TryGetValue(orderId, out var events)
+                ? new Writer(Order.Load(events), events.Count, events)
+                : null);
+
     public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    private sealed class Writer(Order order, long version, List<object> events) : IOrderStreamWriter
+    {
+        public Order Order { get; } = order;
+        public long Version { get; } = version;
+        public void Append(object @event) => events.Add(@event);
+    }
 }

@@ -7,13 +7,10 @@ public class ConfirmOrderCommandHandlerTests
 {
     private static async Task<(FakeOrderStore Store, Guid OrderId)> PlaceOrderAsync()
     {
-        var store = new FakeOrderStore();
-        var seatId = Guid.NewGuid();
-        var placeHandler = new PlaceOrderCommandHandler(
-            store, new FakeIntegrationEventPublisher(), FakeSeatPricingSource.ForSeats([seatId]), TimeProvider.System);
+        var (placeHandler, store, _) = PlaceOrderCommandHandlerTests.CreateHandler();
         var placed = await placeHandler.HandleAsync(
             new PlaceOrderCommand(
-                Guid.NewGuid(), Guid.NewGuid(), [seatId],
+                Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()], 100_000, "VND",
                 Guid.NewGuid(), "CreditCard", "Nguyen Van A", "a@example.com"));
 
         return (store, placed.OrderId);

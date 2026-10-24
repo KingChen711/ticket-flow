@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.Marten" />
+    <PackageReference Include="MassTransit.RabbitMQ" />
+    <PackageReference Include="Marten" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="StackExchange.Redis" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.RabbitMq" />
+    <PackageReference Include="Testcontainers.Redis" />
+    <PackageReference Include="Testcontainers.Elasticsearch" />
+    <PackageReference Include="Testcontainers.MongoDb" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- Intentionally NOT added to TicketFlow.slnx in Commit 1. The tests carrying the
+       Phase12ExpectedFailure trait are executable (never Skip) and deliberately red until the
+       matching remediation commit lands. Keeping this project as an explicit hardening gate
+       preserves the existing solution-level 81/81 regression gate. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BuildingBlocks\TicketFlow.Contracts.Messaging\TicketFlow.Contracts.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\BuildingBlocks\TicketFlow.Web\TicketFlow.Web.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Api\TicketFlow.Ordering.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Application\TicketFlow.Ordering.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ordering\TicketFlow.Ordering.Domain\TicketFlow.Ordering.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Api\TicketFlow.Payment.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Application\TicketFlow.Payment.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Domain\TicketFlow.Payment.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Application\TicketFlow.Reservation.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Api\TicketFlow.Reservation.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Domain\TicketFlow.Reservation.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Search\TicketFlow.Search.Api\TicketFlow.Search.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Search\TicketFlow.Search.Application\TicketFlow.Search.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Search\TicketFlow.Search.Infrastructure\TicketFlow.Search.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Notification\TicketFlow.Notification.Api\TicketFlow.Notification.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Notification\TicketFlow.Notification.Application\TicketFlow.Notification.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Notification\TicketFlow.Notification.Infrastructure\TicketFlow.Notification.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Api\TicketFlow.Ticketing.Api.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Application\TicketFlow.Ticketing.Application.csproj" />
+    <ProjectReference Include="..\..\src\Functions\TicketFlow.Functions\TicketFlow.Functions.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Domain\TicketFlow.Ticketing.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Ticketing\TicketFlow.Ticketing.Infrastructure\TicketFlow.Ticketing.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Reservation\TicketFlow.Reservation.Infrastructure\TicketFlow.Reservation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Payment\TicketFlow.Payment.Infrastructure\TicketFlow.Payment.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Infrastructure\TicketFlow.Catalog.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Application\TicketFlow.Catalog.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Catalog\TicketFlow.Catalog.Domain\TicketFlow.Catalog.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Application\TicketFlow.Identity.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Domain\TicketFlow.Identity.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Services\Identity\TicketFlow.Identity.Infrastructure\TicketFlow.Identity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Services\Recommendation\TicketFlow.Recommendation.Application\TicketFlow.Recommendation.Application.csproj" />
+    <ProjectReference Include="..\..\src\Services\Recommendation\TicketFlow.Recommendation.Infrastructure\TicketFlow.Recommendation.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

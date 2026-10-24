@@ -1,5 +1,5 @@
 using TicketFlow.Contracts.Messaging.Ordering;
-using TicketFlow.Ordering.Application.Abstractions;
+using TicketFlow.Ordering.Application.Checkout;
 using TicketFlow.Ordering.Application.Orders;
 using TicketFlow.Ordering.Domain.Orders;
 
@@ -8,28 +8,38 @@ namespace TicketFlow.Ordering.Application.Tests.Orders;
 public class PlaceOrderCommandHandlerTests
 {
     private static PlaceOrderCommand ValidCommand(
-        Guid? customerId = null, Guid? catalogEventId = null, IReadOnlyList<Guid>? seatIds = null) =>
+        Guid? customerId = null, Guid? catalogEventId = null, IReadOnlyList<Guid>? seatIds = null,
+        decimal totalAmount = 500_000, string? currency = "VND") =>
         new(
             customerId ?? Guid.NewGuid(),
             catalogEventId ?? Guid.NewGuid(),
             seatIds ?? [Guid.NewGuid(), Guid.NewGuid()],
+            totalAmount,
+            currency,
             Guid.NewGuid(),
             "CreditCard",
             "Nguyen Van A",
             "a@example.com");
 
-    private static PlaceOrderCommandHandler Handler(ISeatPricingSource pricing, FakeOrderStore? store = null, FakeIntegrationEventPublisher? publisher = null) =>
-        new(store ?? new FakeOrderStore(), publisher ?? new FakeIntegrationEventPublisher(), pricing, TimeProvider.System);
+    internal static (PlaceOrderCommandHandler Handler, FakeOrderStore Store, FakeCheckoutOperationStore Operations)
+        CreateHandler()
+    {
+        var orders = new FakeOrderStore();
+        var operations = new FakeCheckoutOperationStore();
+        var handler = new PlaceOrderCommandHandler(
+            new CheckoutAcceptanceService(
+                new FakeTransactionalOrderStore(orders, operations), operations, TimeProvider.System));
+
+        return (handler, orders, operations);
+    }
 
     [Fact]
     public async Task HandleAsync_ValidCommand_StartsStreamAndReturnsPendingOrder()
     {
-        var store = new FakeOrderStore();
-        var publisher = new FakeIntegrationEventPublisher();
+        var (handler, store, operations) = CreateHandler();
         var customerId = Guid.NewGuid();
         var catalogEventId = Guid.NewGuid();
         var seatIds = new List<Guid> { Guid.NewGuid(), Guid.NewGuid() };
-        var handler = Handler(FakeSeatPricingSource.ForSeats(seatIds, 250_000), store, publisher);
 
         var response = await handler.HandleAsync(ValidCommand(customerId, catalogEventId, seatIds));
 
@@ -45,88 +55,32 @@ public class PlaceOrderCommandHandlerTests
         var placed = Assert.Single(events);
         Assert.IsType<OrderPlaced>(placed);
 
-        // The saga-starting integration event went out alongside the stream write, carrying the
-        // server-computed amount that payment will charge.
-        var published = Assert.Single(publisher.Published);
-        var orderSubmitted = Assert.IsType<OrderSubmitted>(published);
+        // Commit 7: the saga-starting message is now queued in the outbox in the same transaction
+        // rather than published from inside the handler, so what this asserts is that it was
+        // durably recorded — the relay is what puts it on the broker.
+        var dispatch = Assert.Single(operations.Dispatches);
+        Assert.Equal(OrderDispatchState.Pending, dispatch.State);
+        var orderSubmitted = Assert.IsType<OrderSubmitted>(dispatch.Payload);
         Assert.Equal(response.OrderId, orderSubmitted.OrderId);
         Assert.Equal("Nguyen Van A", orderSubmitted.CustomerName);
-        Assert.Equal(500_000, orderSubmitted.Amount);
-    }
-
-    [Fact]
-    public async Task HandleAsync_SumsEachSeatAtItsOwnSectionPrice()
-    {
-        var vip = Guid.NewGuid();
-        var standard = Guid.NewGuid();
-        var vipSeat = Guid.NewGuid();
-        var standardSeat1 = Guid.NewGuid();
-        var standardSeat2 = Guid.NewGuid();
-        var pricing = new FakeSeatPricingSource();
-        pricing.SectionPrices.Add(new SectionPrice(vip, 1_000_000, "VND"));
-        pricing.SectionPrices.Add(new SectionPrice(standard, 300_000, "VND"));
-        pricing.SeatSections[vipSeat] = vip;
-        pricing.SeatSections[standardSeat1] = standard;
-        pricing.SeatSections[standardSeat2] = standard;
-
-        var response = await Handler(pricing).HandleAsync(ValidCommand(seatIds: [vipSeat, standardSeat1, standardSeat2]));
-
-        Assert.Equal(1_600_000, response.TotalAmount);
-    }
-
-    [Fact]
-    public async Task HandleAsync_SeatOutsideTheEvent_IsRejectedAndNothingIsWritten()
-    {
-        var known = Guid.NewGuid();
-        var store = new FakeOrderStore();
-        var publisher = new FakeIntegrationEventPublisher();
-        var handler = Handler(FakeSeatPricingSource.ForSeats([known]), store, publisher);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            handler.HandleAsync(ValidCommand(seatIds: [known, Guid.NewGuid()])));
-
-        Assert.Empty(publisher.Published);
-    }
-
-    [Fact]
-    public async Task HandleAsync_SectionWithoutPriceTier_IsRejected()
-    {
-        var seat = Guid.NewGuid();
-        var pricing = new FakeSeatPricingSource();
-        pricing.SeatSections[seat] = Guid.NewGuid();
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(pricing).HandleAsync(ValidCommand(seatIds: [seat])));
-    }
-
-    [Fact]
-    public async Task HandleAsync_MixedCurrencies_IsRejected()
-    {
-        var a = Guid.NewGuid();
-        var b = Guid.NewGuid();
-        var sectionA = Guid.NewGuid();
-        var sectionB = Guid.NewGuid();
-        var pricing = new FakeSeatPricingSource();
-        pricing.SectionPrices.Add(new SectionPrice(sectionA, 100, "VND"));
-        pricing.SectionPrices.Add(new SectionPrice(sectionB, 5, "USD"));
-        pricing.SeatSections[a] = sectionA;
-        pricing.SeatSections[b] = sectionB;
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(pricing).HandleAsync(ValidCommand(seatIds: [a, b])));
-    }
-
-    [Fact]
-    public async Task HandleAsync_SameSeatTwice_IsRejectedInsteadOfChargedTwice()
-    {
-        var seat = Guid.NewGuid();
-
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            Handler(FakeSeatPricingSource.ForSeats([seat])).HandleAsync(ValidCommand(seatIds: [seat, seat])));
     }
 
     [Fact]
     public async Task HandleAsync_NoSeats_Throws()
     {
+        var (handler, _, _) = CreateHandler();
+
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            Handler(new FakeSeatPricingSource()).HandleAsync(ValidCommand(seatIds: [])));
+            handler.HandleAsync(ValidCommand(seatIds: [], totalAmount: 100_000)));
+    }
+
+    [Fact]
+    public async Task HandleAsync_NoCurrency_DefaultsToVnd()
+    {
+        var (handler, _, _) = CreateHandler();
+
+        var response = await handler.HandleAsync(ValidCommand(seatIds: [Guid.NewGuid()], totalAmount: 100_000, currency: null));
+
+        Assert.Equal("VND", response.Currency);
     }
 }

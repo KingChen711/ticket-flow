@@ -50,29 +50,6 @@ public class OrderTests
     }
 
     [Fact]
-    public void SeatsConfirmed_ReplacesRequestedSeatsWithTheConfirmedOnes()
-    {
-        var kept = Guid.NewGuid();
-        var placed = Order.Place(Guid.NewGuid(), Guid.NewGuid(), [kept, Guid.NewGuid()], Money.Create(200_000), DateTimeOffset.UtcNow);
-        var seatsConfirmed = new OrderSeatsConfirmed(placed.OrderId, DateTimeOffset.UtcNow, [kept]);
-
-        var order = Order.Load([placed, seatsConfirmed]);
-
-        Assert.Equal([kept], order.SeatIds);
-    }
-
-    [Fact]
-    public void SeatsConfirmed_StoredBeforeSeatIdsExisted_KeepsTheRequestedSeats()
-    {
-        var seatIds = new List<Guid> { Guid.NewGuid() };
-        var placed = Order.Place(Guid.NewGuid(), Guid.NewGuid(), seatIds, Money.Create(100_000), DateTimeOffset.UtcNow);
-
-        var order = Order.Load([placed, new OrderSeatsConfirmed(placed.OrderId, DateTimeOffset.UtcNow)]);
-
-        Assert.Equal(seatIds, order.SeatIds);
-    }
-
-    [Fact]
     public void LoadPlacedThenConfirmed_YieldsConfirmedStatus()
     {
         var placed = Order.Place(Guid.NewGuid(), Guid.NewGuid(), [Guid.NewGuid()], Money.Create(100_000), DateTimeOffset.UtcNow);

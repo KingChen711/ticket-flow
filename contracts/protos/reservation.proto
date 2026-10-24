@@ -9,6 +9,24 @@ package ticketflow.reservation.v1;
 // single sync round-trip to prove gRPC works; real seat-holding logic lands in Phase 2.
 service ReservationService {
   rpc CheckSeatAvailability (CheckSeatAvailabilityRequest) returns (CheckSeatAvailabilityResponse);
+  rpc GetHoldQuote (GetHoldQuoteRequest) returns (GetHoldQuoteResponse);
+}
+
+message GetHoldQuoteRequest {
+  string hold_id = 1;
+  string owner_user_id = 2;
+}
+
+message GetHoldQuoteResponse {
+  string hold_id = 1;
+  string event_id = 2;
+  string owner_user_id = 3;
+  repeated string seat_ids = 4;
+  string amount = 5;
+  string currency = 6;
+  int64 price_snapshot_version = 7;
+  string expires_at = 8;
+  int64 generation = 9;
 }
 
 message CheckSeatAvailabilityRequest {

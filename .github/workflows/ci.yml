@@ -2,42 +2,59 @@ name: CI
 
 on:
   push:
-    branches: [master]
-  # Every pull request, whatever its base branch, gets install + lint + build + test. The GHCR
-  # push and Kind deploy jobs below stay restricted to non-PR events.
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_chaos:
+        description: Run the stateful recreation gate after full-stack E2E
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 19 * * *"
 
-# A newer push to the same branch supersedes an in-flight build/deployment. Keeping the group
-# branch-scoped avoids cancelling a pull-request validation because main was updated.
 concurrency:
   group: ticketflow-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 permissions:
   contents: read
 
 env:
   REGISTRY: ghcr.io
+  COMPOSE_PROJECT_NAME: ticketflow-e2e
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   DOTNET_NOLOGO: "1"
+  PNPM_VERSION: 11.1.2
 
 jobs:
-  image-matrix:
-    name: Read image matrix
+  configuration:
+    name: Configuration contracts
     runs-on: ubuntu-latest
-    outputs:
-      include: ${{ steps.matrix.outputs.include }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Publish the canonical image matrix
-        id: matrix
-        run: echo "include=$(jq -c . .github/images.json)" >> "$GITHUB_OUTPUT"
+      - name: Reject Compose/Helm Keycloak realm drift
+        run: cmp infrastructure/keycloak/realm-export.json infrastructure/k8s/ticketflow/files/realm-export.json
 
-  test:
-    name: Test .NET solution
+      - name: Validate Compose models
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml config --quiet
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+
+      - name: Lint development and production chart profiles
+        run: |
+          helm lint infrastructure/k8s/ticketflow
+          helm lint infrastructure/k8s/ticketflow -f infrastructure/k8s/ticketflow/values-production.yaml
+
+  backend-fast:
+    name: Backend unit and contract regression
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -49,26 +66,28 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # This intentionally runs the integration projects too. GitHub-hosted Linux runners expose
-      # Docker, so Testcontainers verifies the real Postgres/Redis/RabbitMQ dependencies.
       - name: Restore
         run: dotnet restore TicketFlow.slnx
 
-      # Whitespace only: the full `dotnet format` style check still reports existing using-order
-      # differences that have not been fixed repo-wide.
-      - name: Lint
-        run: dotnet format whitespace TicketFlow.slnx --verify-no-changes
+      - name: Run fast regression
+        run: >-
+          dotnet test TicketFlow.slnx --configuration Release --no-restore
+          --logger "trx;LogFileName=backend-fast.trx"
+          --results-directory output/test-results/backend-fast
 
-      - name: Build
-        run: dotnet build TicketFlow.slnx --configuration Release --no-restore
+      - name: Upload failure results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-fast-${{ github.run_id }}
+          path: output/test-results/backend-fast
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Test
-        run: dotnet test TicketFlow.slnx --configuration Release --no-build --logger "console;verbosity=normal"
-
-  web:
-    name: Lint, test and build web apps
+  frontend:
+    name: Frontend frozen install, lint, types, unit and multi-zone browser
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -76,29 +95,182 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11
+          version: ${{ env.PNPM_VERSION }}
 
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
-      - name: Install
+      - name: Frozen install
         run: pnpm install --frozen-lockfile
 
       - name: Lint
         run: pnpm lint
 
-      - name: Test
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit and runtime-contract tests
+        run: pnpm test:web
+
+      - name: App unit tests (Vitest)
         run: pnpm test
 
-      - name: Build
+      - name: Production build all zones
         run: pnpm build
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright multi-zone contract
+        run: pnpm test:e2e:frontend
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-playwright-${{ github.run_id }}
+          path: output/playwright
+          if-no-files-found: ignore
+          retention-days: 14
+
+  integration-concurrency:
+    name: Integration, kill/retry and concurrency hardening
+    needs: [configuration, backend-fast]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore hardening project
+        run: dotnet restore tests/TicketFlow.Phase12.HardeningTests/TicketFlow.Phase12.HardeningTests.csproj
+
+      - name: Run the complete hardening gate twice
+        shell: bash
+        run: |
+          for run in 1 2; do
+            dotnet test tests/TicketFlow.Phase12.HardeningTests/TicketFlow.Phase12.HardeningTests.csproj \
+              --configuration Release --no-restore \
+              --filter "Category=Phase12Harness" \
+              --logger "trx;LogFileName=phase12-harness-${run}.trx" \
+              --results-directory output/test-results/hardening
+          done
+
+      - name: Upload failure results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-hardening-${{ github.run_id }}
+          path: output/test-results/hardening
+          if-no-files-found: ignore
+          retention-days: 14
+
+  full-stack-e2e:
+    name: Full-stack purchase, scanner, cancellation, outage and flash sale
+    needs: [configuration, backend-fast, frontend, integration-concurrency]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install web dependencies and browser
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Build frontend zones
+        run: pnpm build
+
+      - name: Start deterministic E2E stack
+        run: bash tests/ci/start-e2e-stack.sh
+
+      - name: Run authenticated purchase, scanner, cancellation and outage suite
+        run: pnpm test:e2e:full
+
+      - name: Run business-ID flash-sale reconciliation
+        env:
+          FLASH_SALE_CUSTOMER_PASSWORD: Customer1!Dev
+          FLASH_SALE_ORGANIZER_PASSWORD: Organizer1!Dev
+          FLASH_SALE_INTERNAL_CLIENT_SECRET: internal-services-dev-secret
+          FLASH_SALE_SEAT_COUNT: "10"
+          FLASH_SALE_VIRTUAL_USERS: "50"
+          FLASH_SALE_SETTLE_TIMEOUT_SECONDS: "300"
+          FLASH_SALE_REPORT_DIR: output/flash-sale
+        run: dotnet run --project tests/TicketFlow.FlashSale.LoadTests --configuration Release
+
+      - name: Verify dashboards and hardening alerts are provisioned
+        shell: bash
+        run: |
+          curl --fail --silent -u admin:ticketflow http://localhost:3300/api/v1/provisioning/alert-rules > output/e2e/alert-rules.json
+          jq -e 'map(.uid) | index("phase12-saga-manual-review") and index("phase12-payment-unknown") and index("phase12-saga-deadline")' output/e2e/alert-rules.json
+          curl --fail --silent http://localhost:19090/api/v1/targets | jq -e '.data.activeTargets | length >= 11'
+
+      - name: Collect logs, traces, DB invariants and reproduction seeds
+        if: always()
+        run: bash tests/ci/collect-evidence.sh output/ci/full-stack
+
+      - name: Upload full-stack evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase12-full-stack-${{ github.run_id }}
+          path: |
+            output/ci/full-stack
+            output/e2e
+            output/flash-sale
+            output/playwright
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Tear down E2E stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down --volumes --remove-orphans
+
+  image-matrix:
+    name: Read image matrix
+    if: github.event_name != 'schedule'
+    needs: [integration-concurrency, frontend]
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.matrix.outputs.include }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Publish canonical image matrix
+        id: matrix
+        run: echo "include=$(jq -c . .github/images.json)" >> "$GITHUB_OUTPUT"
 
   build-and-push:
     name: Build ${{ matrix.name }}
-    needs: [image-matrix, test, web]
+    if: github.event_name != 'schedule'
+    needs: [image-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -112,8 +284,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
-      # GHCR repository segments must be lowercase. The remote owner can contain uppercase
-      # characters, so normalize it once instead of assuming a particular personal account name.
       - name: Resolve GHCR image prefix
         id: image-prefix
         shell: bash
@@ -122,8 +292,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Pull requests build every image but never receive a package-write side effect. Push and
-      # workflow_dispatch runs publish the immutable Git SHA tag used by the subsequent Kind job.
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -132,7 +300,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish image
+      - name: Build and conditionally publish immutable image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -144,13 +312,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
   deploy-kind:
-    name: Deploy to Kind and smoke test
-    needs: [image-matrix, build-and-push]
-    # A pull request proves test + 14-image builds. Only trusted push/manual events can write
-    # GHCR and then deploy the images that were published with this run's SHA.
-    if: github.event_name != 'pull_request'
+    name: Deploy immutable images to clean Kind
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [image-matrix, build-and-push, full-stack-e2e]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     permissions:
       contents: read
       packages: read
@@ -180,10 +346,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Load the SHA-tagged GHCR images into Kind after pulling them from the registry. This keeps
-      # the chart's imagePullPolicy=IfNotPresent correct for private packages and proves the
-      # published artifacts can be pulled before Helm consumes them.
-      - name: Pull and load application images into Kind
+      - name: Pull and load immutable application images
         env:
           IMAGE_PREFIX: ${{ steps.image-prefix.outputs.value }}
           IMAGE_TAG: ${{ github.sha }}
@@ -195,6 +358,15 @@ jobs:
             kind load docker-image --name ticketflow "$qualified_image"
           done < <(jq -r '.[].image' .github/images.json)
 
+      # The chart models Functions as an external provider. CI supplies the deterministic Lambda
+      # contract adapter on Kind's Docker network so a clean cluster has a real health gate without
+      # relying on a developer's paid LocalStack token.
+      - name: Start external Functions contract provider
+        run: |
+          docker build -f tests/TicketFlow.E2E.FunctionsProvider/Dockerfile -t ticketflow/e2e-functions:${{ github.sha }} .
+          docker run -d --name ticketflow-e2e-functions --network kind --network-alias ticketflow-localstack \
+            -e ASPNETCORE_URLS=http://+:4566 ticketflow/e2e-functions:${{ github.sha }}
+
       - name: Lint and install chart
         env:
           IMAGE_PREFIX: ${{ steps.image-prefix.outputs.value }}
@@ -203,26 +375,92 @@ jobs:
         run: |
           helm lint infrastructure/k8s/ticketflow
           helm install ticketflow infrastructure/k8s/ticketflow \
-            --namespace ticketflow \
-            --create-namespace \
-            --wait \
-            --timeout 15m \
+            --namespace ticketflow --create-namespace --wait --wait-for-jobs --timeout 15m \
             --set-string appImages.registry="$IMAGE_PREFIX" \
-            --set-string appImages.tag="$IMAGE_TAG"
+            --set-string appImages.tag="$IMAGE_TAG" \
+            --set-string runtime.functions.healthUrl="http://functions-provider:4566/health"
 
-      - name: Wait for every deployment
-        run: kubectl rollout status deployment --all --namespace ticketflow --timeout=10m
-
-      - name: Smoke gateway health and catalog route
-        shell: bash
+      - name: Wait and smoke public gateway
         run: |
-          curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/health
+          kubectl wait --for=condition=complete job --all --namespace ticketflow --timeout=10m
+          kubectl rollout status deployment --all --namespace ticketflow --timeout=10m
+          curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/health/live
           curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/catalog/events
+          kubectl get jobs --namespace ticketflow -o json | jq -e '.items | (length > 0 and all(.[]; .status.succeeded == 1))'
 
       - name: Collect cluster diagnostics on failure
         if: failure()
         run: |
-          kubectl get pods --namespace ticketflow --output wide || true
-          kubectl get events --namespace ticketflow --sort-by=.lastTimestamp || true
-          kubectl describe pods --namespace ticketflow || true
-          kubectl logs --namespace ticketflow --all-containers --prefix --tail=200 --selector app=gateway || true
+          mkdir -p output/ci/kind
+          kubectl get all,pvc,jobs --namespace ticketflow -o wide > output/ci/kind/resources.txt 2>&1 || true
+          kubectl get events --namespace ticketflow --sort-by=.lastTimestamp > output/ci/kind/events.txt 2>&1 || true
+          kubectl logs --namespace ticketflow --all-containers --prefix --tail=500 --selector app=gateway > output/ci/kind/gateway.log 2>&1 || true
+
+      - name: Upload Kind diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase12-kind-${{ github.run_id }}
+          path: output/ci/kind
+          if-no-files-found: ignore
+          retention-days: 30
+
+  chaos:
+    name: Nightly/explicit persistent-state recreation gate
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_chaos)
+    needs: [full-stack-e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Prepare browser and frontend zones
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Start a fresh E2E stack and create a durable purchase seed
+        run: |
+          bash tests/ci/start-e2e-stack.sh
+          pnpm exec playwright test --config tests/e2e/playwright.config.ts --project=full-stack --grep "one-time scanner check-in"
+
+      - name: Recreate Redis, RabbitMQ, Kafka and Keycloak and verify state markers plus business IDs
+        run: bash tests/ci/run-chaos.sh
+
+      - name: Collect chaos evidence
+        if: always()
+        run: bash tests/ci/collect-evidence.sh output/ci/chaos
+
+      - name: Upload chaos evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase12-chaos-${{ github.run_id }}
+          path: |
+            output/ci/chaos
+            output/e2e
+            output/playwright
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Tear down chaos stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down --volumes --remove-orphans

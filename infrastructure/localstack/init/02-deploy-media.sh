@@ -91,4 +91,4 @@ awslocal s3api put-bucket-notification-configuration \
   --bucket "$BUCKET_NAME" \
   --notification-configuration file:///tmp/posters-notification.json
 
-echo "[media] done — POST/GET through the gateway's /media/posters route, or invoke UploadPosterFunction/GetPosterFunction directly by name."
+echo "[media] done — POST through /media/events/{eventId}/posters and GET through /media/{key}, or invoke the functions directly by name."

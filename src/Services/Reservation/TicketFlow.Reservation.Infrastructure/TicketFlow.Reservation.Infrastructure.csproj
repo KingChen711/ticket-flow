@@ -23,6 +23,8 @@
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="StackExchange.Redis" />
+    <!-- ReservationDbContext maps MassTransit's InboxState/OutboxMessage/OutboxState entities. -->
+    <PackageReference Include="MassTransit.EntityFrameworkCore" />
   </ItemGroup>
 
   <ItemGroup>

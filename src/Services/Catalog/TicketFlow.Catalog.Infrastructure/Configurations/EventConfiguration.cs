@@ -15,12 +15,22 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.Property(e => e.Description).HasMaxLength(2000);
         builder.Property(e => e.Artist).IsRequired().HasMaxLength(200);
         builder.Property(e => e.VenueId).IsRequired();
+        builder.HasIndex(e => e.OrganizerId);
+        builder.Property(e => e.AggregateVersion).HasDefaultValue(0L).IsRequired();
+        builder.Property(e => e.PriceSnapshotVersion).HasDefaultValue(0L).IsRequired();
         builder.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
+        // PostgreSQL's system xmin supplies optimistic concurrency without an application column.
+        builder.Property<uint>("xmin").HasColumnName("xmin").IsRowVersion();
 
         builder.OwnsOne(e => e.Schedule, schedule =>
         {
             schedule.Property(s => s.StartsAt).HasColumnName("schedule_starts_at").IsRequired();
             schedule.Property(s => s.EndsAt).HasColumnName("schedule_ends_at").IsRequired();
+            schedule.Property(s => s.TimeZoneId)
+                .HasColumnName("schedule_time_zone_id")
+                .HasMaxLength(100)
+                .HasDefaultValue("UTC")
+                .IsRequired();
         });
         builder.Navigation(e => e.Schedule).IsRequired();
 
@@ -31,6 +41,11 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<Event>
             priceTier.HasKey(p => p.Id);
             priceTier.Property(p => p.Id).ValueGeneratedNever();
             priceTier.Property(p => p.SectionId).IsRequired();
+
+            // Backstop for Event.AddPriceTier's own duplicate-section check (Commit 11) — same
+            // load-then-decide race as SeatMap.AddSection: two concurrent AddPriceTier calls for
+            // two different sections can each miss the other's not-yet-saved tier.
+            priceTier.HasIndex("EventId", nameof(PriceTier.SectionId)).IsUnique();
 
             priceTier.OwnsOne(p => p.Price, money =>
             {

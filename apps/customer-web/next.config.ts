@@ -12,17 +12,21 @@ const nextConfig: NextConfig = {
   // Docker multi-stage build (Dockerfile) copies only the standalone output — needs this to emit
   // a minimal server.js instead of assuming `next start` + full node_modules.
   output: "standalone",
+  // Keep /scanner/ stable: it is the PWA start URL and must remain inside scope /scanner/.
+  // Next's default canonical redirect would otherwise remove the trailing slash before the zone
+  // rewrite runs and put the installed app back outside its declared scope.
+  skipTrailingSlashRedirect: true,
   // Workspace packages ship raw TS source, no build step (see docs/phase-8-plan.md mục 6) —
   // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
-  transpilePackages: ["@ticketflow/types"],
+  transpilePackages: ["@ticketflow/http-client", "@ticketflow/types", "@ticketflow/web-auth"],
   // Multi-Zones (docs/phase-8-plan.md Commit 9, mục 1) — customer-web is the shell, independent
   // deployability + edge composition instead of runtime JS federation (Module Federation probe,
   // Commit 3, confirmed dead for App Router). organizer-dashboard/gate-scanner each keep their
   // pages under a matching src/app/organizer|scanner/* folder and set assetPrefix
   // ("/organizer-static"/"/scanner-static") for their /_next/static output — 2 rewrite rules per
-  // zone (pages + assets). Their /api/auth/* stays unprefixed and is never reached through this
-  // shell (real bug found + fixed: routing basePath through both Next.js AND NextAuth doubled up
-  // the strip and broke the OAuth callback — see the target apps' next.config.ts/.env.local).
+  // zone (pages + assets). Zone-owned APIs now also live under the same manual page prefix, so
+  // OAuth callbacks and the scanner BFF stay reachable through this shell without a special
+  // strip/re-add rule.
   async rewrites() {
     return [
       { source: "/organizer-static/:path*", destination: `${organizerZoneUrl}/organizer-static/:path*` },

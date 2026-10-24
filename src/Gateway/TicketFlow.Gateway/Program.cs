@@ -16,30 +16,41 @@ builder.Services.AddTicketFlowObservability(builder.Configuration, "gateway");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+builder.Services.AddHttpClient("catalog-media-ownership", client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Catalog:BaseUrl"]
+        ?? throw new InvalidOperationException("Missing configuration: Catalog:BaseUrl"));
+    client.Timeout = TimeSpan.FromSeconds(3);
+});
+
+var lambdaHealthUrl = builder.Configuration["Aws:HealthUrl"];
+if (Uri.TryCreate(lambdaHealthUrl, UriKind.Absolute, out var lambdaHealthUri))
+    builder.Services.AddHttpReadinessCheck("functions-provider", lambdaHealthUri);
+else if (builder.Environment.IsProduction())
+    throw new InvalidOperationException("Production requires an absolute 'Aws:HealthUrl'.");
 
 // Phase 9 Commit 2 — media Lambdas are invoked via the Lambda Invoke API (MediaEndpoints.cs),
 // not proxied through YARP; see that file's doc comment for why Function URLs didn't work out.
-builder.Services.AddSingleton<IAmazonLambda>(_ =>
-{
-    var serviceUrl = builder.Configuration["Aws:LambdaServiceUrl"]
-        ?? throw new InvalidOperationException("Configuration 'Aws:LambdaServiceUrl' was not found.");
-    // LocalStack doesn't validate credentials, but the SDK still needs non-empty values to sign
-    // requests — same "test"/"test" convention already used for this dev environment's own
-    // ~/.aws/credentials (docs/phase-9-plan.md Commit 1).
-    return new AmazonLambdaClient(new BasicAWSCredentials("test", "test"), new AmazonLambdaConfig { ServiceURL = serviceUrl });
-});
+builder.Services.AddSingleton<IAmazonLambda>(_ => CreateLambdaClient(
+    builder.Configuration,
+    builder.Environment.IsProduction()));
 
 // Phase 8 Commit 6 — the browser connects here directly for the SignalR seat map (the one
 // exception to the BFF pattern, docs/phase-8-plan.md mục 2/5), so this is the one route real
 // cross-origin browser requests hit. A real bug found via probing: the CORS *preflight* (OPTIONS)
 // request carries no Authorization header by spec, and without CORS middleware ahead of auth,
 // RequireAuthenticated 401s the preflight itself — the browser then reports a generic
-// "Failed to fetch" with no indication it was ever a CORS problem. AllowCredentials required
-// (SignalR negotiate sends the token), which means an explicit origin allowlist, not "*".
+// "Failed to fetch" with no indication it was ever a CORS problem. SignalR still sends
+// credentials by default even though this read-only public seat-status hub no longer receives a
+// bearer token, so AllowCredentials requires an explicit origin allowlist rather than "*".
+var allowedOrigins = NormalizeCorsOrigins(
+    builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>());
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy
-        .WithOrigins("http://localhost:3000", "http://localhost:3001", "http://localhost:3002")
+        .WithOrigins(allowedOrigins)
         .AllowAnyHeader()
         .AllowAnyMethod()
         .AllowCredentials());
@@ -64,3 +75,59 @@ app.MapMediaEndpoints();
 app.MapReverseProxy();
 
 app.Run();
+
+static string[] NormalizeCorsOrigins(string[]? configuredOrigins)
+{
+    if (configuredOrigins is null || configuredOrigins.Length == 0)
+        throw new InvalidOperationException("Missing configuration: Cors:AllowedOrigins");
+
+    var origins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var configuredOrigin in configuredOrigins)
+    {
+        if (!Uri.TryCreate(configuredOrigin, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            uri.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            throw new InvalidOperationException(
+                "Cors:AllowedOrigins must contain absolute HTTP(S) origins without credentials, paths, queries, or fragments.");
+        }
+
+        // ASP.NET Core compares configured origins literally and documents that a trailing slash
+        // fails the match. Canonicalize to the authority so an otherwise valid value cannot
+        // silently disable CORS.
+        origins.Add(uri.GetLeftPart(UriPartial.Authority));
+    }
+
+    return [.. origins];
+}
+
+static IAmazonLambda CreateLambdaClient(IConfiguration configuration, bool production)
+{
+    var serviceUrl = configuration["Aws:LambdaServiceUrl"];
+    if (string.IsNullOrWhiteSpace(serviceUrl))
+        return new AmazonLambdaClient(); // IAM workload identity/default AWS credential chain.
+
+    if (!Uri.TryCreate(serviceUrl, UriKind.Absolute, out var endpoint) ||
+        (production && endpoint.Scheme != Uri.UriSchemeHttps))
+    {
+        throw new InvalidOperationException(
+            "Aws:LambdaServiceUrl must be an absolute URI and must use HTTPS in Production.");
+    }
+
+    var accessKey = configuration["Aws:AccessKey"];
+    var secretKey = configuration["Aws:SecretKey"];
+    if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
+    {
+        if (production)
+            throw new InvalidOperationException("An external Lambda emulator requires secret-backed AWS credentials.");
+        accessKey = "test";
+        secretKey = "test";
+    }
+
+    return new AmazonLambdaClient(
+        new BasicAWSCredentials(accessKey, secretKey),
+        new AmazonLambdaConfig { ServiceURL = endpoint.AbsoluteUri });
+}

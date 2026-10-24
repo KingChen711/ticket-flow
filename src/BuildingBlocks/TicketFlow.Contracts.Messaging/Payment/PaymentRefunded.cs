@@ -10,4 +10,8 @@ public sealed record PaymentRefunded(
     Guid OrderId,
     Guid PaymentId,
     decimal Amount,
-    DateTimeOffset RefundedAt);
+    DateTimeOffset RefundedAt,
+    string Currency = "VND",
+    string? GatewayReference = null,
+    string? OperationKey = null,
+    long AggregateVersion = 0);

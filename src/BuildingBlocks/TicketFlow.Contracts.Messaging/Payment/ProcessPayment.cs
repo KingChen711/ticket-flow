@@ -9,4 +9,7 @@ public sealed record ProcessPayment(
     Guid OrderId,
     Guid UserId,
     decimal Amount,
-    string PaymentMethod);
+    string PaymentMethod,
+    string Currency = "VND",
+    string? OperationKey = null,
+    long PriceSnapshotVersion = 0);

@@ -1,92 +1,67 @@
-# Three standalone Next.js zones.  The Dockerfiles build their browser-visible values into the
-# standalone output; this template supplies only server-side runtime values.  In particular,
-# GATEWAY_URL is cluster-internal while the customer browser's SignalR URL is baked as
-# localhost:30080 (the kind mapping declared in kind-config.yaml).
 {{- $root := . }}
 {{- range $name, $frontend := .Values.frontends }}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $name }}-auth
-type: Opaque
-stringData:
-  AUTH_SECRET: {{ $frontend.authSecret | quote }}
-  AUTH_KEYCLOAK_ID: {{ $frontend.keycloakClientId | quote }}
-  AUTH_KEYCLOAK_SECRET: {{ $frontend.keycloakClientSecret | quote }}
----
+{{- if $frontend.enabled }}
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: {{ $name }}
+metadata: { name: {{ $name }} }
 spec:
   replicas: 1
   selector:
-    matchLabels:
-      app: {{ $name }}
+    matchLabels: { app: {{ $name }} }
   template:
     metadata:
-      labels:
-        app: {{ $name }}
+      labels: { app: {{ $name }} }
+      annotations:
+        checksum/auth-contract: {{ toJson (dict "secret" $root.Values.secrets.name "issuer" $root.Values.runtime.keycloak.browserIssuer) | sha256sum }}
     spec:
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: {{ $name }}
           image: {{ include "ticketflow.appImage" (dict "root" $root "image" $frontend.image) | quote }}
           imagePullPolicy: IfNotPresent
           env:
-            # Next standalone defaults to port 3000 and a loopback bind.  Explicit values make
-            # organizer-dashboard (:3001) and gate-scanner (:3002) reachable through Services.
-            - name: PORT
-              value: {{ $frontend.port | quote }}
-            - name: HOSTNAME
-              value: "0.0.0.0"
-            - name: AUTH_URL
-              value: "http://localhost:{{ $frontend.port }}"
-            - name: AUTH_TRUST_HOST
-              value: "true"
-            # The pod talks to the Keycloak port-forward through Docker Desktop's host gateway;
-            # a browser can resolve this hostname too (probed on this Windows host).  The OAuth
-            # callback still returns to localhost:<port>, which is already registered in the
-            # imported realm and matches the port-forward URL a user opens.
-            - name: AUTH_KEYCLOAK_ISSUER
-              value: {{ $root.Values.kubernetes.keycloakBrowserIssuer | quote }}
-            - name: GATEWAY_URL
-              value: "http://gateway:8080"
+            - { name: PORT, value: {{ $frontend.port | quote }} }
+            - { name: HOSTNAME, value: 0.0.0.0 }
+            - { name: AUTH_URL, value: {{ $frontend.authUrl | quote }} }
+            - { name: AUTH_TRUST_HOST, value: "true" }
+            - { name: AUTH_KEYCLOAK_ISSUER, value: {{ $root.Values.runtime.keycloak.browserIssuer | quote }} }
+            - { name: GATEWAY_URL, value: {{ $root.Values.runtime.gatewayUrl | quote }} }
+            - { name: PUBLIC_GATEWAY_URL, value: {{ $root.Values.runtime.publicGatewayUrl | quote }} }
             - name: AUTH_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: {{ $name }}-auth
-                  key: AUTH_SECRET
-            - name: AUTH_KEYCLOAK_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $name }}-auth
-                  key: AUTH_KEYCLOAK_ID
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $frontend.authSecretKey }} }
+            - { name: AUTH_KEYCLOAK_ID, value: {{ $frontend.clientId | quote }} }
             - name: AUTH_KEYCLOAK_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: {{ $name }}-auth
-                  key: AUTH_KEYCLOAK_SECRET
+                secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $frontend.clientSecretKey }} }
           ports:
-            - containerPort: {{ $frontend.port }}
+            - { name: http, containerPort: {{ $frontend.port }} }
           readinessProbe:
-            httpGet:
-              path: {{ $frontend.readinessPath | default "/" | quote }}
-              port: {{ $frontend.port }}
+            httpGet: { path: {{ $frontend.readinessPath | default "/" | quote }}, port: {{ $frontend.port }} }
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 12
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: {{ $frontend.readinessPath | default "/" | quote }}, port: {{ $frontend.port }} }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            runAsNonRoot: true
+            runAsUser: 1000
+          resources:
+{{ toYaml $root.Values.workloads.frontendResources | indent 12 }}
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: {{ $name }}
+metadata: { name: {{ $name }} }
 spec:
-  selector:
-    app: {{ $name }}
+  selector: { app: {{ $name }} }
   ports:
-    - name: http
-      port: {{ $frontend.port }}
-      targetPort: {{ $frontend.port }}
+    - { name: http, port: {{ $frontend.port }}, targetPort: {{ $frontend.port }} }
 ---
+{{- end }}
 {{- end }}

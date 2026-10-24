@@ -28,39 +28,136 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
     private IMongoCollection<EventScheduleDocument> Schedules => database.GetCollection<EventScheduleDocument>(SchedulesCollectionName);
     private IMongoCollection<ReminderRecipientDocument> Recipients => database.GetCollection<ReminderRecipientDocument>(RecipientsCollectionName);
 
-    public async Task UpsertEventScheduleAsync(
+    public async Task ApplyPublishedAsync(
         Guid catalogEventId,
         string title,
         string artist,
         string venueName,
         DateTimeOffset startsAt,
+        long revision,
         CancellationToken cancellationToken = default)
     {
-        var filter = Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId);
         var update = Builders<EventScheduleDocument>.Update
             .Set(d => d.Title, title)
             .Set(d => d.Artist, artist)
             .Set(d => d.VenueName, venueName)
             .Set(d => d.StartsAt, startsAt.UtcDateTime)
-            .Set(d => d.IsCancelled, false);
+            .Set(d => d.IsCancelled, false)
+            .Set(d => d.Revision, revision);
+
+        if (await ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken))
+            return;
+
+        // A newer Rescheduled can legitimately create a schedule-only shell before the earlier
+        // Published message arrives. Its revision must continue to win for StartsAt, while the
+        // immutable metadata from Published fills the otherwise permanent empty fields.
+        var placeholderFilter = Builders<EventScheduleDocument>.Filter.And(
+            Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId),
+            Builders<EventScheduleDocument>.Filter.Ne(d => d.IsCancelled, true),
+            Builders<EventScheduleDocument>.Filter.Or(
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.Title, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Title, false),
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.Artist, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Artist, false),
+                Builders<EventScheduleDocument>.Filter.Eq(d => d.VenueName, ""),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.VenueName, false)));
+        var metadata = Builders<EventScheduleDocument>.Update
+            .Set(d => d.Title, title)
+            .Set(d => d.Artist, artist)
+            .Set(d => d.VenueName, venueName);
+        await Schedules.UpdateOneAsync(placeholderFilter, metadata, cancellationToken: cancellationToken);
+    }
+
+    public async Task ApplyRescheduledAsync(
+        Guid catalogEventId,
+        DateTimeOffset startsAt,
+        long revision,
+        CancellationToken cancellationToken = default)
+    {
+        // Rescheduled carries nothing but StartsAt. If it overtakes Published, this update also
+        // creates the document (see ApplyGuardedAsync) with empty placeholder fields. Published
+        // may carry an older revision, so its dedicated metadata-fill path completes this shell
+        // without overwriting the newer StartsAt.
+        var update = Builders<EventScheduleDocument>.Update
+            .Set(d => d.StartsAt, startsAt.UtcDateTime)
+            .Set(d => d.Revision, revision)
+            .SetOnInsert(d => d.Title, "")
+            .SetOnInsert(d => d.Artist, "")
+            .SetOnInsert(d => d.VenueName, "")
+            .SetOnInsert(d => d.IsCancelled, false);
+
+        await ApplyGuardedAsync(catalogEventId, update, revision, cancellationToken);
+    }
+
+    public async Task ApplyCancelledAsync(Guid catalogEventId, long revision, CancellationToken cancellationToken = default)
+    {
+        // No revision guard — see IEventReminderReadModel's doc comment: a Cancel is a
+        // domain-enforced one-way door, so it is always safe to apply and it must always win.
+        var filter = Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId);
+        var update = Builders<EventScheduleDocument>.Update
+            .Set(d => d.IsCancelled, true)
+            .SetOnInsert(d => d.Revision, revision)
+            .SetOnInsert(d => d.Title, "")
+            .SetOnInsert(d => d.Artist, "")
+            .SetOnInsert(d => d.VenueName, "")
+            .SetOnInsert(d => d.StartsAt, default(DateTime));
 
         await Schedules.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, cancellationToken);
+
+        // Cancellation is a one-way tombstone, but an old/v1 cancellation still must not move the
+        // diagnostic revision backwards. Advance only when the incoming value is newer.
+        var revisionFilter = Builders<EventScheduleDocument>.Filter.And(
+            filter,
+            Builders<EventScheduleDocument>.Filter.Or(
+                Builders<EventScheduleDocument>.Filter.Lt(d => d.Revision, revision),
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Revision, false)));
+        await Schedules.UpdateOneAsync(
+            revisionFilter,
+            Builders<EventScheduleDocument>.Update.Set(d => d.Revision, revision),
+            cancellationToken: cancellationToken);
     }
 
-    public async Task UpdateEventStartsAtAsync(Guid catalogEventId, DateTimeOffset startsAt, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The revision guard, shared by Published and Rescheduled. The filter's non-equality clauses
+    /// (<c>IsCancelled != true</c>, <c>Revision &lt;= incoming</c>) mean an existing document that
+    /// fails them will not match — and MongoDB's upsert, on no match, still tries to insert a new
+    /// document using the id from the filter, which collides with the document that already owns
+    /// that id and raises E11000. That is not a bug to route around; it IS the compare-and-swap:
+    /// the duplicate-key error is Mongo's way of saying "the current stored state already rejects
+    /// this write," which is exactly the outcome wanted. Catching it here is the documented
+    /// pattern for conditional upserts in MongoDB — there is no separate "no-op" return value the
+    /// driver could give instead.
+    /// </summary>
+    private async Task<bool> ApplyGuardedAsync(
+        Guid catalogEventId,
+        UpdateDefinition<EventScheduleDocument> update,
+        long revision,
+        CancellationToken cancellationToken)
     {
-        var filter = Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId);
-        var update = Builders<EventScheduleDocument>.Update.Set(d => d.StartsAt, startsAt.UtcDateTime);
+        var filter = Builders<EventScheduleDocument>.Filter.And(
+            Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId),
+            Builders<EventScheduleDocument>.Filter.Ne(d => d.IsCancelled, true),
+            Builders<EventScheduleDocument>.Filter.Or(
+                Builders<EventScheduleDocument>.Filter.Lte(d => d.Revision, revision),
+                // Documents written before Commit 11 have no Revision field, and MongoDB's $lte
+                // is type-bracketed: a missing field never matches a numeric comparison. Without
+                // this clause every pre-existing event fails the filter, the upsert collides on
+                // _id, and the catch below swallows the E11000 as "this message loses" — silently
+                // freezing every already-published event's schedule forever. Missing reads as
+                // unknown, which mục 10's expand-only rule defines as 0.
+                Builders<EventScheduleDocument>.Filter.Exists(d => d.Revision, false)));
 
-        await Schedules.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
-    }
-
-    public async Task MarkEventCancelledAsync(Guid catalogEventId, CancellationToken cancellationToken = default)
-    {
-        var filter = Builders<EventScheduleDocument>.Filter.Eq(d => d.Id, catalogEventId);
-        var update = Builders<EventScheduleDocument>.Update.Set(d => d.IsCancelled, true);
-
-        await Schedules.UpdateOneAsync(filter, update, cancellationToken: cancellationToken);
+        try
+        {
+            await Schedules.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }, cancellationToken);
+            return true;
+        }
+        catch (MongoWriteException exception) when (exception.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // The stored document is tombstoned or already at a higher revision — this message
+            // loses, which is the correct outcome, not a failure to surface.
+            return false;
+        }
     }
 
     public async Task AddRecipientAsync(
@@ -158,6 +255,9 @@ public sealed class MongoEventReminderReadModel(IMongoDatabase database) : IEven
         public string VenueName { get; set; } = null!;
         public DateTime StartsAt { get; set; }
         public bool IsCancelled { get; set; }
+
+        /// <summary>Catalog's Event.AggregateVersion at write time (Commit 11) — see IEventReminderReadModel's doc comment.</summary>
+        public long Revision { get; set; }
     }
 
     [BsonIgnoreExtraElements]

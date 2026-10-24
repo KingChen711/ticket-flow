@@ -25,54 +25,59 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const session = await auth();
-  const isOrganizer = !!session?.roles?.includes("organizer");
+  const isOrganizer = !!session?.roles?.includes("organizer") && !session.error;
 
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <header className="flex items-center justify-between border-b px-6 py-4">
-          <Link href="/organizer" className="text-lg font-semibold">
-            TicketFlow — Organizer
-          </Link>
-          {session ? (
-            <div className="flex items-center gap-4 text-sm">
-              {isOrganizer && (
-                <Link href="/organizer/events/new" className="text-blue-600 underline">
-                  New event
-                </Link>
-              )}
-              <span>{session.user?.email}</span>
+      <body className="flex min-h-full flex-col">
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-4 focus:py-2">
+          Skip to content
+        </a>
+        <header className="sticky top-0 z-40 border-b border-border bg-surface/90 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+            <Link href="/organizer" className="text-lg font-bold tracking-tight">
+              TicketFlow — Organizer
+            </Link>
+            {session && !session.error ? (
+              <nav aria-label="Account" className="flex items-center gap-1 text-sm sm:gap-3">
+                {isOrganizer && (
+                  <Link href="/organizer/events/new" className="btn-primary">
+                    New event
+                  </Link>
+                )}
+                <span className="hidden max-w-48 truncate text-muted sm:inline">{session.user?.email}</span>
+                <form
+                  action={async () => {
+                    "use server";
+                    await signOut({ redirectTo: "/organizer" });
+                  }}
+                >
+                  <button type="submit" className="btn-secondary">
+                    Sign out
+                  </button>
+                </form>
+              </nav>
+            ) : (
               <form
                 action={async () => {
                   "use server";
-                  await signOut({ redirectTo: "/organizer" });
+                  // NextAuth's default post-login redirect is the site root ("/") — 404s now that
+                  // this app's real content lives under /organizer, not "/" (Multi-Zones restructure,
+                  // docs/phase-8-plan.md Commit 9).
+                  await signIn("keycloak", { redirectTo: "/organizer" });
                 }}
               >
-                <button type="submit" className="text-blue-600 underline">
-                  Sign out
+                <button type="submit" className="btn-primary">
+                  {session?.error ? "Session expired — sign in again" : "Sign in"}
                 </button>
               </form>
-            </div>
-          ) : (
-            <form
-              action={async () => {
-                "use server";
-                // NextAuth's default post-login redirect is the site root ("/") — 404s now that
-                // this app's real content lives under /organizer, not "/" (Multi-Zones restructure,
-                // docs/phase-8-plan.md Commit 9).
-                await signIn("keycloak", { redirectTo: "/organizer" });
-              }}
-            >
-              <button type="submit" className="text-blue-600 underline">
-                Sign in
-              </button>
-            </form>
-          )}
+            )}
+          </div>
         </header>
-        <main className="flex-1">{children}</main>
+        <main id="main" className="flex-1">{children}</main>
       </body>
     </html>
   );

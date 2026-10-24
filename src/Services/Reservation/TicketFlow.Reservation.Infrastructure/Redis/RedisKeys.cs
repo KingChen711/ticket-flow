@@ -19,4 +19,28 @@ internal static class RedisKeys
     /// atomically alongside the hold keys in the same Lua script (Commit 5), with the same TTL.
     /// </summary>
     public static string HoldSeatsSet(Guid holdId) => $"holdseats:{holdId}";
+
+    /// <summary>Durable-cache metadata for a confirmed allocation. Value includes the complete
+    /// hold/order/owner/generation token so a lost response can be replayed without guessing from
+    /// the coarse sold set.</summary>
+    public static string Allocation(Guid eventId, Guid seatId) => $"allocation:{eventId}:{seatId}";
+
+    /// <summary>The exact seat set confirmed by one hold. Kept after confirmation for replay.</summary>
+    public static string ConfirmedSeatsSet(Guid eventId, Guid holdId) => $"confirmedseats:{eventId}:{holdId}";
+
+    /// <summary>Confirmation marker: hold/order/owner/generation plus canonical sorted seat set.</summary>
+    public static string ConfirmedMeta(Guid eventId, Guid holdId) => $"confirmedmeta:{eventId}:{holdId}";
+
+    /// <summary>Atomic cache-side claim preventing two different holds from confirming the same
+    /// order before PostgreSQL can commit the unique quote-to-order mapping.</summary>
+    public static string ConfirmedOrder(Guid orderId) => $"confirmedorder:{orderId}";
+
+    /// <summary>Monotonic PostgreSQL snapshot version last applied to this event cache.</summary>
+    public static string RebuildVersion(Guid eventId) => $"rebuildversion:{eventId}";
+
+    /// <summary>Short fail-closed lock around a cache snapshot compare-and-swap.</summary>
+    public static string RebuildLock(Guid eventId) => $"rebuildlock:{eventId}";
+
+    /// <summary>Seats deliberately made unavailable because ownership is ambiguous.</summary>
+    public static string QuarantinedSet(Guid eventId) => $"quarantined:{eventId}";
 }
