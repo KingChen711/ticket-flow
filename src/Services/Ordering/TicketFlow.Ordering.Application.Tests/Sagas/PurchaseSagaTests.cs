@@ -117,6 +117,9 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
         // No compensation commands — nothing was ever charged or issued.
         Assert.False(await _harness.Published.Any<ReleaseSeats>(x => x.Context.Message.OrderId == orderId));
         Assert.False(await _harness.Published.Any<RefundPayment>(x => x.Context.Message.OrderId == orderId));
+        // OrderCancelled is published before the Cancelled transition is persisted; wait for the
+        // terminal state so the next assertion cannot read the previous state.
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Cancelled));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
     }
 
@@ -143,6 +146,9 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
 
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "Gateway declined the charge."));
+        // OrderCancelled is published before the Cancelled transition is persisted; wait for the
+        // terminal state so the next assertion cannot read the previous state.
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Cancelled));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
     }
 
@@ -177,6 +183,9 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
 
         Assert.True(await _harness.Published.Any<OrderCancelledIntegrationEvent>(x =>
             x.Context.Message.OrderId == orderId && x.Context.Message.Reason == "MinIO unreachable."));
+        // OrderCancelled is published before the Cancelled transition is persisted; wait for the
+        // terminal state so the next assertion cannot read the previous state.
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.Cancelled));
         Assert.Null(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
 
         // The real invariant: an order that was charged then refunded must NOT count as a sale.
