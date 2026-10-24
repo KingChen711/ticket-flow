@@ -246,18 +246,21 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
 
   return (
     <div className="mx-auto flex max-w-md flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">Scan ticket</h1>
-      <p className="rounded bg-blue-50 p-2 text-sm text-blue-900">
-        Event {eventId} · Gate {gateLabel}
-      </p>
-      <p className="text-sm text-gray-600">
+      <h1 className="text-2xl font-bold tracking-tight">Scan ticket</h1>
+      <dl className="card grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 p-4 text-sm">
+        <dt className="text-muted">Event</dt>
+        <dd className="truncate font-mono">{eventId}</dd>
+        <dt className="text-muted">Gate</dt>
+        <dd className="font-semibold">{gateLabel}</dd>
+      </dl>
+      <p className="hint">
         Online validation required. This scanner does not validate tickets offline.
       </p>
-      {error && <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>}
+      {error && <p role="alert" className="alert-danger">{error}</p>}
 
       <video
         ref={videoRef}
-        className={phase === "camera" ? "w-full rounded border" : "hidden"}
+        className={phase === "camera" ? "aspect-square w-full rounded-xl border border-border object-cover" : "hidden"}
         playsInline
         muted
       />
@@ -268,19 +271,19 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
             stopCamera();
             setPhase("idle");
           }}
-          className="rounded border px-4 py-2"
+          className="btn-secondary min-h-14 text-base"
         >
           Stop camera
         </button>
       ) : (
-        <button type="button" onClick={startCamera} className="rounded bg-black px-4 py-2 text-white">
+        <button type="button" onClick={startCamera} className="btn-primary min-h-14 text-base">
           Start camera scan
         </button>
       )}
 
-      <label className="flex w-fit cursor-pointer flex-col gap-1 text-sm text-blue-600 underline">
+      <label className="btn-ghost min-h-12 border border-dashed border-border-strong has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring">
         Upload QR image instead
-        <input type="file" accept="image/*" onChange={handleUpload} className="hidden" />
+        <input type="file" accept="image/*" onChange={handleUpload} className="sr-only" />
       </label>
 
       <canvas ref={canvasRef} className="hidden" />
@@ -295,27 +298,46 @@ function ResultPanel({
   result: ValidateTicketResponse;
   onScanNext: () => void;
 }) {
+  // Verdict colors are paired with an icon and a word so staff can read them in glare or with
+  // color-vision deficiency. Amber uses dark text: white on amber fails contrast.
   const style = {
-    Valid: { bg: "bg-green-600", label: "VALID — checked in" },
-    AlreadyCheckedIn: { bg: "bg-yellow-500", label: "ALREADY CHECKED IN" },
-    NotFound: { bg: "bg-red-600", label: "NOT FOUND" },
-    WrongEvent: { bg: "bg-red-600", label: "WRONG EVENT" },
-    Revoked: { bg: "bg-red-600", label: "REVOKED" },
+    Valid: { bg: "bg-green-700 text-white", label: "VALID — checked in", icon: "check" },
+    AlreadyCheckedIn: { bg: "bg-amber-400 text-slate-950", label: "ALREADY CHECKED IN", icon: "warn" },
+    NotFound: { bg: "bg-red-700 text-white", label: "NOT FOUND", icon: "cross" },
+    WrongEvent: { bg: "bg-red-700 text-white", label: "WRONG EVENT", icon: "cross" },
+    Revoked: { bg: "bg-red-700 text-white", label: "REVOKED", icon: "cross" },
   }[result.status];
 
   return (
     <div
-      className={`flex min-h-[70vh] flex-col items-center justify-center gap-4 p-6 text-white ${style.bg}`}
+      role="alert"
+      className={`flex min-h-[80vh] flex-col items-center justify-center gap-5 p-6 text-center ${style.bg}`}
     >
-      <p className="text-3xl font-bold">{style.label}</p>
+      <VerdictIcon kind={style.icon} />
+      <p className="text-4xl font-black tracking-tight">{style.label}</p>
       {result.checkedInAt && (
-        <p className="text-sm opacity-90">
+        <p className="text-base opacity-90">
           Checked in at {new Date(result.checkedInAt).toLocaleString()}
         </p>
       )}
-      <button type="button" onClick={onScanNext} className="mt-4 rounded bg-white px-6 py-2 font-medium text-black">
+      <button
+        type="button"
+        onClick={onScanNext}
+        autoFocus
+        className="mt-4 min-h-14 cursor-pointer rounded-xl bg-white px-10 text-lg font-semibold text-slate-950 shadow-lg"
+      >
         Scan next
       </button>
     </div>
+  );
+}
+
+function VerdictIcon({ kind }: { kind: string }) {
+  const path = kind === "check" ? "m5 12 5 5 9-10" : kind === "warn" ? "M12 8v5m0 3.5v.5" : "M7 7l10 10M17 7 7 17";
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="size-24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d={path} />
+    </svg>
   );
 }

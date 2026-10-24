@@ -17,16 +17,16 @@ export default async function NewEventPage({
 
   if (!session || session.error || !session.serverAccessToken) {
     return (
-      <div className="mx-auto max-w-2xl p-6">
-        <p className="text-gray-500">Sign in with an organizer account to create events.</p>
+      <div className="container-page max-w-xl">
+        <p className="card text-center text-muted">Sign in with an organizer account to create events.</p>
       </div>
     );
   }
 
   if (!session.roles?.includes("organizer")) {
     return (
-      <div className="mx-auto max-w-2xl p-6">
-        <p className="text-red-600">
+      <div className="container-page max-w-xl">
+        <p role="alert" className="alert-danger">
           This app is for organizers only. Your account does not have the organizer role.
         </p>
       </div>
@@ -58,8 +58,11 @@ export default async function NewEventPage({
   if (initialWorkflow?.status === "Completed") redirect("/organizer");
 
   return (
-    <div className="mx-auto max-w-2xl p-6">
-      <h1 className="mb-4 text-xl font-semibold">New event</h1>
+    <div className="container-page max-w-3xl">
+      <h1 className="text-2xl font-bold tracking-tight">New event</h1>
+      <p className="mb-6 mt-1 text-sm text-muted">
+        The event is created, priced, stocked and published in one step. If a step fails you can resume it without duplicates.
+      </p>
       <NewEventForm venues={venues} creationKey={creationKey} initialWorkflow={initialWorkflow} />
     </div>
   );

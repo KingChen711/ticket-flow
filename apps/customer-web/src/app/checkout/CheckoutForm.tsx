@@ -14,31 +14,50 @@ export function CheckoutForm({ holdId, idempotencyKey }: { holdId: string; idemp
     if (result.kind === "success") router.replace(`/orders/${result.orderId}`);
   }, [result, router]);
 
+  const methods = [
+    { value: "credit-card", label: "Credit card" },
+    { value: "e-wallet", label: "E-wallet" },
+  ];
+
   return (
-    <form action={action} className="mt-6 flex flex-col gap-3">
+    <form action={action} className="flex flex-col gap-4" aria-busy={pending}>
       <input type="hidden" name="holdId" value={holdId} />
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
 
-      <label className="flex flex-col gap-1 text-sm">
-        Payment method
-        <select name="paymentMethod" defaultValue="credit-card" className="rounded border px-3 py-2">
-          <option value="credit-card">Credit card</option>
-          <option value="e-wallet">E-wallet</option>
-        </select>
-      </label>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="label mb-2">Payment method</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {methods.map((method) => (
+            <label
+              key={method.value}
+              className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-border-strong px-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary-soft"
+            >
+              <input
+                type="radio"
+                name="paymentMethod"
+                value={method.value}
+                defaultChecked={method.value === "credit-card"}
+                className="size-4 accent-[var(--primary)]"
+              />
+              {method.label}
+            </label>
+          ))}
+        </div>
+        <p className="hint">Payments in this demo are simulated; no card is charged.</p>
+      </fieldset>
 
       {result.kind === "conflict" && (
-        <p role="alert" className="rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900">
+        <p role="alert" className="alert-warning">
           This request key is already bound to different checkout details. {result.message}
         </p>
       )}
       {result.kind === "error" && (
-        <p role="alert" className="rounded border border-red-400 bg-red-50 p-3 text-sm text-red-700">
+        <p role="alert" className="alert-danger">
           {result.message}
         </p>
       )}
 
-      <button type="submit" disabled={pending || result.kind === "success"} className="rounded bg-black px-4 py-2 text-white disabled:opacity-40">
+      <button type="submit" disabled={pending || result.kind === "success"} className="btn-primary w-full">
         {pending || result.kind === "success" ? "Placing order…" : "Place order"}
       </button>
     </form>

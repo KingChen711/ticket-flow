@@ -39,13 +39,23 @@ export default async function CheckoutPage({
   }
 
   return (
-    <div className="mx-auto max-w-md p-6">
-      <h1 className="text-xl font-bold">Checkout</h1>
-      <Countdown expiresAt={quote.expiresAt} />
-      <p className="mt-4">
-        {quote.seatIds.length} seat(s) — {quote.amount.toLocaleString()} {quote.currency}
-      </p>
-      <CheckoutForm holdId={quote.holdId} idempotencyKey={idempotencyKey} />
+    <div className="container-page max-w-lg">
+      <h1 className="text-2xl font-bold tracking-tight">Checkout</h1>
+      <div className="card mt-6 flex flex-col gap-4">
+        <Countdown expiresAt={quote.expiresAt} />
+        <dl className="flex flex-col gap-2 border-t border-border pt-4 text-sm">
+          <div className="flex justify-between">
+            <dt className="text-muted">Seats</dt>
+            <dd className="font-medium">{quote.seatIds.length}</dd>
+          </div>
+          <div className="flex justify-between text-base">
+            <dt className="font-semibold">Total</dt>
+            <dd className="font-bold">{quote.amount.toLocaleString()} {quote.currency}</dd>
+          </div>
+          <p className="hint">Price confirmed by the server when your seats were held. No extra fees.</p>
+        </dl>
+        <CheckoutForm holdId={quote.holdId} idempotencyKey={idempotencyKey} />
+      </div>
     </div>
   );
 }

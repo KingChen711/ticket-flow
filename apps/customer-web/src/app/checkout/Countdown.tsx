@@ -20,11 +20,21 @@ export function Countdown({ expiresAt }: { expiresAt: string }) {
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
 
+  if (secondsLeft === 0) {
+    return (
+      <p role="alert" className="alert-danger font-semibold">
+        Hold expired — go back and select seats again.
+      </p>
+    );
+  }
+
   return (
-    <p className={secondsLeft === 0 ? "font-semibold text-red-600" : "text-gray-700"}>
-      {secondsLeft === 0
-        ? "Hold expired — go back and select seats again."
-        : `Hold expires in ${minutes}:${seconds.toString().padStart(2, "0")}`}
+    <p role="timer" aria-live="off" className={secondsLeft <= 60 ? "alert-warning" : "alert-info"}>
+      Hold expires in{" "}
+      <span className="font-mono font-semibold tabular-nums">
+        {minutes}:{seconds.toString().padStart(2, "0")}
+      </span>
+      . Your seats are reserved until then.
     </p>
   );
 }

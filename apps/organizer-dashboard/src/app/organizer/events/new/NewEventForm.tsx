@@ -84,7 +84,7 @@ export function NewEventForm({
         <input type="hidden" name="workflowId" value={actionState.workflow.workflowId} />
       )}
       {actionState.workflow?.canResume && (
-        <div role="alert" className="rounded border border-amber-400 bg-amber-50 p-3 text-sm">
+        <div role="alert" className="alert-warning">
           <p className="font-semibold">
             Creation paused
             {actionState.workflow.failedStep ? ` at ${actionState.workflow.failedStep}` : " after an interrupted step"}
@@ -92,136 +92,173 @@ export function NewEventForm({
           {(actionState.workflow.lastError ?? actionState.error) && (
             <p>{actionState.workflow.lastError ?? actionState.error}</p>
           )}
-          <p className="mt-1 text-gray-600">
+          <p className="mt-1 text-muted">
             Completed through {actionState.workflow.lastCompletedStep}. Submit again to resume the same workflow;
             no venue or event will be duplicated.
           </p>
         </div>
       )}
       {actionState.error && !actionState.workflow && (
-        <p role="alert" className="rounded border border-red-400 bg-red-50 p-3 text-sm text-red-700">
+        <p role="alert" className="alert-danger">
           {actionState.error}
         </p>
       )}
-      <fieldset className="flex flex-col gap-2 rounded border p-4">
-        <legend className="px-1 text-sm font-semibold">Venue</legend>
+      <fieldset className="card flex flex-col gap-4">
+        <legend className="px-1 font-semibold">Venue</legend>
         {venues.length > 0 && (
-          <div className="flex gap-4 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                name="venueMode"
-                value="existing"
-                checked={venueMode === "existing"}
-                onChange={() => setVenueMode("existing")}
-              />
-              Use existing venue
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                name="venueMode"
-                value="new"
-                checked={venueMode === "new"}
-                onChange={() => setVenueMode("new")}
-              />
-              Create new venue
-            </label>
+          <div className="flex flex-wrap gap-2 text-sm">
+            {(["existing", "new"] as const).map((mode) => (
+              <label
+                key={mode}
+                className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border-strong px-3 has-[:checked]:border-primary has-[:checked]:bg-primary-soft"
+              >
+                <input
+                  type="radio"
+                  name="venueMode"
+                  value={mode}
+                  checked={venueMode === mode}
+                  onChange={() => setVenueMode(mode)}
+                  className="size-4 accent-[var(--primary)]"
+                />
+                {mode === "existing" ? "Use existing venue" : "Create new venue"}
+              </label>
+            ))}
           </div>
         )}
         {venueMode === "existing" ? (
-          <select name="venueId" required className="rounded border px-3 py-2">
-            {venues.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name} — {v.city}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="venueId" className="label">Venue</label>
+            <select id="venueId" name="venueId" required className="input">
+              {venues.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name} · {v.city}
+                </option>
+              ))}
+            </select>
+          </div>
         ) : (
           <>
             <input type="hidden" name="venueMode" value="new" />
-            <input name="venueName" placeholder="Venue name" required className="rounded border px-3 py-2" />
-            <input name="venueStreet" placeholder="Street" required className="rounded border px-3 py-2" />
-            <div className="flex gap-2">
-              <input name="venueCity" placeholder="City" required className="flex-1 rounded border px-3 py-2" />
-              <input name="venueCountry" placeholder="Country" required className="flex-1 rounded border px-3 py-2" />
+            <TextField name="venueName" label="Venue name" required />
+            <TextField name="venueStreet" label="Street" required />
+            <div className="grid gap-4 sm:grid-cols-3">
+              <TextField name="venueCity" label="City" required />
+              <TextField name="venueCountry" label="Country" required />
+              <TextField name="venuePostalCode" label="Postal code" hint="Optional" />
             </div>
-            <input name="venuePostalCode" placeholder="Postal code (optional)" className="rounded border px-3 py-2" />
           </>
         )}
       </fieldset>
 
-      <fieldset className="flex flex-col gap-2 rounded border p-4">
-        <legend className="px-1 text-sm font-semibold">Event</legend>
-        <input name="title" placeholder="Title" required className="rounded border px-3 py-2" />
-        <input name="artist" placeholder="Artist" required className="rounded border px-3 py-2" />
-        <textarea name="description" placeholder="Description" required className="rounded border px-3 py-2" />
-        <div className="flex gap-2">
-          <label className="flex-1 text-sm">
-            Starts at
-            <input ref={startsAtRef} type="datetime-local" name="startsAtLocal" required className="mt-1 w-full rounded border px-3 py-2" />
-          </label>
-          <label className="flex-1 text-sm">
-            Ends at
-            <input ref={endsAtRef} type="datetime-local" name="endsAtLocal" required className="mt-1 w-full rounded border px-3 py-2" />
-          </label>
+      <fieldset className="card flex flex-col gap-4">
+        <legend className="px-1 font-semibold">Event</legend>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField name="title" label="Title" required />
+          <TextField name="artist" label="Artist" required />
         </div>
+        <div className="field">
+          <label htmlFor="description" className="label">Description</label>
+          <textarea id="description" name="description" required rows={3} className="input py-2" />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="field">
+            <label htmlFor="startsAtLocal" className="label">Starts at</label>
+            <input id="startsAtLocal" ref={startsAtRef} type="datetime-local" name="startsAtLocal" required className="input" />
+          </div>
+          <div className="field">
+            <label htmlFor="endsAtLocal" className="label">Ends at</label>
+            <input id="endsAtLocal" ref={endsAtRef} type="datetime-local" name="endsAtLocal" required className="input" />
+          </div>
+        </div>
+        <p className="hint">Times are in your browser&apos;s time zone and stored with it.</p>
       </fieldset>
 
-      <fieldset className="flex flex-col gap-2 rounded border p-4">
-        <legend className="px-1 text-sm font-semibold">Sections &amp; pricing (VND)</legend>
-        {sections.map((s) => (
-          <div key={s.key} className="flex gap-2">
-            <input
-              placeholder="Section name"
-              value={s.name}
-              onChange={(e) => updateSection(s.key, "name", e.target.value)}
-              name="sectionName"
-              required
-              className="flex-1 rounded border px-3 py-2"
-            />
-            <input
-              placeholder="Capacity"
-              type="number"
-              min="1"
-              value={s.capacity}
-              onChange={(e) => updateSection(s.key, "capacity", e.target.value)}
-              name="sectionCapacity"
-              required
-              className="w-24 rounded border px-3 py-2"
-            />
-            <input
-              placeholder="Price"
-              type="number"
-              min="0"
-              value={s.price}
-              onChange={(e) => updateSection(s.key, "price", e.target.value)}
-              name="sectionPrice"
-              required
-              className="w-28 rounded border px-3 py-2"
-            />
+      <fieldset className="card flex flex-col gap-3">
+        <legend className="px-1 font-semibold">Sections &amp; pricing (VND)</legend>
+        <div aria-hidden="true" className="hidden grid-cols-[1fr_7rem_9rem_auto] gap-2 text-xs font-medium text-muted sm:grid">
+          <span>Section name</span>
+          <span>Capacity</span>
+          <span>Price per seat</span>
+          <span className="w-20" />
+        </div>
+        {sections.map((s, index) => (
+          <div key={s.key} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_7rem_9rem_auto]">
+            <label className="col-span-2 sm:col-span-1">
+              <span className="sr-only">Section {index + 1} name</span>
+              <input
+                placeholder="Section name"
+                value={s.name}
+                onChange={(e) => updateSection(s.key, "name", e.target.value)}
+                name="sectionName"
+                required
+                className="input"
+              />
+            </label>
+            <label>
+              <span className="sr-only">Section {index + 1} capacity</span>
+              <input
+                placeholder="Capacity"
+                type="number"
+                min="1"
+                inputMode="numeric"
+                value={s.capacity}
+                onChange={(e) => updateSection(s.key, "capacity", e.target.value)}
+                name="sectionCapacity"
+                required
+                className="input"
+              />
+            </label>
+            <label>
+              <span className="sr-only">Section {index + 1} price per seat</span>
+              <input
+                placeholder="Price"
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={s.price}
+                onChange={(e) => updateSection(s.key, "price", e.target.value)}
+                name="sectionPrice"
+                required
+                className="input"
+              />
+            </label>
             <button
               type="button"
               onClick={() => removeSection(s.key)}
               disabled={sections.length === 1}
-              className="rounded border px-2 text-sm disabled:opacity-30"
+              aria-label={`Remove section ${index + 1}`}
+              className="btn-ghost col-span-2 w-full sm:col-span-1 sm:w-20"
             >
               Remove
             </button>
           </div>
         ))}
-        <button type="button" onClick={addSection} className="w-fit text-sm text-blue-600 underline">
+        <button type="button" onClick={addSection} className="btn-secondary w-fit">
           + Add section
         </button>
       </fieldset>
 
-      <button disabled={pending} type="submit" className="w-fit rounded bg-black px-4 py-2 text-white disabled:opacity-50">
-        {pending
-          ? "Working…"
-          : actionState.workflow?.canResume
-            ? `Resume ${actionState.workflow.failedStep ?? "workflow"}`
-            : "Create & publish event"}
-      </button>
+      <div className="flex justify-end">
+        <button disabled={pending} type="submit" className="btn-primary" aria-busy={pending}>
+          {pending
+            ? "Working…"
+            : actionState.workflow?.canResume
+              ? `Resume ${actionState.workflow.failedStep ?? "workflow"}`
+              : "Create & publish event"}
+        </button>
+      </div>
     </form>
+  );
+}
+
+function TextField({ name, label, required, hint }: { name: string; label: string; required?: boolean; hint?: string }) {
+  return (
+    <div className="field">
+      <label htmlFor={name} className="label">
+        {label}
+        {hint && <span className="ml-1 font-normal text-muted">({hint})</span>}
+      </label>
+      <input id={name} name={name} required={required} className="input" />
+    </div>
   );
 }

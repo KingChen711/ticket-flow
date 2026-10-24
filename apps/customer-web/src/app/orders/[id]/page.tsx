@@ -3,6 +3,8 @@ import { parseMyOrderView } from "@ticketflow/types";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { fetchGateway } from "@/lib/gateway";
+import Link from "next/link";
+import { formatMoney } from "@/lib/status";
 import { OrderStatus } from "./OrderStatus";
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
@@ -21,10 +23,11 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   }
 
   return (
-    <div className="mx-auto max-w-md p-6">
-      <h1 className="text-xl font-bold">Order {order.id.slice(0, 8)}</h1>
-      <p className="text-sm text-gray-600">{order.seatIds.length} seat(s) — {order.totalAmount.toLocaleString()} {order.currency}</p>
-      <div className="mt-4"><OrderStatus orderId={order.id} initialOrder={order} /></div>
+    <div className="container-page max-w-lg">
+      <Link href="/orders" className="link text-sm">← My orders</Link>
+      <h1 className="mt-4 text-2xl font-bold tracking-tight">Order {order.id.slice(0, 8)}</h1>
+      <p className="text-sm text-muted">{order.seatIds.length} seat(s) · {formatMoney(order.totalAmount, order.currency)}</p>
+      <div className="card mt-6"><OrderStatus orderId={order.id} initialOrder={order} /></div>
     </div>
   );
 }

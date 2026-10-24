@@ -11,7 +11,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: Scan
   if (!session || session.error || !session.serverAccessToken) {
     return (
       <div className="mx-auto max-w-md p-6">
-        <p className="text-gray-500">Sign in with a gate-staff or organizer account to scan tickets.</p>
+        <p className="card text-center text-muted">Sign in with a gate-staff or organizer account to scan tickets.</p>
       </div>
     );
   }
@@ -19,7 +19,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: Scan
   if (!session.roles?.some((role) => ["gate-staff", "organizer", "admin"].includes(role))) {
     return (
       <div className="mx-auto max-w-md p-6">
-        <p className="text-red-600">
+        <p role="alert" className="alert-danger">
           Your account does not have a gate-scanner role.
         </p>
       </div>
@@ -42,28 +42,35 @@ export default async function ScannerPage({ searchParams }: { searchParams: Scan
 
 function ScannerContextForm() {
   return (
-    <form action="/scanner/" className="mx-auto flex max-w-md flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">Choose gate context</h1>
-      <p className="text-sm text-gray-600">
-        Each scan is checked online against the selected event and your gate assignment.
-      </p>
-      <label className="flex flex-col gap-1 text-sm">
-        Event ID
+    <form action="/scanner/" className="mx-auto flex max-w-md flex-col gap-5 p-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Choose gate context</h1>
+        <p className="mt-1 text-sm text-muted">
+          Each scan is checked online against the selected event and your gate assignment.
+        </p>
+      </div>
+      <div className="field">
+        <label htmlFor="eventId" className="label">Event ID</label>
         <input
+          id="eventId"
           name="eventId"
           required
+          autoComplete="off"
+          spellCheck={false}
           pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
-          className="rounded border px-3 py-2"
+          aria-describedby="eventId-hint"
+          className="input font-mono text-sm"
         />
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        Gate label
-        <input name="gate" required maxLength={80} className="rounded border px-3 py-2" />
-      </label>
-      <button type="submit" className="rounded bg-black px-4 py-2 text-white">
+        <p id="eventId-hint" className="hint">The UUID shown on the organizer dashboard.</p>
+      </div>
+      <div className="field">
+        <label htmlFor="gate" className="label">Gate label</label>
+        <input id="gate" name="gate" required maxLength={80} autoComplete="off" className="input" />
+      </div>
+      <button type="submit" className="btn-primary min-h-14 text-base">
         Start scanner
       </button>
-      <p className="text-xs text-gray-500">
+      <p className="hint">
         Gate IDs are authorization scopes. Ask the event owner to assign your account to this exact gate.
       </p>
     </form>
