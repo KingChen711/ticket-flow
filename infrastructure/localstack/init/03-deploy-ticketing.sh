@@ -17,7 +17,7 @@ ROLE_ARN="arn:aws:iam::000000000000:role/ticketflow-lambda-role"
 # the in-kind MinIO Service to the sibling Lambda executor container.
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-minio:9000}"
 
-# See 01-deploy-functions.sh for the LocalStack dotnet10 waiter compatibility detail.
+# See 02-deploy-media.sh for the LocalStack dotnet10 waiter compatibility detail.
 wait_for_function() {
   local function_name="$1"
   until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do

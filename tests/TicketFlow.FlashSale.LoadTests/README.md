@@ -13,14 +13,13 @@ $env:FLASH_SALE_ORGANIZER_PASSWORD = '<organizer password>'
 dotnet run --project tests/TicketFlow.FlashSale.LoadTests
 ```
 
-Before starting Compose for this scenario, slow the unrelated timer Lambdas so they do not compete
+Before starting Compose for this scenario, slow the unrelated reminder timer Lambda so it does not compete
 with ticket PDF Lambda cold starts on this constrained local Docker host:
 
 ```powershell
 $env:EVENT_REMINDER_SCHEDULE = 'rate(24 hours)'
-$env:HELLO_TIMER_SCHEDULE = 'rate(24 hours)'
 docker compose up -d
-Remove-Item Env:EVENT_REMINDER_SCHEDULE, Env:HELLO_TIMER_SCHEDULE
+Remove-Item Env:EVENT_REMINDER_SCHEDULE
 ```
 
 Optional settings: `GATEWAY_BASE_URL`, `KEYCLOAK_BASE_URL`, `FLASH_SALE_SEAT_COUNT`,
