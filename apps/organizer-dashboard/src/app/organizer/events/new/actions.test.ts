@@ -11,7 +11,13 @@ vi.mock("next/navigation", () => ({
 const { createEventAction } = await import("./actions");
 
 const fetchMock = vi.fn();
-const calls = () => fetchMock.mock.calls.map(([url, init]) => ({ path: new URL(url).pathname, body: JSON.parse(init.body) }));
+const calls = () =>
+  fetchMock.mock.calls.map(([url, init]) => ({
+    path: new URL(url).pathname,
+    method: init.method,
+    authorization: init.headers.Authorization,
+    body: JSON.parse(init.body),
+  }));
 
 function form(): FormData {
   const data = new FormData();
@@ -74,6 +80,15 @@ describe("createEventAction", () => {
       "/reservation/events/ev-1/inventory",
       "/catalog/events/ev-1/publish",
     ]);
+    expect(calls().every((c) => c.method === "POST" && c.authorization === "Bearer t")).toBe(true);
+    expect(calls()[0].body).toEqual({
+      title: "Concert",
+      description: "Desc",
+      artist: "Band",
+      venueId: "venue-1",
+      startsAt: new Date("2026-12-01T19:00").toISOString(),
+      endsAt: new Date("2026-12-01T22:00").toISOString(),
+    });
     const priceTiers = calls().filter((c) => c.path.endsWith("/price-tiers")).map((c) => c.body);
     expect(priceTiers).toEqual([
       { sectionId: "sec-VIP", amount: 1_000_000, currency: "VND" },

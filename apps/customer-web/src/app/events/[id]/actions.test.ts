@@ -52,6 +52,7 @@ describe("holdSeatsAction", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toMatch(/\/reservation\/holds$/);
+    expect(init.method).toBe("POST");
     expect(init.headers.Authorization).toBe("Bearer token-123");
     expect(JSON.parse(init.body)).toEqual({ eventId: "ev-1", seatIds: ["s-1", "s-2"] });
 
