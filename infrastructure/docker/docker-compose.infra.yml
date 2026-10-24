@@ -194,10 +194,6 @@ services:
       # The reminder timer is useful in the Compose stack. A K8s smoke run can override this to
       # a long cadence so its Lambda does not repeatedly try to reach a Compose-only RabbitMQ.
       EVENT_REMINDER_SCHEDULE: ${EVENT_REMINDER_SCHEDULE:-rate(1 minute)}
-      # Same opt-out for the Phase 9 HelloTimer probe: the Kubernetes fallback verifies PDF
-      # rendering, not timer throughput, and should not spawn competing Lambda executors while
-      # LocalStack is still publishing all functions on a memory-constrained machine.
-      HELLO_TIMER_SCHEDULE: ${HELLO_TIMER_SCHEDULE:-rate(1 minute)}
       DEBUG: "1"
     ports:
       - "4566:4566"
