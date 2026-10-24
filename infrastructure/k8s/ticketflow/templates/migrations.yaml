@@ -19,6 +19,10 @@ spec:
         - name: wait-for-database
           image: {{ $root.Values.infra.postgres.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           env:
             - name: DATABASE_URL
               valueFrom:

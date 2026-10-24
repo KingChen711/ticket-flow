@@ -16,6 +16,13 @@ builder.Services.AddTicketFlowObservability(builder.Configuration, "gateway");
 builder.Services.AddTicketFlowAuth(builder.Configuration);
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+builder.Services.AddHttpClient("catalog-media-ownership", client =>
+{
+    client.BaseAddress = new Uri(
+        builder.Configuration["Catalog:BaseUrl"]
+        ?? throw new InvalidOperationException("Missing configuration: Catalog:BaseUrl"));
+    client.Timeout = TimeSpan.FromSeconds(3);
+});
 
 var lambdaHealthUrl = builder.Configuration["Aws:HealthUrl"];
 if (Uri.TryCreate(lambdaHealthUrl, UriKind.Absolute, out var lambdaHealthUri))
@@ -37,10 +44,13 @@ builder.Services.AddSingleton<IAmazonLambda>(_ => CreateLambdaClient(
 // "Failed to fetch" with no indication it was ever a CORS problem. SignalR still sends
 // credentials by default even though this read-only public seat-status hub no longer receives a
 // bearer token, so AllowCredentials requires an explicit origin allowlist rather than "*".
+var allowedOrigins = NormalizeCorsOrigins(
+    builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>());
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy => policy
-        .WithOrigins("http://localhost:3000", "http://localhost:3001", "http://localhost:3002")
+        .WithOrigins(allowedOrigins)
         .AllowAnyHeader()
         .AllowAnyMethod()
         .AllowCredentials());
@@ -65,6 +75,34 @@ app.MapMediaEndpoints();
 app.MapReverseProxy();
 
 app.Run();
+
+static string[] NormalizeCorsOrigins(string[]? configuredOrigins)
+{
+    if (configuredOrigins is null || configuredOrigins.Length == 0)
+        throw new InvalidOperationException("Missing configuration: Cors:AllowedOrigins");
+
+    var origins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var configuredOrigin in configuredOrigins)
+    {
+        if (!Uri.TryCreate(configuredOrigin, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            uri.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            throw new InvalidOperationException(
+                "Cors:AllowedOrigins must contain absolute HTTP(S) origins without credentials, paths, queries, or fragments.");
+        }
+
+        // ASP.NET Core compares configured origins literally and documents that a trailing slash
+        // fails the match. Canonicalize to the authority so an otherwise valid value cannot
+        // silently disable CORS.
+        origins.Add(uri.GetLeftPart(UriPartial.Authority));
+    }
+
+    return [.. origins];
+}
 
 static IAmazonLambda CreateLambdaClient(IConfiguration configuration, bool production)
 {

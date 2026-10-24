@@ -27,6 +27,7 @@ spec:
             - { name: AUTH_TRUST_HOST, value: "true" }
             - { name: AUTH_KEYCLOAK_ISSUER, value: {{ $root.Values.runtime.keycloak.browserIssuer | quote }} }
             - { name: GATEWAY_URL, value: {{ $root.Values.runtime.gatewayUrl | quote }} }
+            - { name: PUBLIC_GATEWAY_URL, value: {{ $root.Values.runtime.publicGatewayUrl | quote }} }
             - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $frontend.authSecretKey }} }

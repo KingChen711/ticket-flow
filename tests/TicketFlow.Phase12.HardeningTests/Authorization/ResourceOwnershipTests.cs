@@ -119,6 +119,36 @@ public sealed class ResourceOwnershipTests(HardeningEnvironmentFixture environme
 
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public async Task Media_upload_access_is_bound_to_the_event_owner_and_fails_closed()
+    {
+        var connectionString = await CreateIsolatedDatabaseAsync();
+        await using var context = CreateContext(connectionString);
+        var ownedEventId = await SeedEventAsync(context, OrganizerA);
+        var legacyEventId = await SeedEventAsync(context, organizerId: null);
+        var service = CreateService(context);
+
+        Assert.Equal(
+            EventAccessResult.Allowed,
+            await service.CheckAccessAsync(ownedEventId, AsOrganizer(OrganizerA)));
+        Assert.Equal(
+            EventAccessResult.Forbidden,
+            await service.CheckAccessAsync(ownedEventId, AsOrganizer(OrganizerB)));
+        Assert.Equal(
+            EventAccessResult.Allowed,
+            await service.CheckAccessAsync(ownedEventId, AsAdmin()));
+        Assert.Equal(
+            EventAccessResult.Forbidden,
+            await service.CheckAccessAsync(legacyEventId, AsOrganizer(OrganizerA)));
+        Assert.Equal(
+            EventAccessResult.Allowed,
+            await service.CheckAccessAsync(legacyEventId, AsAdmin()));
+        Assert.Equal(
+            EventAccessResult.NotFound,
+            await service.CheckAccessAsync(Guid.NewGuid(), AsAdmin()));
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public async Task Rescheduling_a_draft_must_not_publish_a_public_lifecycle_event()
     {
         var connectionString = await CreateIsolatedDatabaseAsync();

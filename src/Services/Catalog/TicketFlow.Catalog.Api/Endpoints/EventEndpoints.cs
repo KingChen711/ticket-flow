@@ -43,6 +43,29 @@ public static class EventEndpoints
             return detail is null ? Results.NotFound() : Results.Ok(detail);
         });
 
+        // Gateway-owned media execution still asks Catalog, the owner of the Event aggregate, for
+        // the resource decision. The caller's bearer token is validated independently here; the
+        // gateway's RequireOrganizer policy is defense in depth, not a substituted trust boundary.
+        group.MapGet("/{id:guid}/media-upload-authorization", async (
+            Guid id,
+            ClaimsPrincipal user,
+            EventService service,
+            CancellationToken ct) =>
+        {
+            if (!CatalogCallerFactory.TryCreate(user, out var caller))
+                return Results.BadRequest(new { error = "Authenticated subject is not a valid user id." });
+
+            var access = await service.CheckAccessAsync(id, caller, ct);
+            return access switch
+            {
+                EventAccessResult.Allowed => Results.NoContent(),
+                EventAccessResult.Forbidden => Results.Json(
+                    new { error = "The caller does not own this event." },
+                    statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.NotFound(),
+            };
+        }).RequireAuthorization("RequireOrganizer");
+
         // "Update" in Phase 1 only covers rescheduling — Event exposes no other mutator for
         // Title/Description/Artist (see Event.cs); editing those isn't modeled yet.
         group.MapPut("/{id:guid}", async (Guid id, RescheduleEventRequest request, ClaimsPrincipal user, EventService service, CancellationToken ct) =>

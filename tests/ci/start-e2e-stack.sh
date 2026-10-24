@@ -15,7 +15,7 @@ services=(
 # database bootstrap so an older volume created before a service/database was introduced can
 # still execute the current E2E suite. Keycloak may have exited while the missing database was
 # being repaired, so explicitly bring it back afterwards.
-docker exec -i ticketflow-postgres psql -v ON_ERROR_STOP=1 -U ticketflow -d ticketflow \
+"${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U ticketflow -d ticketflow \
   < infrastructure/postgres/init/01-create-databases.sql
 "${compose[@]}" up -d keycloak
 
@@ -45,7 +45,9 @@ wait_http http://localhost:8080/catalog/events gateway-catalog-route
 wait_http http://localhost:8080/health/ready gateway-readiness
 
 for _ in $(seq 1 60); do
-  if [[ "$(docker inspect --format '{{.State.Health.Status}}' ticketflow-e2e-functions)" == "healthy" ]]; then
+  functions_container=$("${compose[@]}" ps -q e2e-functions)
+  if [[ -n "$functions_container" ]] &&
+     [[ "$(docker inspect --format '{{.State.Health.Status}}' "$functions_container")" == "healthy" ]]; then
     echo "e2e-functions is healthy"
     exit 0
   fi

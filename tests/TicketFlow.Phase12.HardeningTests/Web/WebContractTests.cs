@@ -101,6 +101,22 @@ public sealed class WebContractTests
         Assert.Equal("anonymous", route.GetProperty("AuthorizationPolicy").GetString());
     }
 
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public void Public_event_recommendations_do_not_require_a_browser_bearer_token()
+    {
+        var root = FindRepositoryRoot();
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            root, "src", "Gateway", "TicketFlow.Gateway", "appsettings.json")));
+        var route = document.RootElement
+            .GetProperty("ReverseProxy")
+            .GetProperty("Routes")
+            .GetProperty("recommendation-route");
+
+        Assert.Equal("/recommendation/{**catch-all}", route.GetProperty("Match").GetProperty("Path").GetString());
+        Assert.Equal("anonymous", route.GetProperty("AuthorizationPolicy").GetString());
+    }
+
     private static HttpClient Client(HttpStatusCode statusCode, string body) => new(new StubHandler(statusCode, body))
     {
         BaseAddress = new Uri("http://reservation.test"),

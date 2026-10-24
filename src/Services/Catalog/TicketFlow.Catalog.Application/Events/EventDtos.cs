@@ -22,6 +22,13 @@ public sealed record AddPriceTierRequest(Guid SectionId, decimal Amount, string?
 
 public sealed record PriceTierResponse(Guid Id, Guid SectionId, decimal Amount, string Currency);
 
+public enum EventAccessResult
+{
+    Allowed,
+    Forbidden,
+    NotFound,
+}
+
 public sealed record EventResponse(
     Guid Id,
     string Title,

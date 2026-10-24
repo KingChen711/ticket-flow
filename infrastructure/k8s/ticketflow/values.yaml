@@ -24,7 +24,17 @@ secrets:
     keycloakDbPassword: dev-keycloak-db-change-me
     redisPassword: dev-redis-change-me
     rabbitmqAdminPassword: dev-rabbit-admin-change-me
-    rabbitmqAppPassword: dev-rabbit-app-change-me
+    rabbitmqLegacyDisabledPassword: dev-rabbit-legacy-disabled-change-me
+    rabbitServicePasswords:
+      catalog: dev-rabbit-catalog-change-me
+      reservation: dev-rabbit-reservation-change-me
+      ordering: dev-rabbit-ordering-change-me
+      notification: dev-rabbit-notification-change-me
+      search: dev-rabbit-search-change-me
+      payment: dev-rabbit-payment-change-me
+      ticketing: dev-rabbit-ticketing-change-me
+      recommendation: dev-rabbit-recommendation-change-me
+      analytics: dev-rabbit-analytics-change-me
     kafkaUsername: ticketflow_app
     kafkaPassword: dev-kafka-app-change-me
     mongoPassword: dev-mongo-change-me
@@ -42,10 +52,17 @@ secrets:
     organizerClientSecret: organizer-dashboard-dev-secret
     scannerAuthSecret: phase12-scanner-auth-secret-change-me
     scannerClientSecret: gate-scanner-dev-secret
+    serviceClientSecret: internal-services-dev-secret
 
 runtime:
   environment: Development
   gatewayUrl: http://gateway:8080
+  publicGatewayUrl: http://localhost:30080
+  cors:
+    allowedOrigins:
+      - http://localhost:3000
+      - http://localhost:3001
+      - http://localhost:3002
   rabbitmq:
     host: rabbitmq
     virtualHost: ticketflow
@@ -75,6 +92,8 @@ runtime:
     serverUrl: http://keycloak:8180
     browserIssuer: http://localhost:8180/realms/ticketflow
     healthUrl: http://keycloak:9000/health/ready
+    tokenEndpoint: http://keycloak:8180/realms/ticketflow/protocol/openid-connect/token
+    serviceClientId: ticketflow-internal
   elasticsearchUri: http://elasticsearch:9200
   otlpEndpoint: http://ticketflow-jaeger:4317
   minio:
@@ -115,7 +134,9 @@ infra:
     enabled: true
     image: masstransit/rabbitmq@sha256:b09de6c97585b9e14103ff8827a9f25784de81a3a6464df532947dd8f2299005
     adminUser: ticketflow_admin
-    appUser: ticketflow_app
+    # Importing definitions is additive on an existing PVC. Keep the old shared principal only
+    # long enough to rotate its password and replace its permissions with deny-all.
+    legacyAppUser: ticketflow_app
     storage: 2Gi
     resources:
       requests: { cpu: 100m, memory: 256Mi }
@@ -215,6 +236,8 @@ services:
     dll: TicketFlow.Catalog.Api.dll
     port: 8002
     usesRabbit: true
+    rabbitUser: ticketflow_catalog
+    usesServiceToken: true
     databaseSecretKey: connection-catalog
     postgresUriSecretKey: postgres-uri-catalog
     schemaGate: { kind: ef, schema: catalog, migration: 20260725195248_Phase12WebContracts }
@@ -234,6 +257,7 @@ services:
     port: 8003
     extraPorts: [{ name: grpc, port: 9003 }]
     usesRabbit: true
+    rabbitUser: ticketflow_reservation
     usesRedis: true
     databaseSecretKey: connection-reservation
     postgresUriSecretKey: postgres-uri-reservation
@@ -244,16 +268,22 @@ services:
     dll: TicketFlow.Ordering.Api.dll
     port: 8004
     usesRabbit: true
+    rabbitUser: ticketflow_ordering
     usesKafka: true
+    usesServiceToken: true
     databaseSecretKey: connection-ordering
     postgresUriSecretKey: postgres-uri-ordering
-    schemaGate: { kind: marten }
+    schemaGate:
+      kind: marten
+      component: ordering
+      version: phase12-ordering-20260727-v1
   notification:
     enabled: true
     image: ticket-flow-notification
     dll: TicketFlow.Notification.Api.dll
     port: 8005
     usesRabbit: true
+    rabbitUser: ticketflow_notification
     usesMongo: true
     usesNotificationProvider: true
   search:
@@ -262,13 +292,20 @@ services:
     dll: TicketFlow.Search.Api.dll
     port: 8006
     usesRabbit: true
-    schemaGate: { kind: elasticsearch, index: events }
+    rabbitUser: ticketflow_search
+    schemaGate:
+      kind: elasticsearch
+      index: events
+      markerIndex: ticketflow-schema-versions
+      component: search
+      version: phase12-search-20260727-v1
   payment:
     enabled: true
     image: ticket-flow-payment
     dll: TicketFlow.Payment.Api.dll
     port: 8007
     usesRabbit: true
+    rabbitUser: ticketflow_payment
     databaseSecretKey: connection-payment
     postgresUriSecretKey: postgres-uri-payment
     schemaGate: { kind: ef, schema: payment, migration: 20260723162750_Phase12PaymentCancellationRecovery }
@@ -278,6 +315,7 @@ services:
     dll: TicketFlow.Ticketing.Api.dll
     port: 8008
     usesRabbit: true
+    rabbitUser: ticketflow_ticketing
     usesMinio: true
     usesFunctions: true
     databaseSecretKey: connection-ticketing
@@ -289,6 +327,7 @@ services:
     dll: TicketFlow.Recommendation.Api.dll
     port: 8009
     usesRabbit: true
+    rabbitUser: ticketflow_recommendation
     usesMongo: true
     migration: true
     schemaGate: { kind: mongodb, database: recommendation, collection: purchaseHistory, index: ux_purchase_history_user_id }
@@ -298,9 +337,15 @@ services:
     dll: TicketFlow.Analytics.Api.dll
     port: 8010
     usesRabbit: true
+    rabbitUser: ticketflow_analytics
     usesKafka: true
     usesClickhouse: true
-    schemaGate: { kind: clickhouse, table: sales }
+    schemaGate:
+      kind: clickhouse
+      table: sales
+      markerTable: schema_versions
+      component: analytics
+      version: phase12-analytics-20260727-v1
   gateway:
     enabled: true
     image: ticket-flow-gateway
@@ -324,7 +369,7 @@ frontends:
     image: ticket-flow-organizer-dashboard
     port: 3001
     readinessPath: /organizer
-    authUrl: http://localhost:3001
+    authUrl: http://localhost:3001/organizer/api/auth
     authSecretKey: organizer-auth-secret
     clientId: ticketflow-organizer-dashboard
     clientSecretKey: organizer-client-secret
@@ -333,7 +378,7 @@ frontends:
     image: ticket-flow-gate-scanner
     port: 3002
     readinessPath: /scanner
-    authUrl: http://localhost:3002
+    authUrl: http://localhost:3002/scanner/api/auth
     authSecretKey: scanner-auth-secret
     clientId: ticketflow-gate-scanner
     clientSecretKey: scanner-client-secret

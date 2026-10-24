@@ -1,6 +1,6 @@
 ---
 title: "Phase 12 hardening evidence"
-updated: 2026-07-26
+updated: 2026-07-27
 tags: [ticketflow, phase-12, evidence, e2e, chaos, release]
 ---
 
@@ -39,6 +39,31 @@ called locally release-ready, but not remotely admitted, until the user commits/
 The hardening TRX files are `output/test-results/hardening/phase12-harness-{1,2}.trx`.
 The full-stack artifact snapshot is under `output/ci/full-stack/`. Both locations are ignored build
 evidence, not source-controlled fixtures; CI uploads their equivalent for 14/30 days.
+
+## Post-audit delta — 2026-07-27
+
+Nhóm E remediation được kiểm lại trên chính worktree này: web contracts **13/13**; browser
+multi-zone + checkout re-auth **2/2**; `Phase12Harness` sau khi build riêng (không dùng binary cũ)
+**221/221**; regression solution **88/88**; frontend lint/typecheck/build đều xanh. Helm 3.17 lint
+default/production đều 0 failed và production render chỉ có một CORS origin, không có localhost
+hay development service secret. Browser test camera riêng với Keycloak + OAuth callback thật xanh
+**1/1** (ép `video.play()` lỗi, xác nhận track stop và `srcObject` detach). Sau đó full authenticated
+stack được build lại từ worktree và cả suite xanh **4/4** trong 54,8 giây: purchase/PDF/check-in,
+cancel/refund/revoke, Reservation outage/recovery và camera lifecycle. Lần gọi đầu dừng ở bước
+raster PDF vì `pdftoppm` không có trên `PATH`; rerun trỏ `E2E_PDFTOPPM` tới Poppler đi kèm runner
+đã xanh toàn bộ. Compose project cô lập `ticketflow-e2e-group-e` cùng volume test được xoá sau gate.
+
+Nhóm F remediation đã sửa các contract bị audit phát hiện: Notification stub không còn phụ thuộc
+health URL giả; Marten/Elasticsearch/ClickHouse gate bằng exact version marker; Kind chờ migration
+Job; flash-sale so exact event cohort/payment delta; chaos dùng project-scoped force-recreate và
+marker riêng cho Redis/RabbitMQ/Kafka/Keycloak; toàn bộ init container có restricted security
+context + resource bounds; RabbitMQ dùng identity riêng theo service với permission regex thu hẹp.
+Gate cục bộ sau sửa: solution build **0 warning/0 error**; contract tests liên quan **11/11**;
+Compose development/E2E config parse thành công; Helm development/production lint **0 failed**,
+render **87 manifests**, kiểm đủ **29 init containers** và **11 RabbitMQ users/permissions**
+(admin, 9 service identities và 1 legacy identity deny-all để upgrade PVC an toàn).
+Docker daemon đang tắt ở vòng xác minh này nên full stateful recreate/E2E mạnh hơn chưa được chạy
+lại; CI nightly/explicit chaos là admission còn pending cho đúng worktree mới.
 
 ## Reproducible business IDs
 

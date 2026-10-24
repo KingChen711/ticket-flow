@@ -173,14 +173,23 @@ export function parseWorkflowResponse(value: unknown): EventOnboardingWorkflowRe
 export function parseRevenueResult(value: unknown): RevenueResult {
   const object = record(value, "revenue result");
   return {
-    totalRevenue: nonNegativeNumber(object.totalRevenue, "total revenue"),
+    totalRevenue: nullableNonNegativeNumber(object.totalRevenue, "total revenue"),
     totalSeats: nonNegativeNumber(object.totalSeats, "total seats"),
     byEvent: array(object.byEvent, "event revenue").map((item) => {
       const revenue = record(item, "event revenue");
       return {
         eventId: text(revenue.eventId, "revenue eventId"),
+        currency: text(revenue.currency, "event revenue currency"),
         revenue: nonNegativeNumber(revenue.revenue, "event revenue"),
         seatCount: nonNegativeNumber(revenue.seatCount, "event seatCount"),
+      };
+    }),
+    byCurrency: array(object.byCurrency, "currency revenue").map((item) => {
+      const revenue = record(item, "currency revenue");
+      return {
+        currency: text(revenue.currency, "currency revenue currency"),
+        revenue: nonNegativeNumber(revenue.revenue, "currency revenue"),
+        seatCount: nonNegativeNumber(revenue.seatCount, "currency revenue seatCount"),
       };
     }),
   };
@@ -299,6 +308,11 @@ function nonNegativeNumber(value: unknown, field: string): number {
     throw new TypeError(`${field} must be a non-negative number.`);
   }
   return value;
+}
+
+function nullableNonNegativeNumber(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  return nonNegativeNumber(value, field);
 }
 
 function positiveNumber(value: unknown, field: string): number {

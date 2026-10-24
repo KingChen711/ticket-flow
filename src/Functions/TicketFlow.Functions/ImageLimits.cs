@@ -18,8 +18,11 @@ namespace TicketFlow.Functions;
 /// </remarks>
 internal static class ImageLimits
 {
-    /// <summary>Largest accepted upload. Comfortably above a real poster, far below a memory problem.</summary>
-    public const int MaxBytes = 8 * 1024 * 1024;
+    /// <summary>
+    /// Largest accepted upload. Four MiB remains below Lambda's six-MiB synchronous Invoke
+    /// transport ceiling after base64 expansion and JSON framing.
+    /// </summary>
+    public const int MaxBytes = 4 * 1024 * 1024;
 
     /// <summary>Largest accepted single edge, so an extreme aspect ratio cannot slip under the pixel budget.</summary>
     public const int MaxDimension = 10_000;

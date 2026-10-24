@@ -13,13 +13,13 @@ function authEnv(app: "customer" | "organizer" | "scanner") {
       clientSecret: "customer-web-dev-secret",
     },
     organizer: {
-      url: "http://localhost:3001",
+      url: "http://localhost:3001/organizer/api/auth",
       secret: "phase12-organizer-auth-secret-change-me",
       id: "ticketflow-organizer-dashboard",
       clientSecret: "organizer-dashboard-dev-secret",
     },
     scanner: {
-      url: "http://localhost:3002",
+      url: "http://localhost:3002/scanner/api/auth",
       secret: "phase12-scanner-auth-secret-change-me",
       id: "ticketflow-gate-scanner",
       clientSecret: "gate-scanner-dev-secret",
@@ -33,7 +33,7 @@ function authEnv(app: "customer" | "organizer" | "scanner") {
     AUTH_KEYCLOAK_ID: values.id,
     AUTH_KEYCLOAK_SECRET: values.clientSecret,
     GATEWAY_URL: gatewayUrl,
-    NEXT_PUBLIC_GATEWAY_URL: gatewayUrl,
+    PUBLIC_GATEWAY_URL: gatewayUrl,
   };
 }
 

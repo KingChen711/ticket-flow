@@ -8,10 +8,14 @@
 {{- if eq .Values.runtime.rabbitmq.virtualHost "/" }}{{ fail "production RabbitMQ must use a dedicated virtual host" }}{{ end }}
 {{- if not .Values.runtime.kafka.useSsl }}{{ fail "production Kafka must enable TLS" }}{{ end }}
 {{- if not .Values.runtime.kafka.useSasl }}{{ fail "production Kafka must enable SASL authentication" }}{{ end }}
+{{- if not .Values.runtime.keycloak.serviceClientId }}{{ fail "production serviceClientId is required" }}{{ end }}
+{{- if not .Values.runtime.cors.allowedOrigins }}{{ fail "production CORS allowedOrigins cannot be empty" }}{{ end }}
 {{- range $name, $url := dict
       "gateway" .Values.runtime.gatewayUrl
+      "public-gateway" .Values.runtime.publicGatewayUrl
       "keycloak-authority" .Values.runtime.keycloak.authority
       "keycloak-health" .Values.runtime.keycloak.healthUrl
+      "keycloak-token" .Values.runtime.keycloak.tokenEndpoint
       "elasticsearch" .Values.runtime.elasticsearchUri
       "otlp" .Values.runtime.otlpEndpoint
       "functions" .Values.runtime.functions.serviceUrl
@@ -21,5 +25,13 @@
 {{- if not (hasPrefix "https://" $url) }}{{ fail (printf "production endpoint %s must use HTTPS" $name) }}{{ end }}
 {{- if contains "host.docker.internal" $url }}{{ fail (printf "production endpoint %s cannot use host.docker.internal" $name) }}{{ end }}
 {{- end }}
+{{- range $origin := .Values.runtime.cors.allowedOrigins }}
+{{- if not (hasPrefix "https://" $origin) }}{{ fail "production CORS origins must use HTTPS" }}{{ end }}
+{{- end }}
 {{- if .Values.infra.keycloak.importDevelopmentRealm }}{{ fail "development Keycloak realm import is forbidden in production" }}{{ end }}
+{{- end }}
+{{- range $name, $svc := .Values.services }}
+{{- if and $svc.enabled $svc.usesRabbit (not $svc.rabbitUser) }}
+{{- fail (printf "RabbitMQ service %s requires a dedicated rabbitUser" $name) }}
+{{- end }}
 {{- end }}

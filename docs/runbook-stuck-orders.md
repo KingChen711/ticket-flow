@@ -87,10 +87,10 @@ Message trong `*_error` là fault vĩnh viễn hoặc đã hết bậc redeliver
 
 ```bash
 # Xem nội dung
-docker exec ticketflow-rabbitmq rabbitmqadmin get queue=<queue>_error count=5
+docker compose exec -T rabbitmq rabbitmqadmin get queue=<queue>_error count=5
 
 # Đẩy lại vào queue chính
-docker exec ticketflow-rabbitmq rabbitmqadmin publish \
+docker compose exec -T rabbitmq rabbitmqadmin publish \
   exchange=<queue> routing_key="" payload="<payload>"
 ```
 

@@ -20,25 +20,33 @@ public static class MediaEndpoints
     {
         var group = app.MapGroup("/media").WithTags("Media");
 
-        // RequireOrganizer directly at the gateway (not RequireAuthenticated + service-side
-        // enforcement like every other write route) — there's no ASP.NET service on the other
-        // end to own that check itself; the Lambda trusts the Docker network the same way every
-        // other service-tier endpoint in this project does (docs/phase-9-plan.md mục 6).
-        group.MapPost("/posters", UploadPosterAsync).RequireAuthorization("RequireOrganizer");
+        // The role check only establishes that this is an organizer. UploadPosterAsync separately
+        // asks Catalog whether this caller owns the specific Event before any bytes are accepted.
+        group.MapPost("/events/{eventId:guid}/posters", UploadPosterAsync)
+            .RequireAuthorization("RequireOrganizer");
 
         // Anonymous — posters are public images, same as catalog's GET routes.
         group.MapGet("/{**key}", GetPosterAsync);
     }
 
     /// <summary>
-    /// Matches ImageLimits.MaxBytes in the Lambda. Enforced here as well, not instead: the gateway
-    /// is where the bytes are buffered into memory and base64-expanded by a third, so "the Lambda
-    /// will reject it" is too late — the cost is already paid on this side.
+    /// Matches ImageLimits.MaxBytes in the Lambda. Four MiB leaves safe room for base64 expansion
+    /// and the JSON envelope below the six-MiB synchronous AWS Lambda Invoke payload limit.
+    /// Enforced here as well, not instead: this is where buffering/base64 expansion happens.
     /// </summary>
-    private const long MaxUploadBytes = 8 * 1024 * 1024;
+    private const long MaxUploadBytes = 4 * 1024 * 1024;
 
-    private static async Task<IResult> UploadPosterAsync(HttpRequest request, IAmazonLambda lambda, CancellationToken ct)
+    private static async Task<IResult> UploadPosterAsync(
+        Guid eventId,
+        HttpRequest request,
+        IHttpClientFactory httpClientFactory,
+        IAmazonLambda lambda,
+        CancellationToken ct)
     {
+        var ownershipFailure = await AuthorizeEventAsync(eventId, request, httpClientFactory, ct);
+        if (ownershipFailure is not null)
+            return ownershipFailure;
+
         // Content-Length is a fast reject when it is present and honest; the bounded read below is
         // what actually enforces the limit, because a chunked request carries no length at all and
         // a lying one is exactly what an attacker sends.
@@ -49,7 +57,9 @@ public static class MediaEndpoints
         if (!await CopyBoundedAsync(request.Body, buffer, MaxUploadBytes, ct))
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
-        var payload = JsonSerializer.Serialize(new { base64Content = Convert.ToBase64String(buffer.ToArray()) }, JsonOptions);
+        var payload = JsonSerializer.Serialize(
+            new { eventId, base64Content = Convert.ToBase64String(buffer.ToArray()) },
+            JsonOptions);
         var invokeResponse = await lambda.InvokeAsync(new InvokeRequest
         {
             FunctionName = "UploadPosterFunction",
@@ -69,6 +79,50 @@ public static class MediaEndpoints
         return result.Accepted
             ? Results.Created($"/media/{result.Key}", new { result.Key, result.ThumbnailKey })
             : Results.BadRequest(new { error = result.Error });
+    }
+
+    private static async Task<IResult?> AuthorizeEventAsync(
+        Guid eventId,
+        HttpRequest request,
+        IHttpClientFactory httpClientFactory,
+        CancellationToken cancellationToken)
+    {
+        using var authorizationRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"events/{eventId}/media-upload-authorization");
+        authorizationRequest.Headers.TryAddWithoutValidation(
+            "Authorization",
+            request.Headers.Authorization.ToString());
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClientFactory
+                .CreateClient("catalog-media-ownership")
+                .SendAsync(authorizationRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                return null;
+
+            var status = (int)response.StatusCode;
+            return status is StatusCodes.Status400BadRequest
+                or StatusCodes.Status401Unauthorized
+                or StatusCodes.Status403Forbidden
+                or StatusCodes.Status404NotFound
+                ? Results.StatusCode(status)
+                : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private static async Task<IResult> GetPosterAsync(string key, IAmazonLambda lambda, CancellationToken ct)

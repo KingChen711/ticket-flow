@@ -20,21 +20,21 @@ curl --silent --show-error -u admin:ticketflow http://localhost:3300/api/v1/prov
 
 {
   echo "== reservation allocations =="
-  docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_reservation -v ON_ERROR_STOP=1 -c \
+  "${compose[@]}" exec -T postgres psql -U ticketflow -d ticketflow_reservation -v ON_ERROR_STOP=1 -c \
     "SELECT event_id, seat_id, order_id, owner_user_id, generation, state FROM reservation.seat_allocations ORDER BY updated_at DESC LIMIT 500;"
   echo "== duplicate active seat guard =="
-  docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_reservation -v ON_ERROR_STOP=1 -c \
+  "${compose[@]}" exec -T postgres psql -U ticketflow -d ticketflow_reservation -v ON_ERROR_STOP=1 -c \
     "SELECT event_id, seat_id, count(*) FROM reservation.seat_allocations WHERE state IN ('Held','Confirmed') GROUP BY event_id, seat_id HAVING count(*) > 1;"
   echo "== payment attempts and refunds =="
-  docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_payment -v ON_ERROR_STOP=1 -c \
+  "${compose[@]}" exec -T postgres psql -U ticketflow -d ticketflow_payment -v ON_ERROR_STOP=1 -c \
     "SELECT order_id, state, gateway_reference, reconcile_attempts FROM payment.payment_attempts ORDER BY created_at DESC LIMIT 500;"
-  docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_payment -v ON_ERROR_STOP=1 -c \
+  "${compose[@]}" exec -T postgres psql -U ticketflow -d ticketflow_payment -v ON_ERROR_STOP=1 -c \
     "SELECT order_id, state, gateway_reference, reconcile_attempts FROM payment.payment_refunds ORDER BY created_at DESC LIMIT 500;"
   echo "== ticket issuance =="
-  docker exec ticketflow-postgres psql -U ticketflow -d ticketflow_ticketing -v ON_ERROR_STOP=1 -c \
+  "${compose[@]}" exec -T postgres psql -U ticketflow -d ticketflow_ticketing -v ON_ERROR_STOP=1 -c \
     "SELECT order_id, seat_id, issuance_state, checked_in_at, revoked_at FROM ticketing.tickets ORDER BY issued_at DESC LIMIT 500;"
   echo "== analytics business IDs =="
-  docker exec ticketflow-clickhouse clickhouse-client --user ticketflow --password ticketflow --database analytics \
+  "${compose[@]}" exec -T clickhouse clickhouse-client --user ticketflow --password ticketflow --database analytics \
     --query "SELECT order_id, event_id, seat_count, amount, currency FROM sales FINAL ORDER BY completed_at DESC LIMIT 500 FORMAT PrettyCompact"
 } >"$artifact_dir/db-invariants.txt" 2>&1
 

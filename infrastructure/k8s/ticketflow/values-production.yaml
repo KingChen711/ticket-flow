@@ -14,6 +14,10 @@ secrets:
 runtime:
   environment: Production
   gatewayUrl: https://api.ticketflow.example
+  publicGatewayUrl: https://api.ticketflow.example
+  cors:
+    allowedOrigins:
+      - https://ticketflow.example
   rabbitmq:
     host: rabbitmq.production.internal
     virtualHost: ticketflow
@@ -44,6 +48,8 @@ runtime:
     serverUrl: https://auth.ticketflow.example
     browserIssuer: https://auth.ticketflow.example/realms/ticketflow
     healthUrl: https://auth.ticketflow.example/health/ready
+    tokenEndpoint: https://auth.ticketflow.example/realms/ticketflow/protocol/openid-connect/token
+    serviceClientId: ticketflow-internal
   elasticsearchUri: https://elasticsearch.production.internal:9200
   otlpEndpoint: https://otel.production.internal:4317
   minio:
@@ -65,7 +71,7 @@ runtime:
 infra:
   postgres: { enabled: false }
   redis: { enabled: false }
-  rabbitmq: { enabled: false, appUser: ticketflow_app }
+  rabbitmq: { enabled: false }
   kafka: { enabled: false }
   minio: { enabled: false }
   elasticsearch: { enabled: false }
@@ -80,6 +86,6 @@ frontends:
   customer-web:
     authUrl: https://ticketflow.example
   organizer-dashboard:
-    authUrl: https://ticketflow.example/organizer
+    authUrl: https://ticketflow.example/organizer/api/auth
   gate-scanner:
-    authUrl: https://ticketflow.example/scanner
+    authUrl: https://ticketflow.example/scanner/api/auth

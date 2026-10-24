@@ -44,7 +44,7 @@ export default async function RootLayout({
               <form
                 action={async () => {
                   "use server";
-                  await signOut({ redirectTo: "/scanner" });
+                  await signOut({ redirectTo: "/scanner/" });
                 }}
               >
                 <button type="submit" className="text-blue-600 underline">
@@ -57,7 +57,7 @@ export default async function RootLayout({
               action={async () => {
                 "use server";
                 // See organizer-dashboard/src/app/layout.tsx for why redirectTo is needed here.
-                await signIn("keycloak", { redirectTo: "/scanner" });
+                await signIn("keycloak", { redirectTo: "/scanner/" });
               }}
             >
               <button type="submit" className="text-blue-600 underline">

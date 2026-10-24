@@ -15,14 +15,15 @@ export default async function CheckoutPage({
   const { holdId, idempotencyKey } = await searchParams;
   if (!holdId) redirect("/");
 
-  const session = await auth();
-  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
-    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/checkout?holdId=${holdId}`)}`);
-  }
-
   if (!idempotencyKey || idempotencyKey.length > 200) {
     const stableKey = randomUUID();
     redirect(`/checkout?${new URLSearchParams({ holdId, idempotencyKey: stableKey })}`);
+  }
+
+  const session = await auth();
+  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
+    const callbackUrl = `/checkout?${new URLSearchParams({ holdId, idempotencyKey })}`;
+    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   let quote;

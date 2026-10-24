@@ -101,7 +101,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "secret": "organizer-dashboard-dev-secret",
-      "redirectUris": ["http://localhost:3001/api/auth/callback/keycloak"],
+      "redirectUris": ["http://localhost:3001/organizer/api/auth/callback/keycloak"],
       "webOrigins": ["http://localhost:3001"],
       "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
     },
@@ -116,7 +116,7 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "secret": "gate-scanner-dev-secret",
-      "redirectUris": ["http://localhost:3002/api/auth/callback/keycloak"],
+      "redirectUris": ["http://localhost:3002/scanner/api/auth/callback/keycloak"],
       "webOrigins": ["http://localhost:3002"],
       "defaultClientScopes": ["profile", "email", "roles", "ticketflow-audience"]
     }

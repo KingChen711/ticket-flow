@@ -112,8 +112,30 @@ public static class ServiceTokenExtensions
     /// That client is registered by name and left plain on purpose — routing the token request
     /// through a handler that itself needs a token is infinite recursion, not a config detail.
     /// </summary>
-    public static IServiceCollection AddServiceTokenHandler(this IServiceCollection services)
+    public static IServiceCollection AddServiceTokenHandler(
+        this IServiceCollection services,
+        IConfiguration configuration)
     {
+        var section = configuration.GetSection("Keycloak");
+        var tokenEndpoint = section["TokenEndpoint"];
+        var clientId = section["ServiceClientId"];
+        var clientSecret = section["ServiceClientSecret"];
+        if (!Uri.TryCreate(tokenEndpoint, UriKind.Absolute, out var tokenEndpointUri))
+            throw new InvalidOperationException(
+                "Missing or invalid configuration: Keycloak:TokenEndpoint must be an absolute URI.");
+        if (string.IsNullOrWhiteSpace(clientId))
+            throw new InvalidOperationException("Missing configuration: Keycloak:ServiceClientId");
+        if (string.IsNullOrWhiteSpace(clientSecret))
+            throw new InvalidOperationException("Missing configuration: Keycloak:ServiceClientSecret");
+
+        var production = string.Equals(
+            configuration["ASPNETCORE_ENVIRONMENT"], "Production", StringComparison.OrdinalIgnoreCase);
+        if (production && tokenEndpointUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException(
+                "Production Keycloak service-token endpoint must use HTTPS.");
+        }
+
         services.AddHttpClient(ServiceTokenProvider.TokenClientName);
         services.AddSingleton<IServiceTokenProvider, ServiceTokenProvider>();
         services.AddTransient<ServiceTokenHandler>();

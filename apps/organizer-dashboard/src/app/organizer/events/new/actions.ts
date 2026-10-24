@@ -33,7 +33,7 @@ export async function createEventAction(
   formData: FormData,
 ): Promise<CreateEventActionState> {
   const session = await auth();
-  if (!session?.serverAccessToken || session.error) redirect("/api/auth/signin");
+  if (!session?.serverAccessToken || session.error) redirect("/organizer/api/auth/signin");
   if (!session.roles?.includes("organizer")) return { workflow: null, error: "Only organizers can create events." };
 
   const existingWorkflowId = formData.get("workflowId")?.toString();

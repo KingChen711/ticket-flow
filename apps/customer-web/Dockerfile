@@ -17,15 +17,14 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 # next.config.ts is evaluated during `next build`, so the Multi-Zones destinations and the
-# browser-facing SignalR URL must be available *now*, not only as runtime pod env vars.  The
-# defaults are the K8s Service DNS names / the kind host mapping; host `pnpm dev` keeps its
-# localhost defaults because these vars only exist in the Docker build.
+# zone destinations must be available *now*, not only as runtime pod env vars. The public
+# SignalR URL is deliberately not a NEXT_PUBLIC build arg: the server reads PUBLIC_GATEWAY_URL
+# at request time and passes it to the client component, so one immutable image can move between
+# environments without baking a developer's localhost into browser JavaScript.
 ARG ORGANIZER_ZONE_URL=http://organizer-dashboard:3001
 ARG SCANNER_ZONE_URL=http://gate-scanner:3002
-ARG NEXT_PUBLIC_GATEWAY_URL=http://localhost:30080
 ENV ORGANIZER_ZONE_URL=$ORGANIZER_ZONE_URL \
-    SCANNER_ZONE_URL=$SCANNER_ZONE_URL \
-    NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
+    SCANNER_ZONE_URL=$SCANNER_ZONE_URL
 COPY . .
 RUN pnpm --filter customer-web build
 

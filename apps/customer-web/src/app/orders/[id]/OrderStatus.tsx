@@ -57,21 +57,35 @@ export function OrderStatus({ orderId, initialOrder }: { orderId: string; initia
 
   useEffect(() => {
     if (order.status !== "Confirmed" || tickets !== null) return;
-    const controller = new AbortController();
-    void fetchJson(`/api/orders/${encodeURIComponent(orderId)}/tickets`, {
-      cache: "no-store",
-      signal: controller.signal,
-      timeoutMs: 5_000,
-      validate: parseTicketResponses,
-    }).then((result) => {
-      setTickets(result);
-      setError(null);
-    }).catch((requestError: unknown) => {
-      if (!controller.signal.aborted) {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+
+    const loadTickets = async () => {
+      controller = new AbortController();
+      try {
+        const result = await fetchJson(`/api/orders/${encodeURIComponent(orderId)}/tickets`, {
+          cache: "no-store",
+          signal: controller.signal,
+          timeoutMs: 5_000,
+          validate: parseTicketResponses,
+        });
+        if (stopped) return;
+        setTickets(result);
+        setError(null);
+      } catch (requestError) {
+        if (stopped || controller.signal.aborted) return;
         setError(requestError instanceof Error ? requestError.message : "Tickets are unavailable.");
+        timer = setTimeout(loadTickets, 2_000);
       }
-    });
-    return () => controller.abort();
+    };
+
+    void loadTickets();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      controller?.abort();
+    };
   }, [orderId, order.status, tickets]);
 
   return (

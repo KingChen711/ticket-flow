@@ -11,6 +11,51 @@ public sealed class MediaUploadLimitTests
 {
     [Fact]
     [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public void Upload_limit_fits_the_synchronous_Lambda_transport_after_base64_framing()
+    {
+        const int lambdaInvokeLimit = 6 * 1024 * 1024;
+        var base64Bytes = 4L * ((ImageLimits.MaxBytes + 2L) / 3L);
+
+        Assert.Equal(4 * 1024 * 1024, ImageLimits.MaxBytes);
+        Assert.True(base64Bytes + 1024 < lambdaInvokeLimit);
+
+        var root = FindRepositoryRoot();
+        var gatewayEndpoint = File.ReadAllText(Path.Combine(
+            root, "src", "Gateway", "TicketFlow.Gateway", "MediaEndpoints.cs"));
+        Assert.Contains(
+            "private const long MaxUploadBytes = 4 * 1024 * 1024;",
+            gatewayEndpoint,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
+    public void Gateway_binds_the_upload_to_an_event_and_authorizes_before_buffering_bytes()
+    {
+        var root = FindRepositoryRoot();
+        var gatewayEndpoint = File.ReadAllText(Path.Combine(
+            root, "src", "Gateway", "TicketFlow.Gateway", "MediaEndpoints.cs"));
+
+        Assert.Contains(
+            "group.MapPost(\"/events/{eventId:guid}/posters\"",
+            gatewayEndpoint,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new { eventId, base64Content",
+            gatewayEndpoint,
+            StringComparison.Ordinal);
+
+        var ownershipCheck = gatewayEndpoint.IndexOf(
+            "var ownershipFailure = await AuthorizeEventAsync",
+            StringComparison.Ordinal);
+        var boundedRead = gatewayEndpoint.IndexOf(
+            "CopyBoundedAsync(request.Body",
+            StringComparison.Ordinal);
+        Assert.True(ownershipCheck >= 0 && boundedRead > ownershipCheck);
+    }
+
+    [Fact]
+    [Trait(HardeningTraits.Name, HardeningTraits.Harness)]
     public void A_normal_poster_is_accepted()
     {
         Assert.True(ImageLimits.TryValidate(EncodePng(1200, 800), out var error), error);
@@ -65,5 +110,13 @@ public sealed class MediaUploadLimitTests
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "TicketFlow.slnx")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new DirectoryNotFoundException("TicketFlow repository root was not found.");
     }
 }

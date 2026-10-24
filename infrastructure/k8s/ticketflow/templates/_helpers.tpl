@@ -11,6 +11,14 @@
 {{- end -}}
 {{- end -}}
 
+{{/* Restricted defaults shared by application and init containers. */}}
+{{- define "ticketflow.restrictedContainerSecurityContext" -}}
+allowPrivilegeEscalation: false
+capabilities: { drop: [ALL] }
+runAsNonRoot: true
+runAsUser: 1654
+{{- end -}}
+
 {{/* Common application configuration. Secret-backed values never enter a ConfigMap. */}}
 {{- define "ticketflow.serviceEnv" -}}
 {{- $root := .root -}}
@@ -27,6 +35,17 @@
   value: {{ $root.Values.runtime.keycloak.authority | quote }}
 - name: Keycloak__ValidIssuers__1
   value: {{ $root.Values.runtime.keycloak.browserIssuer | quote }}
+{{- if $svc.usesServiceToken }}
+- name: Keycloak__TokenEndpoint
+  value: {{ $root.Values.runtime.keycloak.tokenEndpoint | quote }}
+- name: Keycloak__ServiceClientId
+  value: {{ $root.Values.runtime.keycloak.serviceClientId | quote }}
+- name: Keycloak__ServiceClientSecret
+  valueFrom:
+    secretKeyRef:
+      name: {{ $root.Values.secrets.name }}
+      key: service-client-secret
+{{- end }}
 - name: Elasticsearch__Uri
   value: {{ $root.Values.runtime.elasticsearchUri | quote }}
 - name: Otlp__Endpoint
@@ -54,12 +73,12 @@
 - name: RabbitMq__ServerName
   value: {{ $root.Values.runtime.rabbitmq.serverName | quote }}
 - name: RabbitMq__Username
-  value: {{ $root.Values.infra.rabbitmq.appUser | quote }}
+  value: {{ $svc.rabbitUser | quote }}
 - name: RabbitMq__Password
   valueFrom:
     secretKeyRef:
       name: {{ $root.Values.secrets.name }}
-      key: rabbitmq-app-password
+      key: {{ printf "rabbitmq-%s-password" .name }}
 {{- end }}
 {{- if $svc.usesKafka }}
 - name: Kafka__Host
@@ -161,6 +180,12 @@
     secretKeyRef:
       name: {{ $root.Values.secrets.name }}
       key: aws-secret-key
+{{- end }}
+{{- if eq .name "gateway" }}
+{{- range $index, $origin := $root.Values.runtime.cors.allowedOrigins }}
+- name: Cors__AllowedOrigins__{{ $index }}
+  value: {{ $origin | quote }}
+{{- end }}
 {{- end }}
 {{- if $svc.usesNotificationProvider }}
 - name: Delivery__Provider

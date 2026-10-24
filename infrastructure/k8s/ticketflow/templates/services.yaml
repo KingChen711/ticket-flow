@@ -35,6 +35,8 @@ spec:
         - name: wait-for-log-policy
           image: {{ $root.Values.monitoring.curlImage | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
           command: ["sh", "-ceu", "--"]
           args:
             - until curl --fail --silent --show-error {{ printf "%s/_ilm/policy/ticketflow-logs-retention" ($root.Values.runtime.elasticsearchUri | trimSuffix "/") | quote }} >/dev/null; do sleep 2; done
@@ -46,6 +48,10 @@ spec:
         - name: wait-for-schema
           image: {{ $root.Values.infra.postgres.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -67,32 +73,54 @@ spec:
         - name: wait-for-schema
           image: {{ $root.Values.infra.postgres.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: {{ $svc.postgresUriSecretKey }} }
+            - { name: SCHEMA_COMPONENT, value: {{ $svc.schemaGate.component | quote }} }
+            - { name: EXPECTED_SCHEMA_VERSION, value: {{ $svc.schemaGate.version | quote }} }
           command: ["bash", "-ceu", "--"]
           args:
             - |
-              until [ "$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('mt_events','mt_streams')" 2>/dev/null)" = "2" ]; do
-                echo "Waiting for Marten event-store schema"
+              until [ "$(psql "$DATABASE_URL" -Atc "SELECT count(*) FROM public.ticketflow_schema_versions WHERE component = '$SCHEMA_COMPONENT' AND version = '$EXPECTED_SCHEMA_VERSION'" 2>/dev/null)" = "1" ]; do
+                echo "Waiting for $SCHEMA_COMPONENT schema version $EXPECTED_SCHEMA_VERSION"
                 sleep 2
               done
         {{- else if eq $svc.schemaGate.kind "elasticsearch" }}
         - name: wait-for-schema
           image: {{ $root.Values.monitoring.curlImage | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
+          env:
+            - { name: EXPECTED_SCHEMA_VERSION, value: {{ $svc.schemaGate.version | quote }} }
           command: ["sh", "-ceu", "--"]
           args:
-            - until curl --fail --silent --show-error {{ printf "%s/%s" ($root.Values.runtime.elasticsearchUri | trimSuffix "/") $svc.schemaGate.index | quote }} >/dev/null; do sleep 2; done
+            - |
+              marker_url={{ printf "%s/%s/_doc/%s" ($root.Values.runtime.elasticsearchUri | trimSuffix "/") $svc.schemaGate.markerIndex $svc.schemaGate.component | quote }}
+              until curl --fail --silent --show-error "$marker_url" 2>/dev/null | grep -Fq "\"version\":\"$EXPECTED_SCHEMA_VERSION\""; do
+                echo "Waiting for Elasticsearch schema version $EXPECTED_SCHEMA_VERSION"
+                sleep 2
+              done
         {{- else if eq $svc.schemaGate.kind "clickhouse" }}
         - name: wait-for-schema
           image: {{ $root.Values.infra.clickhouse.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           env:
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: clickhouse-password }
+            - { name: EXPECTED_SCHEMA_VERSION, value: {{ $svc.schemaGate.version | quote }} }
           command: ["bash", "-ceu", "--"]
           args:
             - |
@@ -100,11 +128,18 @@ spec:
               {{- if $root.Values.runtime.clickhouse.secure }}
               secure_arg=(--secure)
               {{- end }}
-              until [ "$(clickhouse-client --host {{ $root.Values.runtime.clickhouse.host | quote }} --port {{ $root.Values.runtime.clickhouse.port }} "${secure_arg[@]}" --user {{ $root.Values.runtime.clickhouse.user | quote }} --password "$CLICKHOUSE_PASSWORD" --database {{ $root.Values.runtime.clickhouse.database | quote }} --query 'EXISTS TABLE {{ $svc.schemaGate.table }}' 2>/dev/null)" = "1" ]; do sleep 2; done
+              until [ "$(clickhouse-client --host {{ $root.Values.runtime.clickhouse.host | quote }} --port {{ $root.Values.runtime.clickhouse.port }} "${secure_arg[@]}" --user {{ $root.Values.runtime.clickhouse.user | quote }} --password "$CLICKHOUSE_PASSWORD" --database {{ $root.Values.runtime.clickhouse.database | quote }} --query "SELECT count() FROM {{ $svc.schemaGate.markerTable }} FINAL WHERE component = '{{ $svc.schemaGate.component }}' AND version = '$EXPECTED_SCHEMA_VERSION'" 2>/dev/null)" = "1" ]; do
+                echo "Waiting for ClickHouse schema version $EXPECTED_SCHEMA_VERSION"
+                sleep 2
+              done
         {{- else if eq $svc.schemaGate.kind "mongodb" }}
         - name: wait-for-schema
           image: {{ $root.Values.infra.mongodb.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           env:
             - name: MONGO_URI
               valueFrom:
@@ -118,6 +153,10 @@ spec:
         - name: wait-for-kafka-topic
           image: {{ $root.Values.infra.kafka.image | quote }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+{{ include "ticketflow.restrictedContainerSecurityContext" $root | indent 12 }}
+          resources:
+{{ toYaml $root.Values.workloads.resources | indent 12 }}
           command: ["bash", "-ceu", "--"]
           args:
             - |

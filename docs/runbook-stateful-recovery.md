@@ -1,9 +1,11 @@
 # Runbook — Stateful recovery, migration và secret rotation
 
 > The repeatable admission drill is `tests/ci/run-chaos.sh` on the disposable E2E Compose overlay.
-> It restarts Redis, RabbitMQ, Kafka and Keycloak and verifies the exact order/seat/ticket/analytics
-> IDs from the Playwright seed. See [Phase 12 release gates](runbook-phase-12-release-gates.md) for
-> artifact collection. The manual procedures below remain the production-safe diagnostic path.
+> It force-recreates Redis, RabbitMQ, Kafka and Keycloak, verifies that each container ID changed,
+> then checks broker-owned Redis/RabbitMQ/Kafka/Keycloak markers plus the exact
+> order/seat/ticket/analytics IDs from the Playwright seed. See
+> [Phase 12 release gates](runbook-phase-12-release-gates.md) for artifact collection. The manual
+> procedures below remain the production-safe diagnostic path.
 
 Runbook này đi cùng Phase 12 Commit 17. PostgreSQL là nguồn dữ liệu bền vững cho allocation;
 Redis chỉ là cache/hold acceleration. RabbitMQ, Kafka và Keycloak vẫn phải giữ state qua restart
@@ -15,12 +17,24 @@ Redis chỉ là cache/hold acceleration. RabbitMQ, Kafka và Keycloak vẫn ph�
   bất biến (`appImages.tag`, CI dùng Git SHA).
 - Với profile production, tạo Secret tên `ticketflow-production-runtime` từ secret manager/CSI/
   ExternalSecret. Lấy danh sách key chuẩn từ `templates/secrets.yaml`; không copy các giá trị
-  development. Kafka production tối thiểu cần `kafka-username`, `kafka-password` và
+  development. `service-client-secret` là bắt buộc cho client-credentials giữa Catalog/Ordering
+  và các service nội bộ. Kafka production tối thiểu cần `kafka-username`, `kafka-password` và
   `kafka-client-properties`; key cuối là file properties dùng bởi provisioning/readiness CLI
   (`security.protocol=SASL_SSL`, SCRAM mechanism/JAAS và CA path nếu broker dùng private CA).
   Application đọc credential từ hai key đầu, không nhúng secret vào values/rendered manifest.
+  RabbitMQ dùng identity riêng cho từng consumer: `rabbitmq-catalog-password`,
+  `rabbitmq-reservation-password`, `rabbitmq-ordering-password`,
+  `rabbitmq-notification-password`, `rabbitmq-search-password`, `rabbitmq-payment-password`,
+  `rabbitmq-ticketing-password`, `rabbitmq-recommendation-password` và
+  `rabbitmq-analytics-password`. Không dùng lại admin credential hoặc một app credential chung.
+  Trên managed broker/PVC cũ, thu hồi principal `ticketflow_app` sau rollout; chart development
+  tự rotate password của principal legacy này và đặt cả ba permission thành deny-all (`^$`).
 - Realm development không được import ở production. `values-production.yaml` cố ý không chứa
-  password/token và sẽ fail render nếu bật lại `secrets.create` hoặc endpoint HTTP.
+  password/token và sẽ fail render nếu bật lại `secrets.create` hoặc endpoint HTTP. Realm ngoài
+  cluster phải đăng ký chính xác callback
+  `https://ticketflow.example/organizer/api/auth/callback/keycloak` và
+  `https://ticketflow.example/scanner/api/auth/callback/keycloak` cho hai client tương ứng
+  (thay hostname theo release); callback root `/api/auth/*` cũ không còn hợp lệ.
 - Functions là external dependency có tên DNS rõ ràng (`functions-provider`) và health gate. Với
   kind, provider phải chạy trên network Docker `kind` dưới DNS đã cấu hình; với production, trỏ
   `runtime.functions.externalName/serviceUrl/healthUrl` tới provider HTTPS thật. Không dùng
@@ -85,7 +99,9 @@ Sau mỗi restart:
 - Redis: `redis-cli -a "$REDIS_PASSWORD" INFO persistence` phải có `aof_enabled:1` và
   `aof_last_write_status:ok`; Reservation `/health/ready` trở lại 200 rồi reconciler phải hội tụ.
 - RabbitMQ: `rabbitmqctl list_queues name durable type messages_ready messages_unacknowledged`;
-  queue business phải `durable=true`, `type=quorum`, backlog không biến mất.
+  queue business phải `durable=true`, `type=quorum`, backlog không biến mất. Kiểm tra thêm
+  `rabbitmqctl list_permissions -p ticketflow`: mỗi service chỉ được truy cập endpoint prefix của
+  nó, contract exchange `TicketFlow.*` và temporary bus/system exchange cần cho MassTransit.
 - Kafka: topic vẫn 6 partition, `retention.ms=604800000`; consumer-group offset không quay về đầu.
 - Keycloak: login/user tạo trước restart vẫn tồn tại vì Keycloak dùng database
   `ticketflow_keycloak` trên PostgreSQL, không dùng H2 trong container.

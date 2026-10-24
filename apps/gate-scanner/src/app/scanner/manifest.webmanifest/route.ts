@@ -7,7 +7,7 @@ export function GET() {
     name: "TicketFlow — Gate Scanner",
     short_name: "Gate Scanner",
     description: "Scan ticket QR codes to check attendees in at the gate.",
-    start_url: "/scanner",
+    start_url: "/scanner/",
     scope: "/scanner/",
     display: "standalone",
     background_color: "#ffffff",

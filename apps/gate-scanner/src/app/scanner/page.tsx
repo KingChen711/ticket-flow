@@ -42,7 +42,7 @@ export default async function ScannerPage({ searchParams }: { searchParams: Scan
 
 function ScannerContextForm() {
   return (
-    <form action="/scanner" className="mx-auto flex max-w-md flex-col gap-4 p-6">
+    <form action="/scanner/" className="mx-auto flex max-w-md flex-col gap-4 p-6">
       <h1 className="text-xl font-semibold">Choose gate context</h1>
       <p className="text-sm text-gray-600">
         Each scan is checked online against the selected event and your gate assignment.

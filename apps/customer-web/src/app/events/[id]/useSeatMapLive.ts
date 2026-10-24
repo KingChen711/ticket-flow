@@ -29,6 +29,7 @@ export function useSeatMapLive(
   eventId: string,
   signedIn: boolean,
   initialSeats: SeatAvailabilityResponse[],
+  publicGatewayUrl: string,
 ): { revisions: Record<string, string>; statuses: Record<string, string>; state: LiveConnectionState } {
   const observation = useRef(0);
   const [liveSeats, setLiveSeats] = useState<Record<string, LiveSeatState>>(() => snapshotState(initialSeats, 0));
@@ -40,6 +41,7 @@ export function useSeatMapLive(
     let connection: signalR.HubConnection | undefined;
     let cancelled = false;
     let pollingTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollingActive = false;
     let snapshotController: AbortController | undefined;
     let bufferingLiveUpdates = false;
     let bufferedLiveUpdates: SeatsUpdatedPayload[] = [];
@@ -97,28 +99,36 @@ export function useSeatMapLive(
       }
     };
 
+    const stopPolling = () => {
+      pollingActive = false;
+      if (pollingTimer) clearTimeout(pollingTimer);
+      pollingTimer = undefined;
+    };
+
     const schedulePolling = () => {
-      if (cancelled || pollingTimer) return;
+      if (cancelled || pollingActive) return;
+      pollingActive = true;
       setState("polling");
       const poll = async () => {
+        if (cancelled || !pollingActive) return;
         pollingTimer = undefined;
         try {
           const seats = await fetchSnapshot();
-          if (!cancelled) {
+          if (!cancelled && pollingActive) {
             replaceSnapshot(seats);
             setState("polling");
           }
         } catch {
-          if (!cancelled) setState("unavailable");
+          if (!cancelled && pollingActive) setState("unavailable");
         } finally {
-          if (!cancelled) pollingTimer = setTimeout(poll, 5_000);
+          if (!cancelled && pollingActive) pollingTimer = setTimeout(poll, 5_000);
         }
       };
       pollingTimer = setTimeout(poll, 0);
     };
 
     const connect = async () => {
-      const hubUrl = `${process.env.NEXT_PUBLIC_GATEWAY_URL}/reservation/hubs/seatmap`;
+      const hubUrl = `${publicGatewayUrl}/reservation/hubs/seatmap`;
       const candidate = new signalR.HubConnectionBuilder()
         .withUrl(hubUrl)
         .withAutomaticReconnect([0, 1_000, 3_000, 5_000])
@@ -135,6 +145,7 @@ export function useSeatMapLive(
 
       candidate.onreconnecting(() => setState("connecting"));
       candidate.onreconnected(async () => {
+        stopPolling();
         try {
           await candidate.invoke("JoinEvent", eventId);
           await resyncSnapshot();
@@ -156,6 +167,7 @@ export function useSeatMapLive(
             return;
           }
           connection = candidate;
+          stopPolling();
           await candidate.invoke("JoinEvent", eventId);
           await resyncSnapshot();
           setState("live");
@@ -173,11 +185,11 @@ export function useSeatMapLive(
 
     return () => {
       cancelled = true;
-      if (pollingTimer) clearTimeout(pollingTimer);
+      stopPolling();
       snapshotController?.abort();
       void connection?.stop();
     };
-  }, [eventId, signedIn]);
+  }, [eventId, publicGatewayUrl, signedIn]);
 
   const { revisions, statuses } = useMemo(() => {
     const nextRevisions: Record<string, string> = {};

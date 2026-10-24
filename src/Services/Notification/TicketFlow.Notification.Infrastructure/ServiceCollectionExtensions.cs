@@ -88,4 +88,34 @@ public static class ServiceCollectionExtensions
             throw new InvalidOperationException($"Unsupported notification delivery provider '{provider}'.");
         return "DevelopmentStub";
     }
+
+    /// <summary>
+    /// Returns the external provider health endpoint only when delivery actually uses that
+    /// provider. DevelopmentStub has no external dependency and therefore must not become
+    /// permanently unready because a deliberately non-routable placeholder URL was supplied by
+    /// the development Helm profile.
+    /// </summary>
+    public static Uri? ResolveDeliveryHealthEndpoint(
+        IConfiguration configuration,
+        string environmentName)
+    {
+        if (!string.Equals(configuration["Delivery:Provider"], "Http", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!Uri.TryCreate(configuration["Delivery:HealthUrl"], UriKind.Absolute, out var endpoint) ||
+            endpoint.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException(
+                "Delivery:HealthUrl must be an absolute HTTP(S) URI for the HTTP provider.");
+        }
+
+        if (string.Equals(environmentName, Environments.Production, StringComparison.OrdinalIgnoreCase) &&
+            endpoint.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException(
+                "Production Delivery:HealthUrl must be an absolute HTTPS URI.");
+        }
+
+        return endpoint;
+    }
 }

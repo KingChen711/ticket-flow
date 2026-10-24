@@ -18,7 +18,7 @@ public sealed class EventService(
         CancellationToken cancellationToken = default)
     {
         var venue = await venueRepository.GetByIdAsync(request.VenueId, cancellationToken)
-            ?? throw new InvalidOperationException($"Venue '{request.VenueId}' was not found.");
+                    ?? throw new InvalidOperationException($"Venue '{request.VenueId}' was not found.");
 
         var schedule = EventSchedule.Create(
             request.StartsAt,
@@ -50,7 +50,27 @@ public sealed class EventService(
         return events.Select(Map).ToList();
     }
 
-    public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Authorizes a resource-scoped operation that is executed outside Catalog (currently poster
+    /// upload in the gateway). Returning a closed result instead of the Event keeps ownership out
+    /// of the public event DTO while letting the downstream boundary fail closed.
+    /// </summary>
+    public async Task<EventAccessResult> CheckAccessAsync(
+        Guid id,
+        CatalogCaller caller,
+        CancellationToken cancellationToken = default)
+    {
+        var @event = await eventRepository.GetByIdAsync(id, cancellationToken);
+        if (@event is null)
+            return EventAccessResult.NotFound;
+
+        return caller.IsAdmin || @event.IsOwnedBy(caller.OrganizerId)
+            ? EventAccessResult.Allowed
+            : EventAccessResult.Forbidden;
+    }
+
+    public async Task<EventResponse> RescheduleAsync(Guid id, RescheduleEventRequest request, CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
         var wasPublished = @event.Status == EventStatus.Published;
@@ -91,15 +111,17 @@ public sealed class EventService(
     /// Cross-aggregate invariant lives here, not inside Event or SeatMap: a price tier's
     /// SectionId must correspond to a real Section in this event's own SeatMap.
     /// </summary>
-    public async Task<EventResponse> AddPriceTierAsync(Guid id, AddPriceTierRequest request, CatalogCaller caller, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> AddPriceTierAsync(Guid id, AddPriceTierRequest request, CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
 
         var seatMap = await seatMapRepository.GetByEventIdAsync(id, cancellationToken)
-            ?? throw new InvalidOperationException($"Event '{id}' does not have a seat map yet.");
+                      ?? throw new InvalidOperationException($"Event '{id}' does not have a seat map yet.");
 
         if (seatMap.Sections.All(section => section.Id != request.SectionId))
-            throw new InvalidOperationException($"Section '{request.SectionId}' does not exist in this event's seat map.");
+            throw new InvalidOperationException(
+                $"Section '{request.SectionId}' does not exist in this event's seat map.");
 
         var price = Money.Create(request.Amount, request.Currency ?? "VND");
         @event.AddPriceTier(request.SectionId, price);
@@ -109,7 +131,8 @@ public sealed class EventService(
         return Map(@event);
     }
 
-    public async Task<EventResponse> PublishAsync(Guid id, CatalogCaller caller, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> PublishAsync(Guid id, CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
         var now = timeProvider.GetUtcNow();
@@ -127,7 +150,7 @@ public sealed class EventService(
         // against this scope's CatalogDbContext, which SaveChangesAsync then flushes into
         // outbox_message as part of the same transaction.
         var venue = await venueRepository.GetByIdAsync(@event.VenueId, cancellationToken)
-            ?? throw new InvalidOperationException($"Venue '{@event.VenueId}' was not found.");
+                    ?? throw new InvalidOperationException($"Venue '{@event.VenueId}' was not found.");
 
         await integrationEventPublisher.PublishAsync(
             new CatalogEventPublished(
@@ -143,7 +166,8 @@ public sealed class EventService(
         return Map(@event);
     }
 
-    public async Task<EventResponse> CancelAsync(Guid id, CatalogCaller caller, CancellationToken cancellationToken = default)
+    public async Task<EventResponse> CancelAsync(Guid id, CatalogCaller caller,
+        CancellationToken cancellationToken = default)
     {
         var @event = await GetOwnedAsync(id, caller, cancellationToken);
 
@@ -214,7 +238,7 @@ public sealed class EventService(
 
     private async Task<Event> GetRequiredAsync(Guid id, CancellationToken cancellationToken) =>
         await eventRepository.GetByIdAsync(id, cancellationToken)
-            ?? throw new InvalidOperationException($"Event '{id}' was not found.");
+        ?? throw new InvalidOperationException($"Event '{id}' was not found.");
 
     /// <summary>
     /// Loads an event the caller is allowed to mutate (Commit 14). Admin passes unconditionally;

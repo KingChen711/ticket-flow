@@ -79,9 +79,9 @@ test("login, publish, hold, idempotent checkout, payment, PDF and one-time scann
     // independently deployable origin. The shell route itself is covered by frontend-contract.
     const scannerContext = await browser.newContext();
     const scanner = await scannerContext.newPage();
-    await scanner.goto("http://localhost:3002/scanner");
+    await scanner.goto("http://localhost:3002/scanner/");
     await login(scanner, organizerUsername, organizerPassword);
-    await scanner.goto(`http://localhost:3002/scanner?eventId=${fixture.eventId}&gate=North%20Gate`);
+    await scanner.goto(`http://localhost:3002/scanner/?eventId=${fixture.eventId}&gate=North%20Gate`);
     await scanner.locator('input[type="file"]').setInputFiles(qrImagePath);
     await expect(scanner.getByText("VALID — checked in")).toBeVisible({ timeout: 30_000 });
     await scanner.getByRole("button", { name: "Scan next" }).click();
@@ -142,9 +142,9 @@ test("event cancellation refunds an authorized purchase and revokes its ticket",
 
     const scannerContext = await browser.newContext();
     const scanner = await scannerContext.newPage();
-    await scanner.goto("http://localhost:3002/scanner");
+    await scanner.goto("http://localhost:3002/scanner/");
     await login(scanner, organizerUsername, organizerPassword);
-    await scanner.goto(`http://localhost:3002/scanner?eventId=${fixture.eventId}&gate=Refund%20Gate`);
+    await scanner.goto(`http://localhost:3002/scanner/?eventId=${fixture.eventId}&gate=Refund%20Gate`);
     await scanner.locator('input[type="file"]').setInputFiles(qrImagePath);
     await expect(scanner.getByText("REVOKED")).toBeVisible({ timeout: 30_000 });
     await scannerContext.close();
@@ -177,7 +177,7 @@ test("reservation outage is rendered as unavailable rather than sold out and rec
     const serviceToken = await serviceAccessToken(authApi);
     const fixture = await createSaleableEvent(api, organizerToken, serviceToken, customerToken, 1);
     recoveryProbe = { eventId: fixture.eventId, token: organizerToken };
-    await docker("stop", "ticketflow-reservation");
+    await compose("stop", "reservation");
     stopped = true;
 
     await page.goto(`/events/${fixture.eventId}`);
@@ -185,11 +185,63 @@ test("reservation outage is rendered as unavailable rather than sold out and rec
     await expect(page.getByText(/0 of 0 seats available/)).toHaveCount(0);
   } finally {
     if (stopped) {
-      await docker("start", "ticketflow-reservation");
+      await compose("start", "reservation");
       await waitForAvailability(api, recoveryProbe!);
     }
     await api.dispose();
     await authApi.dispose();
+  }
+});
+
+test("scanner releases an acquired stream when video playback fails", async ({ browser }) => {
+  const scannerContext = await browser.newContext();
+  await scannerContext.addInitScript(() => {
+    const testWindow = window as Window & { __cameraTrackStops: number };
+    testWindow.__cameraTrackStops = 0;
+
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          // A real MediaStream passes the browser's srcObject type check. Its instance method is
+          // replaced only so the test can observe that the component stopped the acquired track.
+          const stream = new MediaStream();
+          Object.defineProperty(stream, "getTracks", {
+            value: () => [{
+              stop: () => {
+                testWindow.__cameraTrackStops++;
+              },
+            }],
+          });
+          return stream;
+        },
+      },
+    });
+    HTMLMediaElement.prototype.play = async () => {
+      throw new Error("controlled video.play failure");
+    };
+  });
+
+  try {
+    const scanner = await scannerContext.newPage();
+    await scanner.goto("http://localhost:3002/scanner/");
+    await login(scanner, organizerUsername, organizerPassword);
+    await scanner.goto(
+      "http://localhost:3002/scanner/?eventId=11111111-1111-4111-8111-111111111111&gate=Lifecycle%20Gate",
+    );
+
+    await scanner.getByRole("button", { name: "Start camera scan" }).click();
+    await expect(scanner.getByText("controlled video.play failure")).toBeVisible();
+    await expect.poll(() => scanner.evaluate(() => {
+      const testWindow = window as Window & { __cameraTrackStops: number };
+      const video = document.querySelector("video");
+      return {
+        trackStops: testWindow.__cameraTrackStops,
+        detached: video?.srcObject === null,
+      };
+    })).toEqual({ trackStops: 1, detached: true });
+  } finally {
+    await scannerContext.close();
   }
 });
 
@@ -395,8 +447,16 @@ async function renderFirstPdfPage(pdfPath: string, pngPath: string) {
   await execFileAsync(renderer, ["-f", "1", "-singlefile", "-png", "-r", "150", pdfPath, outputPrefix]);
 }
 
-async function docker(action: "start" | "stop", container: string) {
-  await execFileAsync("docker", [action, container]);
+async function compose(action: "start" | "stop", service: string) {
+  await execFileAsync("docker", [
+    "compose",
+    "-f",
+    "docker-compose.yml",
+    "-f",
+    "docker-compose.e2e.yml",
+    action,
+    service,
+  ]);
 }
 
 async function waitForAvailability(

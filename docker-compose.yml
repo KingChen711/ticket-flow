@@ -14,9 +14,9 @@ services:
     build:
       context: .
       dockerfile: src/Services/Catalog/TicketFlow.Catalog.Api/Dockerfile
-    container_name: ticketflow-catalog
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
+      Keycloak__ServiceClientSecret: internal-services-dev-secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -29,7 +29,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Identity/TicketFlow.Identity.Api/Dockerfile
-    container_name: ticketflow-identity
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -42,7 +41,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Reservation/TicketFlow.Reservation.Api/Dockerfile
-    container_name: ticketflow-reservation
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -59,9 +57,9 @@ services:
     build:
       context: .
       dockerfile: src/Services/Ordering/TicketFlow.Ordering.Api/Dockerfile
-    container_name: ticketflow-ordering
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
+      Keycloak__ServiceClientSecret: internal-services-dev-secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,7 +76,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Notification/TicketFlow.Notification.Api/Dockerfile
-    container_name: ticketflow-notification
     environment:
       # Local Compose is an explicit test environment; every production-like environment is
       # required to configure the real HTTP delivery provider.
@@ -93,7 +90,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Search/TicketFlow.Search.Api/Dockerfile
-    container_name: ticketflow-search
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -108,7 +104,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Payment/TicketFlow.Payment.Api/Dockerfile
-    container_name: ticketflow-payment
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -123,7 +118,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Ticketing/TicketFlow.Ticketing.Api/Dockerfile
-    container_name: ticketflow-ticketing
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -140,7 +134,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Recommendation/TicketFlow.Recommendation.Api/Dockerfile
-    container_name: ticketflow-recommendation
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -155,7 +148,6 @@ services:
     build:
       context: .
       dockerfile: src/Services/Analytics/TicketFlow.Analytics.Api/Dockerfile
-    container_name: ticketflow-analytics
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
     depends_on:
@@ -172,9 +164,11 @@ services:
     build:
       context: .
       dockerfile: src/Gateway/TicketFlow.Gateway/Dockerfile
-    container_name: ticketflow-gateway
     environment:
       ASPNETCORE_ENVIRONMENT: Docker
+      Cors__AllowedOrigins__0: http://localhost:3000
+      Cors__AllowedOrigins__1: http://localhost:3001
+      Cors__AllowedOrigins__2: http://localhost:3002
     ports:
       - "8080:8080"
     depends_on:
@@ -188,7 +182,3 @@ services:
         condition: service_started
       es-ilm-init:
         condition: service_completed_successfully
-
-networks:
-  default:
-    name: ticketflow-network

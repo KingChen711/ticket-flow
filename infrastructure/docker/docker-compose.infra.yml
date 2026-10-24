@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
-    container_name: ticketflow-postgres
     environment:
       POSTGRES_USER: ticketflow
       POSTGRES_PASSWORD: ticketflow
@@ -19,7 +18,6 @@ services:
 
   redis:
     image: redis:7@sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50
-    container_name: ticketflow-redis
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--aof-use-rdb-preamble", "yes"]
@@ -38,7 +36,6 @@ services:
     # rabbitmq:3-management with that one plugin already enabled (verified: `rabbitmq-plugins list`
     # reports rabbitmq_delayed_message_exchange v4.3.1).
     image: masstransit/rabbitmq@sha256:b09de6c97585b9e14103ff8827a9f25784de81a3a6464df532947dd8f2299005
-    container_name: ticketflow-rabbitmq
     # RabbitMQ persists Mnesia under its node name. A recreated container gets a different
     # generated hostname unless this is fixed, then the same volume looks like an unrelated
     # empty broker. Keep both hostname and nodename stable across container recreation.
@@ -60,7 +57,6 @@ services:
 
   kafka:
     image: apache/kafka:3.8.0@sha256:c89f315cff967322c5d2021434b32271393cb193aa7ec1d43e97341924e57069
-    container_name: ticketflow-kafka
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -107,7 +103,6 @@ services:
 
   minio:
     image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
-    container_name: ticketflow-minio
     environment:
       MINIO_ROOT_USER: ticketflow
       MINIO_ROOT_PASSWORD: ticketflow
@@ -133,7 +128,6 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3@sha256:01c1732062b4a846c5ca687b0094b89bad0bfed00c6d71626db32fb8f3131a78
-    container_name: ticketflow-elasticsearch
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
@@ -157,7 +151,6 @@ services:
 
   mongodb:
     image: mongo:7@sha256:9bdaeb6dac6e7e762e84e2f84103d1f9bb078fa1ba6bde8bb9d2274f655ad173
-    container_name: ticketflow-mongodb
     environment:
       MONGO_INITDB_ROOT_USERNAME: ticketflow
       MONGO_INITDB_ROOT_PASSWORD: ticketflow
@@ -173,7 +166,6 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
-    container_name: ticketflow-clickhouse
     environment:
       CLICKHOUSE_USER: ticketflow
       CLICKHOUSE_PASSWORD: ticketflow
@@ -192,7 +184,6 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.7@sha256:2eb3cd316835c990e69e26ade292ffa78f6fb0db7d5fc6377463c162e1979ac0
-    container_name: ticketflow-keycloak
     command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
@@ -229,14 +220,13 @@ services:
     # Commit 1) — the old no-account `localstack/localstack` free image is archived; this one
     # requires LOCALSTACK_AUTH_TOKEN even on the free non-commercial Hobby plan.
     image: localstack/localstack@sha256:2a81e5da4c32bb53e8d86e92050a12937f9be1915c5a4afad0931f75c112fc7e
-    container_name: ticketflow-localstack
     environment:
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN}
       SERVICES: lambda,events,logs,iam,sts,s3
       # Lambda's Docker executor spawns sibling containers via the mounted socket below; without
       # this they land on the default bridge network and can't reach rabbitmq/minio/etc. by
       # service name (needed starting Commit 3/4) — join the same network this whole stack uses.
-      LAMBDA_DOCKER_NETWORK: ticketflow-network
+      LAMBDA_DOCKER_NETWORK: ${COMPOSE_PROJECT_NAME:-ticket-flow}_default
       # Phase 11 Commit 2: keep the Compose-network DNS default for normal Phase 9 development,
       # but permit the external-LocalStack/Kubernetes fallback to route Lambda PDF rendering back
       # into kind's MinIO through a temporary host port-forward (host.docker.internal:<port>).
@@ -276,7 +266,3 @@ volumes:
   mongo-data:
   clickhouse-data:
   localstack-data:
-
-networks:
-  default:
-    name: ticketflow-network

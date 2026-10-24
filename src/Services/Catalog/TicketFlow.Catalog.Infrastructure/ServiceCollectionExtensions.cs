@@ -46,7 +46,7 @@ public static class ServiceCollectionExtensions
         // now carries a client-credentials service token instead of relying on network reachability.
         // The read-only availability client above deliberately stays anonymous — availability is a
         // public fact the customer web app shows to logged-out visitors.
-        services.AddServiceTokenHandler();
+        services.AddServiceTokenHandler(configuration);
         services.AddHttpClient<IReservationInventoryClient, HttpReservationInventoryClient>(client =>
         {
             client.BaseAddress = new Uri(reservationBaseUrl.TrimEnd('/') + "/");

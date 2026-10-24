@@ -10,6 +10,7 @@ import {
 } from "@ticketflow/web-auth";
 
 const nextAuth = NextAuth({
+  basePath: "/scanner/api/auth",
   providers: [Keycloak],
   cookies: authCookieNames("gate-scanner"),
   callbacks: {

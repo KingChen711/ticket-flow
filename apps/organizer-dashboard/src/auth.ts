@@ -10,6 +10,7 @@ import {
 } from "@ticketflow/web-auth";
 
 const nextAuth = NextAuth({
+  basePath: "/organizer/api/auth",
   providers: [Keycloak],
   cookies: authCookieNames("organizer-dashboard"),
   callbacks: {

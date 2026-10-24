@@ -12,6 +12,8 @@ namespace TicketFlow.Analytics.Infrastructure;
 /// </summary>
 public static class ClickHouseTableSetup
 {
+    public const string SchemaVersion = "phase12-analytics-20260727-v1";
+
     public static async Task EnsureCreatedAsync(ClickHouseConnection connection, CancellationToken cancellationToken = default)
     {
         await using var command = connection.CreateCommand();
@@ -48,6 +50,22 @@ public static class ClickHouseTableSetup
             ) ENGINE = ReplacingMergeTree(revision)
             ORDER BY event_id
             """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS schema_versions (
+                component LowCardinality(String),
+                version String,
+                applied_at DateTime64(3)
+            ) ENGINE = ReplacingMergeTree(applied_at)
+            ORDER BY component
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        // Completion marker is deliberately last: Analytics may start only after every table and
+        // expansion above has succeeded, including an upgrade where `sales` already existed.
+        command.CommandText =
+            $"INSERT INTO schema_versions VALUES ('analytics', '{SchemaVersion}', now64(3))";
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

@@ -16,16 +16,17 @@ export async function placeOrderAction(
   _previous: CheckoutActionResult,
   formData: FormData,
 ): Promise<CheckoutActionResult> {
-  const session = await auth();
-  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
-    redirect("/api/auth/signin?callbackUrl=/checkout");
-  }
-
   const holdId = formData.get("holdId")?.toString() ?? "";
   const paymentMethod = formData.get("paymentMethod")?.toString() ?? "";
   const idempotencyKey = formData.get("idempotencyKey")?.toString() ?? "";
   if (!holdId || !paymentMethod || !idempotencyKey) {
     return { kind: "error", message: "Checkout details are incomplete. Reload and try again." };
+  }
+
+  const session = await auth();
+  if (!session?.serverAccessToken || session.error === "RefreshTokenError") {
+    const callbackUrl = `/checkout?${new URLSearchParams({ holdId, idempotencyKey })}`;
+    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   try {

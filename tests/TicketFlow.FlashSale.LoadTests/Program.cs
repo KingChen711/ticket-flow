@@ -45,6 +45,14 @@ var serviceToken = await GetClientCredentialsTokenAsync(keycloak, settings.Inter
 var flashSale = await CreateFlashSaleAsync(gateway, organizerToken, serviceToken, customerToken, settings);
 Console.WriteLine($"Provisioned event {flashSale.EventId} with {flashSale.SeatIds.Count} seats.");
 
+// Payments do not carry event_id, so snapshot the already-authorized business IDs before this
+// run. The final reconciliation compares the complete delta, which exposes ghost payment rows
+// instead of filtering the query down to only IDs the test already expects.
+var baselineAuthorizedPaymentIds = (await QueryIdsAsync(
+    settings.PaymentConnectionString,
+    "SELECT order_id FROM payment.payment_attempts WHERE state = 'Authorized' ORDER BY order_id"))
+    .ToHashSet();
+
 var acceptedOrderIds = new ConcurrentBag<Guid>();
 var unexpectedFailures = new ConcurrentQueue<string>();
 var attempts = 0;
@@ -176,6 +184,7 @@ var confirmedOrderIds = finalStatuses
 var businessInvariant = await WaitForBusinessInvariantAsync(
     flashSale.EventId,
     confirmedOrderIds,
+    baselineAuthorizedPaymentIds,
     settings,
     TimeSpan.FromMinutes(2));
 
@@ -481,6 +490,7 @@ static int CountStatus(IReadOnlyDictionary<string, int> statusCounts, string sta
 static async Task<BusinessInvariantResult> WaitForBusinessInvariantAsync(
     Guid eventId,
     IReadOnlyCollection<Guid> confirmedOrderIds,
+    IReadOnlySet<Guid> baselineAuthorizedPaymentIds,
     FlashSaleSettings settings,
     TimeSpan timeout)
 {
@@ -490,7 +500,11 @@ static async Task<BusinessInvariantResult> WaitForBusinessInvariantAsync(
     {
         try
         {
-            last = await QueryBusinessInvariantAsync(eventId, confirmedOrderIds, settings);
+            last = await QueryBusinessInvariantAsync(
+                eventId,
+                confirmedOrderIds,
+                baselineAuthorizedPaymentIds,
+                settings);
             if (last.Passed)
                 return last;
         }
@@ -508,6 +522,7 @@ static async Task<BusinessInvariantResult> WaitForBusinessInvariantAsync(
 static async Task<BusinessInvariantResult> QueryBusinessInvariantAsync(
     Guid eventId,
     IReadOnlyCollection<Guid> confirmedOrderIds,
+    IReadOnlySet<Guid> baselineAuthorizedPaymentIds,
     FlashSaleSettings settings)
 {
     var allocations = new List<(Guid OrderId, Guid SeatId)>();
@@ -540,10 +555,11 @@ static async Task<BusinessInvariantResult> QueryBusinessInvariantAsync(
             """
             SELECT order_id, seat_id
             FROM ticketing.tickets
-            WHERE issuance_state = 'Issued'
+            WHERE event_id = @event_id AND issuance_state = 'Issued'
             ORDER BY order_id, seat_id
             """,
             connection);
+        command.Parameters.AddWithValue("event_id", eventId);
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
             tickets.Add((reader.GetGuid(0), reader.GetGuid(1)));
@@ -565,11 +581,11 @@ static async Task<BusinessInvariantResult> QueryBusinessInvariantAsync(
     }
 
     var expected = confirmedOrderIds.OrderBy(id => id).ToArray();
-    var expectedSet = expected.ToHashSet();
-    var allocationRows = allocations.Where(row => expectedSet.Contains(row.OrderId)).ToArray();
-    var paymentIds = payments.Where(expectedSet.Contains).OrderBy(id => id).ToArray();
-    var ticketRows = tickets.Where(row => expectedSet.Contains(row.OrderId)).ToArray();
-    var analyticsIds = analytics.Where(expectedSet.Contains).OrderBy(id => id).ToArray();
+    var allocationRows = allocations.ToArray();
+    var paymentRows = payments.Where(id => !baselineAuthorizedPaymentIds.Contains(id)).ToArray();
+    var paymentIds = paymentRows.Distinct().OrderBy(id => id).ToArray();
+    var ticketRows = tickets.ToArray();
+    var analyticsIds = analytics.Distinct().OrderBy(id => id).ToArray();
     var allocationOrderIds = allocationRows.Select(row => row.OrderId).Distinct().OrderBy(id => id).ToArray();
     var ticketOrderIds = ticketRows.Select(row => row.OrderId).Distinct().OrderBy(id => id).ToArray();
     var allocationSeatIds = allocationRows.Select(row => row.SeatId).OrderBy(id => id).ToArray();
@@ -580,10 +596,10 @@ static async Task<BusinessInvariantResult> QueryBusinessInvariantAsync(
                  && expected.SequenceEqual(ticketOrderIds)
                  && expected.SequenceEqual(analyticsIds)
                  && allocationSeatIds.SequenceEqual(ticketSeatIds)
-                 && allocationRows.Count(row => expectedSet.Contains(row.OrderId)) == expected.Length
-                 && paymentIds.Length == expected.Length
+                 && allocationRows.Length == expected.Length
+                 && paymentRows.Length == expected.Length
                  && ticketRows.Length == expected.Length
-                 && analyticsIds.Length == expected.Length;
+                 && analytics.Count == expected.Length;
 
     return new BusinessInvariantResult(
         expected,

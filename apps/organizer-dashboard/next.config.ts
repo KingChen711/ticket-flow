@@ -7,12 +7,10 @@ const nextConfig: NextConfig = {
   // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
   transpilePackages: ["@ticketflow/http-client", "@ticketflow/types", "@ticketflow/ui", "@ticketflow/web-auth"],
   // Multi-Zones (docs/phase-8-plan.md Commit 9, mục 1): customer-web is the shell and rewrites
-  // /organizer/* here. Pages already live under src/app/organizer/* (manual prefix, not Next's
-  // `basePath`) — `basePath` was tried first and reverted: it also shifts API routes, and
-  // NextAuth's own request parser trips over the double-stripped path once Next's router already
-  // strips basePath before the route handler ever sees the request (real bug hit live —
-  // `UnknownAction: Cannot parse action at /api/auth/callback/keycloak`). `/api/auth/*` stays
-  // unprefixed on purpose so Keycloak's registered redirect URI never has to change.
+  // /organizer/* here. Pages and the Auth.js route physically live under src/app/organizer/*
+  // (manual prefix, not Next's `basePath`). Auth.js uses its own explicit
+  // /organizer/api/auth basePath, so the public callback and the physical route agree without
+  // Next stripping a framework-level basePath before Auth.js parses the request.
   // assetPrefix only moves /_next/static/* under /organizer-static so it can't collide with the
   // shell's or gate-scanner's own /_next/* once proxied under the same origin.
   assetPrefix: "/organizer-static",

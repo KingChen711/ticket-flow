@@ -10,14 +10,21 @@ export function SeatPicker({
   seats,
   priceTiers,
   signedIn,
+  publicGatewayUrl,
 }: {
   eventId: string;
   seats: SeatAvailabilityResponse[];
   priceTiers: PriceTierResponse[];
   signedIn: boolean;
+  publicGatewayUrl: string;
 }) {
   const [selected, setSelected] = useState<Map<string, string>>(new Map());
-  const { revisions, statuses, state } = useSeatMapLive(eventId, signedIn, seats);
+  const { revisions, statuses, state } = useSeatMapLive(
+    eventId,
+    signedIn,
+    seats,
+    publicGatewayUrl,
+  );
   const priceBySection = useMemo(() => new Map(priceTiers.map((tier) => [tier.sectionId, tier.amount])), [priceTiers]);
   const currency = priceTiers[0]?.currency ?? "VND";
   const statusFor = (seat: SeatAvailabilityResponse) => statuses[seat.seatId] ?? seat.status;

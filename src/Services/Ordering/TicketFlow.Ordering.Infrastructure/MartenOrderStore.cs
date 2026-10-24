@@ -68,7 +68,8 @@ public sealed class MartenOrderStore(IDocumentSession session) : IOrderStore
 
     private sealed class MartenOrderStreamWriter(IEventStream<Order> stream) : IOrderStreamWriter
     {
-        public Order Order { get; } = stream.Aggregate;
+        public Order Order { get; } = stream.Aggregate
+            ?? throw new InvalidOperationException("Marten opened an order stream without an aggregate.");
 
         public long Version { get; } = stream.CurrentVersion ?? 0;
 

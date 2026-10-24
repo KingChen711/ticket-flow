@@ -38,8 +38,8 @@ echo "[ticketing] deploying RenderTicketPdfFunction..."
 # MinIO credentials the way it auto-injects AWS ones for S3Client, so these come in explicitly as
 # plain Lambda environment variables — same values Ticketing.Api's own appsettings.json use.
 # With the default MINIO_ENDPOINT, "minio" resolves because LAMBDA_DOCKER_NETWORK joins the
-# executor container onto ticketflow-network. In Phase 11's K8s fallback, that executor lives
-# outside the cluster and instead uses the explicit host-gateway endpoint above.
+# executor container onto this Compose project's default network. In Phase 11's K8s fallback,
+# that executor lives outside the cluster and instead uses the explicit host-gateway endpoint above.
 awslocal lambda create-function \
   --function-name RenderTicketPdfFunction \
   --runtime dotnet10 \

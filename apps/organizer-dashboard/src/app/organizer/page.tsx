@@ -39,17 +39,35 @@ export default async function DashboardPage() {
     <div className="mx-auto max-w-3xl p-6">
       <section className="mb-8 rounded border p-4">
         <h2 className="mb-2 text-lg font-semibold">Revenue</h2>
-        <p className="text-2xl font-bold">
-          {revenue.totalRevenue.toLocaleString()}{" "}
-          <span className="text-sm font-normal">total, {revenue.totalSeats} seats sold</span>
-        </p>
+        {revenue.totalSeats === 0 ? (
+          <p className="text-gray-500">No revenue yet.</p>
+        ) : revenue.totalRevenue !== null ? (
+          <p className="text-2xl font-bold">
+            {revenue.totalRevenue.toLocaleString()} {revenue.byCurrency[0]?.currency}{" "}
+            <span className="text-sm font-normal">total, {revenue.totalSeats} seats sold</span>
+          </p>
+        ) : (
+          <div>
+            <p className="text-lg font-semibold">
+              Revenue across {revenue.byCurrency.length} currencies{" "}
+              <span className="text-sm font-normal">({revenue.totalSeats} seats sold)</span>
+            </p>
+            <ul className="mt-2 flex flex-col gap-1 text-sm">
+              {revenue.byCurrency.map((currency) => (
+                <li key={currency.currency}>
+                  {currency.revenue.toLocaleString()} {currency.currency} · {currency.seatCount} seats
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {revenue.byEvent.length > 0 && (
           <ul className="mt-3 flex flex-col gap-1 text-sm">
             {revenue.byEvent.map((r) => (
-              <li key={r.eventId} className="flex justify-between">
+              <li key={`${r.eventId}:${r.currency}`} className="flex justify-between">
                 <span>{titleByEventId.get(r.eventId) ?? r.eventId}</span>
                 <span>
-                  {r.revenue.toLocaleString()} · {r.seatCount} seats
+                  {r.revenue.toLocaleString()} {r.currency} · {r.seatCount} seats
                 </span>
               </li>
             ))}

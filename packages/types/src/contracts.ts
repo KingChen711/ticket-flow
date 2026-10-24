@@ -163,12 +163,20 @@ export interface EventOnboardingWorkflowResponse {
 
 export interface EventRevenue {
   eventId: string;
+  currency: string;
+  revenue: number;
+  seatCount: number;
+}
+
+export interface CurrencyRevenue {
+  currency: string;
   revenue: number;
   seatCount: number;
 }
 
 export interface RevenueResult {
-  totalRevenue: number;
+  totalRevenue: number | null;
   totalSeats: number;
   byEvent: EventRevenue[];
+  byCurrency: CurrencyRevenue[];
 }

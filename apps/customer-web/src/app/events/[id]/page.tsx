@@ -27,6 +27,7 @@ export default async function EventDetailPage({
   }
 
   const availableSeats = detail.seats.filter((seat) => seat.status === "Available").length;
+  const publicGatewayUrl = getPublicGatewayUrl();
   return (
     <div className="mx-auto max-w-3xl p-6">
       <h1 className="text-2xl font-bold">{detail.event.title}</h1>
@@ -60,7 +61,13 @@ export default async function EventDetailPage({
         ) : (
           <>
             <p className="mb-3 text-sm text-gray-600">{availableSeats} of {detail.seats.length} seats available</p>
-            <SeatPicker eventId={id} seats={detail.seats} priceTiers={detail.event.priceTiers} signedIn={!!session && !session.error} />
+            <SeatPicker
+              eventId={id}
+              seats={detail.seats}
+              priceTiers={detail.event.priceTiers}
+              signedIn={!!session && !session.error}
+              publicGatewayUrl={publicGatewayUrl}
+            />
           </>
         )}
       </section>
@@ -77,4 +84,23 @@ export default async function EventDetailPage({
       )}
     </div>
   );
+}
+
+function getPublicGatewayUrl(): string {
+  const configured = process.env.PUBLIC_GATEWAY_URL;
+  if (!configured && process.env.NODE_ENV === "production") {
+    throw new Error("Production requires PUBLIC_GATEWAY_URL.");
+  }
+  const url = new URL(configured ?? "http://localhost:8080");
+  if (
+    !["http:", "https:"].includes(url.protocol)
+    || url.pathname !== "/"
+    || url.search
+    || url.hash
+    || url.username
+    || url.password
+  ) {
+    throw new Error("PUBLIC_GATEWAY_URL must be an absolute HTTP(S) origin.");
+  }
+  return url.origin;
 }

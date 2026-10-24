@@ -4,6 +4,7 @@ import {
   formatEventDateTime,
   isNewerSeatVersion,
   parseMyOrderView,
+  parseRevenueResult,
   parseSearchEventsResult,
   serializeLocalDateTime,
   shouldApplyOrderUpdate,
@@ -26,6 +27,37 @@ const orderPayload = {
 
 test("runtime schema rejects a drifted search payload", () => {
   assert.throws(() => parseSearchEventsResult({ items: [{ eventId: "only-an-id" }], total: 1 }));
+});
+
+test("revenue schema accepts an empty result with a nullable total", () => {
+  assert.deepEqual(parseRevenueResult({
+    totalRevenue: null,
+    totalSeats: 0,
+    byEvent: [],
+    byCurrency: [],
+  }), {
+    totalRevenue: null,
+    totalSeats: 0,
+    byEvent: [],
+    byCurrency: [],
+  });
+});
+
+test("revenue schema preserves currency breakdowns instead of adding unlike currencies", () => {
+  const result = parseRevenueResult({
+    totalRevenue: null,
+    totalSeats: 3,
+    byEvent: [
+      { eventId: "event-vnd", currency: "VND", revenue: 500_000, seatCount: 2 },
+      { eventId: "event-usd", currency: "USD", revenue: 20, seatCount: 1 },
+    ],
+    byCurrency: [
+      { currency: "VND", revenue: 500_000, seatCount: 2 },
+      { currency: "USD", revenue: 20, seatCount: 1 },
+    ],
+  });
+  assert.equal(result.totalRevenue, null);
+  assert.deepEqual(result.byCurrency.map(({ currency }) => currency), ["VND", "USD"]);
 });
 
 test("order polling ignores a stale sequence", () => {

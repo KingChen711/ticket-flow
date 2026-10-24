@@ -63,7 +63,7 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
 
   function stopCamera() {
     scanningRef.current = false;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -103,8 +103,8 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       if (!navigator.onLine) {
         throw new Error("Offline validation is unavailable. Reconnect before scanning a ticket.");
       }
-      // This public path remains under the scanner mount. Both the customer shell and an
-      // independently deployed scanner rewrite it to the zone-local /api/validate BFF route.
+      // This public path remains under the scanner mount and resolves to the scanner's physically
+      // prefixed BFF route through either the customer shell or the standalone deployment.
       const response = await fetchJson("/scanner/api/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,13 +152,21 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
   }
 
   async function startCamera() {
-    if (startingCameraRef.current || scanningRef.current || streamRef.current) return;
+    if (
+      startingCameraRef.current
+      || scanningRef.current
+      || streamRef.current
+      || decodeInFlightRef.current
+      || submitInFlightRef.current
+    ) return;
     startingCameraRef.current = true;
     setError(null);
+    let acquiredStream: MediaStream | null = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
       });
+      acquiredStream = stream;
       // The user can leave the page or hide its tab while permission is open. Never retain a
       // stream whose requesting component no longer owns it.
       if (!mountedRef.current || document.hidden) {
@@ -175,6 +183,7 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       await video.play();
       if (!mountedRef.current || document.hidden || streamRef.current !== stream) {
         stream.getTracks().forEach((track) => track.stop());
+        if (streamRef.current === stream) streamRef.current = null;
         if (video.srcObject === stream) video.srcObject = null;
         return;
       }
@@ -182,6 +191,11 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       scanningRef.current = true;
       loop();
     } catch (e) {
+      acquiredStream?.getTracks().forEach((track) => track.stop());
+      if (streamRef.current === acquiredStream) streamRef.current = null;
+      const video = videoRef.current;
+      if (video?.srcObject === acquiredStream) video.srcObject = null;
+      scanningRef.current = false;
       if (mountedRef.current) setError(e instanceof Error ? e.message : "Could not access camera");
     } finally {
       startingCameraRef.current = false;
@@ -192,11 +206,12 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
   // path used to verify this feature in an environment with no physical camera (real ticket PDF
   // rasterized to an image and fed in here, docs/phase-8-plan.md Commit 8).
   async function handleUpload(e: ChangeEvent<HTMLInputElement>) {
-    if (submitInFlightRef.current || decodeInFlightRef.current) return;
-    setError(null);
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (startingCameraRef.current || submitInFlightRef.current || decodeInFlightRef.current) return;
+    decodeInFlightRef.current = true;
+    setError(null);
     stopCamera();
     try {
       const bitmap = await createImageBitmap(file);
@@ -214,6 +229,8 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       }
     } catch (e) {
       if (mountedRef.current) setError(e instanceof Error ? e.message : "Could not read image");
+    } finally {
+      decodeInFlightRef.current = false;
     }
   }
 
@@ -238,20 +255,23 @@ export function ScannerClient({ eventId, gateLabel }: { eventId: string; gateLab
       </p>
       {error && <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>}
 
+      <video
+        ref={videoRef}
+        className={phase === "camera" ? "w-full rounded border" : "hidden"}
+        playsInline
+        muted
+      />
       {phase === "camera" ? (
-        <div className="flex flex-col gap-2">
-          <video ref={videoRef} className="w-full rounded border" playsInline muted />
-          <button
-            type="button"
-            onClick={() => {
-              stopCamera();
-              setPhase("idle");
-            }}
-            className="rounded border px-4 py-2"
-          >
-            Stop camera
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            stopCamera();
+            setPhase("idle");
+          }}
+          className="rounded border px-4 py-2"
+        >
+          Stop camera
+        </button>
       ) : (
         <button type="button" onClick={startCamera} className="rounded bg-black px-4 py-2 text-white">
           Start camera scan

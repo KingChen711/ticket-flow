@@ -26,6 +26,9 @@ public sealed class UploadPosterFunction
 
     public async Task<UploadPosterResponse> Handler(UploadPosterRequest request, ILambdaContext context)
     {
+        if (request.EventId == Guid.Empty)
+            return new UploadPosterResponse(Accepted: false, Key: null, ThumbnailKey: null, Error: "A valid eventId is required.");
+
         var bytes = Convert.FromBase64String(request.Base64Content);
 
         var extension = ImageFormat.DetectExtension(bytes);
@@ -44,7 +47,7 @@ public sealed class UploadPosterFunction
             return new UploadPosterResponse(Accepted: false, Key: null, ThumbnailKey: null, Error: limitError);
         }
 
-        var key = $"originals/{Guid.NewGuid():N}.{extension}";
+        var key = $"originals/{request.EventId:N}/{Guid.NewGuid():N}.{extension}";
         await S3Client.PutObjectAsync(new PutObjectRequest
         {
             BucketName = BucketName,
@@ -58,6 +61,6 @@ public sealed class UploadPosterFunction
     }
 }
 
-public sealed record UploadPosterRequest(string Base64Content);
+public sealed record UploadPosterRequest(Guid EventId, string Base64Content);
 
 public sealed record UploadPosterResponse(bool Accepted, string? Key, string? ThumbnailKey, string? Error);

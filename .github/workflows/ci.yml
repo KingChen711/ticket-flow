@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_chaos:
-        description: Run the stateful restart gate after full-stack E2E
+        description: Run the stateful recreation gate after full-stack E2E
         required: false
         default: false
         type: boolean
@@ -372,16 +372,18 @@ jobs:
         run: |
           helm lint infrastructure/k8s/ticketflow
           helm install ticketflow infrastructure/k8s/ticketflow \
-            --namespace ticketflow --create-namespace --wait --timeout 15m \
+            --namespace ticketflow --create-namespace --wait --wait-for-jobs --timeout 15m \
             --set-string appImages.registry="$IMAGE_PREFIX" \
             --set-string appImages.tag="$IMAGE_TAG" \
             --set-string runtime.functions.healthUrl="http://functions-provider:4566/health"
 
       - name: Wait and smoke public gateway
         run: |
+          kubectl wait --for=condition=complete job --all --namespace ticketflow --timeout=10m
           kubectl rollout status deployment --all --namespace ticketflow --timeout=10m
           curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/health/live
           curl --fail --show-error --retry 30 --retry-all-errors --retry-delay 2 http://localhost:30080/catalog/events
+          kubectl get jobs --namespace ticketflow -o json | jq -e '.items | (length > 0 and all(.[]; .status.succeeded == 1))'
 
       - name: Collect cluster diagnostics on failure
         if: failure()
@@ -401,7 +403,7 @@ jobs:
           retention-days: 30
 
   chaos:
-    name: Nightly/explicit persistent-state restart gate
+    name: Nightly/explicit persistent-state recreation gate
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_chaos)
     needs: [full-stack-e2e]
     runs-on: ubuntu-latest
@@ -437,7 +439,7 @@ jobs:
           bash tests/ci/start-e2e-stack.sh
           pnpm exec playwright test --config tests/e2e/playwright.config.ts --project=full-stack --grep "one-time scanner check-in"
 
-      - name: Restart Redis, RabbitMQ, Kafka and Keycloak and verify the same business IDs
+      - name: Recreate Redis, RabbitMQ, Kafka and Keycloak and verify state markers plus business IDs
         run: bash tests/ci/run-chaos.sh
 
       - name: Collect chaos evidence
