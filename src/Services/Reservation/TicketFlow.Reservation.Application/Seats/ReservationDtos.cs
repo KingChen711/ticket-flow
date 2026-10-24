@@ -30,3 +30,7 @@ public sealed record HoldSeatsResult(
 /// it Available (see docs/phase-2-plan.md, Commit 8).
 /// </summary>
 public sealed record CheckAvailabilityResult(bool AllAvailable, IReadOnlyList<Guid> UnavailableSeatIds);
+
+public sealed record SeatSectionsRequest(IReadOnlyList<Guid> SeatIds);
+
+public sealed record SeatSectionDto(Guid Id, Guid SectionId);

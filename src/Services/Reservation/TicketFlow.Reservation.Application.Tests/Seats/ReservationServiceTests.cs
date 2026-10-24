@@ -169,5 +169,18 @@ public sealed class ReservationServiceTests
         Assert.Empty(result.UnavailableSeatIds);
     }
 
+    [Fact]
+    public async Task SeatSections_returns_only_the_requested_seats_of_this_event()
+    {
+        var otherEventSeat = SeatInventory.ForSection(Guid.NewGuid(), Guid.NewGuid(), "B", 1)[0];
+        _seatRepository.AddRange([otherEventSeat]);
+
+        var sections = await _service.GetSeatSectionsAsync(_eventId, [_seats[0].Id, otherEventSeat.Id, Guid.NewGuid()]);
+
+        var only = Assert.Single(sections);
+        Assert.Equal(_seats[0].Id, only.Id);
+        Assert.Equal(_seats[0].SectionId, only.SectionId);
+    }
+
     private List<Guid> Ids(params int[] indexes) => indexes.Select(index => _seats[index].Id).ToList();
 }

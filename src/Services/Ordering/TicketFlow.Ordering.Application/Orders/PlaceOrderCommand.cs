@@ -30,9 +30,10 @@ public sealed class PlaceOrderCommandHandler(
 {
     public async Task<OrderResponse> HandleAsync(PlaceOrderCommand command, CancellationToken cancellationToken = default)
     {
-        var seatSections = await pricingSource.GetSeatSectionsAsync(command.CatalogEventId, cancellationToken);
-        var sectionPrices = await pricingSource.GetSectionPricesAsync(command.CatalogEventId, cancellationToken);
-        var total = OrderPricing.Calculate(command.SeatIds, seatSections, sectionPrices);
+        var seatSectionsTask = pricingSource.GetSeatSectionsAsync(command.CatalogEventId, command.SeatIds, cancellationToken);
+        var sectionPricesTask = pricingSource.GetSectionPricesAsync(command.CatalogEventId, cancellationToken);
+        await Task.WhenAll(seatSectionsTask, sectionPricesTask);
+        var total = OrderPricing.Calculate(command.SeatIds, seatSectionsTask.Result, sectionPricesTask.Result);
         var placed = Order.Place(command.CustomerId, command.CatalogEventId, command.SeatIds, total, timeProvider.GetUtcNow());
 
         // No aggregate exists yet to Load — StartStream both creates the stream and stages its
