@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Workspace packages ship raw TS source, no build step (see docs/phase-8-plan.md mục 6) —
   // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
-  transpilePackages: ["@ticketflow/http-client", "@ticketflow/types", "@ticketflow/ui", "@ticketflow/web-auth"],
+  transpilePackages: ["@ticketflow/http-client", "@ticketflow/types", "@ticketflow/web-auth"],
   // Multi-Zones (docs/phase-8-plan.md Commit 9, mục 1): customer-web is the shell and rewrites
   // /organizer/* here. Pages and the Auth.js route physically live under src/app/organizer/*
   // (manual prefix, not Next's `basePath`). Auth.js uses its own explicit

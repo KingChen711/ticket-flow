@@ -115,6 +115,9 @@ jobs:
       - name: Unit and runtime-contract tests
         run: pnpm test:web
 
+      - name: App unit tests (Vitest)
+        run: pnpm test
+
       - name: Production build all zones
         run: pnpm build
 

@@ -15,8 +15,10 @@ ZIP_PATH="/functions/TicketFlow.Functions/function.zip"
 ROLE_ARN="arn:aws:iam::000000000000:role/ticketflow-lambda-role"
 BUCKET_NAME="posters"
 
-# See 01-deploy-functions.sh: LocalStack's dotnet10 Function.State is absent in the version
-# currently pinned by the floating local image, so `function-active-v2` is not a usable waiter.
+# LocalStack 2026.6.3 returns no Lambda Configuration.State for this dotnet10 executor, so the
+# AWS CLI `function-active-v2` waiter loops forever even after CreateFunction succeeds. Polling
+# GetFunction is portable across the LocalStack versions used by this project; the later manual
+# invoke/PDF smoke test is the meaningful runtime-readiness assertion.
 wait_for_function() {
   local function_name="$1"
   until awslocal lambda get-function --function-name "$function_name" >/dev/null 2>&1; do
