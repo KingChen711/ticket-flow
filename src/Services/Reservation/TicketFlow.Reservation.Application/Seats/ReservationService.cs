@@ -83,6 +83,20 @@ public sealed class ReservationService(
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Section of each given seat that belongs to the event, for ordering to price an order.
+    /// Reads Postgres only: unlike availability it needs neither live Redis status nor every
+    /// seat of the event. Seat ids from another event or unknown ids are simply absent.
+    /// </summary>
+    public async Task<IReadOnlyList<SeatSectionDto>> GetSeatSectionsAsync(Guid eventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
+    {
+        if (seatIds.Count == 0)
+            return [];
+
+        var seats = await seatRepository.GetByIdsAsync(eventId, seatIds, cancellationToken);
+        return seats.Select(seat => new SeatSectionDto(seat.Id, seat.SectionId)).ToList();
+    }
+
     public async Task<EventAvailabilityResponse> GetAvailabilityAsync(Guid eventId, CancellationToken cancellationToken = default)
     {
         var seats = await seatRepository.GetByEventAsync(eventId, cancellationToken);

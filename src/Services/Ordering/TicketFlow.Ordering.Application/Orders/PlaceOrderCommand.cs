@@ -16,19 +16,24 @@ public sealed record PlaceOrderCommand(
     Guid CustomerId,
     Guid CatalogEventId,
     IReadOnlyList<Guid> SeatIds,
-    decimal TotalAmount,
-    string? Currency,
     Guid HoldId,
     string PaymentMethod,
     string CustomerName,
     string CustomerEmail);
 
-public sealed class PlaceOrderCommandHandler(IOrderStore store, IIntegrationEventPublisher publisher, TimeProvider timeProvider)
+public sealed class PlaceOrderCommandHandler(
+    IOrderStore store,
+    IIntegrationEventPublisher publisher,
+    ISeatPricingSource pricingSource,
+    TimeProvider timeProvider)
     : ICommandHandler<PlaceOrderCommand, OrderResponse>
 {
     public async Task<OrderResponse> HandleAsync(PlaceOrderCommand command, CancellationToken cancellationToken = default)
     {
-        var total = Money.Create(command.TotalAmount, command.Currency ?? "VND");
+        var seatSectionsTask = pricingSource.GetSeatSectionsAsync(command.CatalogEventId, command.SeatIds, cancellationToken);
+        var sectionPricesTask = pricingSource.GetSectionPricesAsync(command.CatalogEventId, cancellationToken);
+        await Task.WhenAll(seatSectionsTask, sectionPricesTask);
+        var total = OrderPricing.Calculate(command.SeatIds, seatSectionsTask.Result, sectionPricesTask.Result);
         var placed = Order.Place(command.CustomerId, command.CatalogEventId, command.SeatIds, total, timeProvider.GetUtcNow());
 
         // No aggregate exists yet to Load — StartStream both creates the stream and stages its

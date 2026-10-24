@@ -3,15 +3,14 @@ using TicketFlow.Ordering.Application.Orders;
 
 namespace TicketFlow.Ordering.Api.Endpoints;
 
-// Request-body-only fields for placing an order — CustomerId/CustomerName/CustomerEmail no
+// Request-body-only fields for placing an order. The total is priced on the server from catalog
+// price tiers, so a totalAmount/currency sent by older clients is ignored. CustomerId/Name/Email no
 // longer come from the body (Phase 7 Commit 4 closes the gap PlaceOrderCommand's own doc
 // comment flagged since Phase 5): the endpoint below reads them from the caller's JWT claims
 // instead, since AddTicketFlowAuth's MapInboundClaims=false keeps raw claim names (sub/name/email).
 public sealed record PlaceOrderRequest(
     Guid CatalogEventId,
     IReadOnlyList<Guid> SeatIds,
-    decimal TotalAmount,
-    string? Currency,
     Guid HoldId,
     string PaymentMethod);
 
@@ -28,8 +27,7 @@ public static class OrderEndpoints
             var customerEmail = user.FindFirstValue("email") ?? "";
 
             var command = new PlaceOrderCommand(
-                customerId, request.CatalogEventId, request.SeatIds, request.TotalAmount, request.Currency,
-                request.HoldId, request.PaymentMethod, customerName, customerEmail);
+                customerId, request.CatalogEventId, request.SeatIds, request.HoldId, request.PaymentMethod, customerName, customerEmail);
 
             var order = await handler.HandleAsync(command, ct);
             return Results.Created($"/orders/{order.OrderId}", order);

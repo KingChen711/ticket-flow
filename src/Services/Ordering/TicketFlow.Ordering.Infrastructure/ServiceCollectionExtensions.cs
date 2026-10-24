@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TicketFlow.Ordering.Application.Abstractions;
 using TicketFlow.Ordering.Infrastructure.Messaging;
+using TicketFlow.Ordering.Infrastructure.Pricing;
 
 namespace TicketFlow.Ordering.Infrastructure;
 
@@ -33,6 +34,22 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOrderStore, MartenOrderStore>();
         services.AddScoped<IOrderViewStore, MartenOrderViewStore>();
         services.AddScoped<IIntegrationEventPublisher, MassTransitIntegrationEventPublisher>();
+
+        var catalogBaseUrl = configuration["Catalog:BaseUrl"]
+            ?? throw new InvalidOperationException("Configuration 'Catalog:BaseUrl' was not found.");
+        var reservationBaseUrl = configuration["Reservation:BaseUrl"]
+            ?? throw new InvalidOperationException("Configuration 'Reservation:BaseUrl' was not found.");
+        services.AddHttpClient(HttpSeatPricingSource.CatalogClient, client =>
+        {
+            client.BaseAddress = new Uri(catalogBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(5);
+        });
+        services.AddHttpClient(HttpSeatPricingSource.ReservationClient, client =>
+        {
+            client.BaseAddress = new Uri(reservationBaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(5);
+        });
+        services.AddScoped<ISeatPricingSource, HttpSeatPricingSource>();
 
         services.AddHealthChecks().AddCheck<MartenHealthCheck>("marten");
 

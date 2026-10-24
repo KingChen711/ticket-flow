@@ -109,4 +109,4 @@ Không có lỗ hổng NuGet nào trong project chạy thật (service, gateway,
 Không phải phạm vi quét tự động, ghi lại để không bị bỏ sót:
 
 - Danh sách ghế trong đơn hàng không được đối chiếu với hold: đã chứng minh bằng test và sửa ở PR 3.
-- `TotalAmount` của đơn hàng do client gửi lên, không đối chiếu giá trong catalog (`src/Services/Ordering/TicketFlow.Ordering.Api/Endpoints/OrderEndpoints.cs`). Chưa sửa, cần thiết kế lại cách tính giá.
+- `TotalAmount` của đơn hàng do client gửi lên, không đối chiếu giá trong catalog: đã sửa ở PR 9, ordering tự tính giá từ hạng giá của catalog.
