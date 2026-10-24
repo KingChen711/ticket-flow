@@ -86,6 +86,11 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
 
         During(AwaitingSeats,
             When(SeatsConfirmedEvent)
+                // From here on the saga works with the seats reservation actually confirmed from
+                // the hold, not the ids the client listed in the order request: IssueTickets and
+                // the ReleaseSeats compensation (which un-sells every listed seat) must never act
+                // on a seat that belongs to someone else's hold or sale.
+                .Then(context => context.Saga.SeatIds = [.. context.Message.SeatIds])
                 .Publish(context => new ProcessPayment(
                     context.Saga.CorrelationId,
                     context.Saga.UserId,

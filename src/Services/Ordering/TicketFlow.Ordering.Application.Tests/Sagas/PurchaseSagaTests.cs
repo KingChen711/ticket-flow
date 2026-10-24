@@ -96,6 +96,53 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tickets_are_issued_only_for_seats_reservation_actually_confirmed()
+    {
+        var orderId = Guid.NewGuid();
+        var heldSeat = Guid.NewGuid();
+        var someoneElsesSeat = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        // The order request lists a seat that is not part of the caller's hold.
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [heldSeat, someoneElsesSeat], 100m, "CreditCard",
+            "D", "d@example.com", DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+
+        // Reservation confirms only what the hold owned.
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [heldSeat], DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+        await _harness.Bus.Publish(new PaymentProcessed(orderId, Guid.NewGuid(), 100m, DateTimeOffset.UtcNow));
+
+        Assert.True(await _harness.Published.Any<IssueTickets>(x => x.Context.Message.OrderId == orderId));
+        var issue = _harness.Published.Select<IssueTickets>(x => x.Context.Message.OrderId == orderId).Single();
+        Assert.Equal([heldSeat], issue.Context.Message.SeatIds);
+    }
+
+    [Fact]
+    public async Task Compensation_releases_only_seats_reservation_actually_confirmed()
+    {
+        var orderId = Guid.NewGuid();
+        var heldSeat = Guid.NewGuid();
+        var someoneElsesSeat = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [heldSeat, someoneElsesSeat], 100m, "CreditCard",
+            "E", "e@example.com", DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [heldSeat], DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+
+        await _harness.Bus.Publish(new PaymentFailed(orderId, "Declined."));
+
+        // ReleaseSeats un-sells every listed seat, so another buyer's seat must never be in it.
+        Assert.True(await _harness.Published.Any<ReleaseSeats>(x => x.Context.Message.OrderId == orderId));
+        var release = _harness.Published.Select<ReleaseSeats>(x => x.Context.Message.OrderId == orderId).Single();
+        Assert.Equal([heldSeat], release.Context.Message.SeatIds);
+    }
+
+    [Fact]
     public async Task SeatsConfirmationFailed_cancels_directly_no_compensation_needed()
     {
         var orderId = Guid.NewGuid();
