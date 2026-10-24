@@ -45,22 +45,62 @@ public sealed class OutboxDispatcher(IServiceScopeFactory scopeFactory, IBus bus
         var session = scope.ServiceProvider.GetRequiredService<IDocumentSession>();
 
         var pending = await session.Query<OutboxMessage>()
-            .Where(message => message.SentAt == null)
+            .Where(message => message.SentAt == null && message.FailedAt == null)
             .OrderBy(message => message.CreatedAt)
             .Take(BatchSize)
             .ToListAsync(cancellationToken);
 
         foreach (var message in pending)
         {
-            var type = Type.GetType(message.MessageType, throwOnError: true)!;
-            var payload = JsonSerializer.Deserialize(message.Payload, type)!;
-            await bus.Publish(payload, type, cancellationToken);
+            if (!TryRead(message, out var payload, out var type, out var error))
+            {
+                // Retrying cannot fix a row like this, and it must not hold back the ones behind it.
+                logger.LogError("Outbox message {MessageId} ({MessageType}) cannot be sent and was set aside: {Error}",
+                    message.Id, message.MessageType, error);
+                message.FailedAt = timeProvider.GetUtcNow();
+                message.Error = error;
+            }
+            else
+            {
+                // A publish failure (broker down) propagates and the batch is retried on the next tick.
+                await bus.Publish(payload, type, cancellationToken);
+                message.SentAt = timeProvider.GetUtcNow();
+            }
 
-            message.SentAt = timeProvider.GetUtcNow();
             session.Store(message);
             await session.SaveChangesAsync(cancellationToken);
         }
 
         return pending.Count;
+    }
+
+    private static bool TryRead(OutboxMessage message, out object payload, out Type type, out string? error)
+    {
+        payload = null!;
+        type = null!;
+        try
+        {
+            var resolved = Type.GetType(message.MessageType, throwOnError: false);
+            if (resolved is null)
+            {
+                error = "Message type could not be resolved.";
+                return false;
+            }
+
+            var read = JsonSerializer.Deserialize(message.Payload, resolved);
+            if (read is null)
+            {
+                error = "Payload deserialized to null.";
+                return false;
+            }
+
+            (payload, type, error) = (read, resolved, null);
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = $"Payload is not valid JSON for the type: {ex.Message}";
+            return false;
+        }
     }
 }
