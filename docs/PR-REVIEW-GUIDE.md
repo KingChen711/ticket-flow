@@ -1,6 +1,6 @@
 # Hướng dẫn review chuỗi PR "polish"
 
-11 PR được xếp chồng (stacked): mỗi PR lấy nhánh của PR trước làm base, PR đầu tiên lấy `chore/polish`
+15 PR được xếp chồng (stacked): mỗi PR lấy nhánh của PR trước làm base, PR đầu tiên lấy `chore/polish`
 (tạo từ `main` tại commit `73454c7`). Diff của mỗi PR chỉ chứa thay đổi của chính nó.
 
 ## Thứ tự nên đọc và merge
@@ -18,15 +18,19 @@
 | 9 | [#9 Tính giá ở server](https://github.com/KingChen711/ticket-flow/pull/9) | `chore/polish-9-pricing` | **đổi hành vi** đặt đơn, cấu hình mới | ordering giờ gọi catalog + reservation khi đặt đơn |
 | 10 | [#10 Database ordering cho Compose](https://github.com/KingChen711/ticket-flow/pull/10) | `chore/polish-10-ordering-db` | script init Postgres | volume cũ cần `down -v` |
 | 11 | [#11 Đơn chốt thiếu ghế](https://github.com/KingChen711/ticket-flow/pull/11) | `chore/polish-11-order-seats` | **đổi hành vi** saga, event | nhánh "thiếu ghế" của `PurchaseSaga` |
+| 12 | [#12 Outbox cho ordering](https://github.com/KingChen711/ticket-flow/pull/12) | `chore/polish-12-ordering-outbox` | **đổi hành vi** gửi `OrderSubmitted` | gửi ít nhất một lần, chỉ 1 instance ordering |
+| 13 | [#13 Service sống khi Elasticsearch chết](https://github.com/KingChen711/ticket-flow/pull/13) | `chore/polish-13-logging-resilience` | 1 dòng cấu hình log | template log khi ES chết lúc khởi động |
+| 14 | [#14 Gỡ Lambda probe](https://github.com/KingChen711/ticket-flow/pull/14) | `chore/polish-14-remove-probes` | xóa code, sửa script LocalStack | chạy LocalStack thật một lần |
+| 15 | [#15 Test frontend](https://github.com/KingChen711/ticket-flow/pull/15) | `chore/polish-15-web-tests` | test, CI, tách module nhỏ | phạm vi mock trong test |
 
 Cách merge:
 
-1. Merge lần lượt #1 → #11 vào base của từng PR (dùng "Create a merge commit" hoặc "Squash", đừng rebase nhánh của PR sau).
+1. Merge lần lượt #1 → #15 vào base của từng PR (dùng "Create a merge commit" hoặc "Squash", đừng rebase nhánh của PR sau).
    Khi PR trước được merge và nhánh của nó bị xóa, GitHub tự đổi base của PR kế tiếp.
 2. Mở một PR cuối `chore/polish` → `main` và merge.
 3. Nếu chỉ muốn lấy một phần, có thể dừng ở bất kỳ PR nào; các PR sau phụ thuộc PR trước.
 
-Nếu muốn đọc nhanh: #3, #9, #11 đổi hành vi app (đều có test chứng minh); #4, #5, #8, #10 đổi build/CI/dependency/hạ tầng; còn lại là tài liệu.
+Nếu muốn đọc nhanh: #3, #9, #11, #12, #13 đổi hành vi app (đều có test hoặc chạy thật chứng minh); #4, #5, #8, #10, #14, #15 đổi build/CI/dependency/hạ tầng/test; còn lại là tài liệu.
 
 ## 10 điểm chủ repo phải tự kiểm bằng tay trước khi merge
 

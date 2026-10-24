@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { PriceTierResponse, SeatAvailabilityResponse } from "@ticketflow/types";
 import { holdSeatsAction } from "./actions";
 import { useSeatMapLive } from "./useSeatMapLive";
+import { effectiveStatus, selectionTotal } from "./seatSelection";
 
 export function SeatPicker({
   eventId,
@@ -21,12 +22,8 @@ export function SeatPicker({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const liveStatuses = useSeatMapLive(eventId, signedIn);
 
-  const priceBySection = new Map(priceTiers.map((t) => [t.sectionId, t.amount]));
-  const priceFor = (seat: SeatAvailabilityResponse) => priceBySection.get(seat.sectionId) ?? 0;
-  const statusFor = (seat: SeatAvailabilityResponse) => liveStatuses[seat.seatId] ?? seat.status;
-  const total = seats
-    .filter((s) => selected.has(s.seatId))
-    .reduce((sum, s) => sum + priceFor(s), 0);
+  const statusFor = (seat: SeatAvailabilityResponse) => effectiveStatus(seat, liveStatuses);
+  const total = selectionTotal(seats, priceTiers, selected);
 
   function toggle(seatId: string) {
     setSelected((prev) => {
