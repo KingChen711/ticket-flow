@@ -145,8 +145,6 @@ importers:
 
   packages/types: {}
 
-  packages/ui: {}
-
 packages:
 
   '@alloc/quick-lru@5.2.0':
