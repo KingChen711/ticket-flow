@@ -5,7 +5,7 @@ using TicketFlow.Ordering.Application.Abstractions;
 namespace TicketFlow.Ordering.Infrastructure.Pricing;
 
 /// <summary>
-/// Reads seat sections from reservation's availability endpoint and price tiers from catalog's
+/// Reads the ordered seats' sections from reservation and price tiers from catalog's
 /// event endpoint, service to service (not through the gateway). Unlike catalog's event-detail
 /// aggregator this does not degrade to empty data: an order that cannot be priced is refused.
 /// </summary>
@@ -14,11 +14,13 @@ public sealed class HttpSeatPricingSource(IHttpClientFactory httpClientFactory) 
     public const string CatalogClient = "catalog";
     public const string ReservationClient = "reservation";
 
-    public async Task<IReadOnlyDictionary<Guid, Guid>> GetSeatSectionsAsync(Guid catalogEventId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyDictionary<Guid, Guid>> GetSeatSectionsAsync(Guid catalogEventId, IReadOnlyList<Guid> seatIds, CancellationToken cancellationToken = default)
     {
         var client = httpClientFactory.CreateClient(ReservationClient);
-        var availability = await client.GetFromJsonAsync<AvailabilityDto>($"/events/{catalogEventId}/availability", cancellationToken);
-        return availability?.Seats.ToDictionary(seat => seat.Id, seat => seat.SectionId) ?? [];
+        using var response = await client.PostAsJsonAsync($"/events/{catalogEventId}/seat-sections", new { seatIds }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var seats = await response.Content.ReadFromJsonAsync<List<SeatDto>>(cancellationToken);
+        return seats?.ToDictionary(seat => seat.Id, seat => seat.SectionId) ?? [];
     }
 
     public async Task<IReadOnlyList<SectionPrice>> GetSectionPricesAsync(Guid catalogEventId, CancellationToken cancellationToken = default)
@@ -34,8 +36,6 @@ public sealed class HttpSeatPricingSource(IHttpClientFactory httpClientFactory) 
     }
 
     private sealed record SeatDto(Guid Id, Guid SectionId);
-
-    private sealed record AvailabilityDto(IReadOnlyList<SeatDto> Seats);
 
     private sealed record PriceTierDto(Guid SectionId, decimal Amount, string Currency);
 

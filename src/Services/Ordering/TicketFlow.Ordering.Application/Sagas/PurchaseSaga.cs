@@ -91,7 +91,7 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                 // the hold, not the ids the client listed in the order request: IssueTickets and
                 // the ReleaseSeats compensation (which un-sells every listed seat) must never act
                 // on a seat that belongs to someone else's hold or sale.
-                .Then(context => context.Saga.SeatIds = [.. context.Message.SeatIds])
+                .Then(context => context.Saga.RecordConfirmedSeats(context.Message.SeatIds))
                 .IfElse(context => context.Saga.ConfirmedAllRequestedSeats(),
                     confirmed => confirmed
                         .Publish(context => new ProcessPayment(

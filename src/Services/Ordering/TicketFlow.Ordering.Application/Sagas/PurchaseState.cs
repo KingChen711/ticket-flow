@@ -35,6 +35,18 @@ public sealed class PurchaseState : SagaStateMachineInstance
     /// <summary>Set on any failure event (Commit 9) — carried through compensation to the final OrderCancelledIntegrationEvent.</summary>
     public string? CancellationReason { get; set; }
 
+    /// <summary>
+    /// Replaces the working seat list with what reservation confirmed. Instances persisted before
+    /// RequestedSeatIds existed still hold the requested seats in SeatIds, so those are kept first.
+    /// </summary>
+    public void RecordConfirmedSeats(IEnumerable<Guid> confirmedSeatIds)
+    {
+        if (RequestedSeatIds.Count == 0)
+            RequestedSeatIds = [.. SeatIds];
+
+        SeatIds = [.. confirmedSeatIds];
+    }
+
     /// <summary>A method, not a property, so the saga repository doesn't serialize it.</summary>
     public bool ConfirmedAllRequestedSeats() => RequestedSeatIds.ToHashSet().SetEquals(SeatIds);
 }

@@ -130,6 +130,45 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Order_listing_cheaper_seats_than_the_hold_is_cancelled_without_charging()
+    {
+        var orderId = Guid.NewGuid();
+        var cheapSeatInRequest = Guid.NewGuid();
+        var vipSeat1 = Guid.NewGuid();
+        var vipSeat2 = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+
+        // Priced for the one cheap seat the request lists, while the hold actually owns two VIP seats.
+        await _harness.Bus.Publish(new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [cheapSeatInRequest], 300_000m, "CreditCard",
+            "F", "f@example.com", DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [vipSeat1, vipSeat2], DateTimeOffset.UtcNow));
+
+        Assert.True(await _harness.Published.Any<ReleaseSeats>(x => x.Context.Message.OrderId == orderId));
+        var release = _harness.Published.Select<ReleaseSeats>(x => x.Context.Message.OrderId == orderId).Single();
+        Assert.Equal(new[] { vipSeat1, vipSeat2 }.Order(), release.Context.Message.SeatIds.Order());
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.CompensatingSeats));
+
+        // Negative check last: it waits out the harness inactivity timeout.
+        Assert.False(await _harness.Published.Any<ProcessPayment>(x => x.Context.Message.OrderId == orderId));
+    }
+
+    [Fact]
+    public void Instance_persisted_before_RequestedSeatIds_existed_still_compares_against_its_requested_seats()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var resumed = new PurchaseState { SeatIds = [first, second] };
+
+        resumed.RecordConfirmedSeats([second, first]);
+
+        Assert.True(resumed.ConfirmedAllRequestedSeats());
+        Assert.Equal(new[] { first, second }.Order(), resumed.SeatIds.Order());
+    }
+
+    [Fact]
     public async Task Fully_confirmed_hold_in_any_order_proceeds_to_payment_and_tickets()
     {
         var orderId = Guid.NewGuid();
