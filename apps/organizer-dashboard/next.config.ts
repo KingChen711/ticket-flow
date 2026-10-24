@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Workspace packages ship raw TS source, no build step (see docs/phase-8-plan.md mục 6) —
   // Next.js needs this to transpile them instead of treating them as pre-built node_modules.
-  transpilePackages: ["@ticketflow/types", "@ticketflow/ui"],
+  transpilePackages: ["@ticketflow/types"],
   // Multi-Zones (docs/phase-8-plan.md Commit 9, mục 1): customer-web is the shell and rewrites
   // /organizer/* here. Pages already live under src/app/organizer/* (manual prefix, not Next's
   // `basePath`) — `basePath` was tried first and reverted: it also shifts API routes, and

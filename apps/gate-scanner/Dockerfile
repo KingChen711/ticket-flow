@@ -9,7 +9,6 @@ COPY apps/customer-web/package.json apps/customer-web/
 COPY apps/organizer-dashboard/package.json apps/organizer-dashboard/
 COPY apps/gate-scanner/package.json apps/gate-scanner/
 COPY packages/types/package.json packages/types/
-COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
