@@ -192,6 +192,30 @@ public sealed class PurchaseSagaTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Resent_OrderSubmitted_while_in_flight_is_ignored()
+    {
+        var orderId = Guid.NewGuid();
+        var seatId = Guid.NewGuid();
+        var sagaHarness = _harness.GetSagaStateMachineHarness<PurchaseSaga, PurchaseState>();
+        var submitted = new OrderSubmitted(
+            orderId, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), [seatId], 100m, "CreditCard",
+            "G", "g@example.com", DateTimeOffset.UtcNow);
+
+        await _harness.Bus.Publish(submitted);
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingSeats));
+        await _harness.Bus.Publish(new SeatsConfirmed(orderId, [seatId], DateTimeOffset.UtcNow));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+
+        // The outbox may deliver the same message again.
+        await _harness.Bus.Publish(submitted);
+
+        Assert.True(await sagaHarness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception == null));
+        Assert.NotNull(await sagaHarness.Exists(orderId, x => x.AwaitingPayment));
+        Assert.Single(_harness.Published.Select<ConfirmSeats>(x => x.Context.Message.OrderId == orderId));
+        Assert.False(await _harness.Consumed.Any<OrderSubmitted>(x => x.Context.Message.OrderId == orderId && x.Exception != null));
+    }
+
+    [Fact]
     public async Task SeatsConfirmationFailed_cancels_directly_no_compensation_needed()
     {
         var orderId = Guid.NewGuid();

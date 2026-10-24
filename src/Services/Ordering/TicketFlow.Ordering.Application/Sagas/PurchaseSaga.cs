@@ -218,6 +218,9 @@ public sealed class PurchaseSaga : MassTransitStateMachine<PurchaseState>
                     DateTimeOffset.UtcNow))
                 .Finalize());
 
+        // A re-sent OrderSubmitted (the outbox is at-least-once) for an order already in flight.
+        DuringAny(Ignore(OrderSubmittedEvent));
+
         SetCompletedWhenFinalized();
     }
 }
