@@ -2,11 +2,8 @@
 
 import { useEffect, useState } from "react";
 import * as signalR from "@microsoft/signalr";
+import { applySeatsUpdated, type SeatsUpdatedPayload } from "./seatSelection";
 
-interface SeatsUpdatedPayload {
-  seatIds: string[];
-  status: string;
-}
 
 // Browser connects directly to the reservation hub (the one deliberate exception to the BFF
 // pattern, docs/phase-8-plan.md mục 2/5) — hold/release/confirm broadcasts land here live.
@@ -37,11 +34,7 @@ export function useSeatMapLive(eventId: string, signedIn: boolean): Record<strin
         .build();
 
       newConnection.on("seatsUpdated", (payload: SeatsUpdatedPayload) => {
-        setLiveStatuses((prev) => {
-          const next = { ...prev };
-          for (const seatId of payload.seatIds) next[seatId] = payload.status;
-          return next;
-        });
+        setLiveStatuses((prev) => applySeatsUpdated(prev, payload));
       });
 
       await newConnection.start();

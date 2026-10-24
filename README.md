@@ -134,7 +134,7 @@ dùng để soạn README này không dựng được toàn bộ stack (xem "H�
 | Dữ liệu | PostgreSQL 16, Redis 7, MongoDB 7, Elasticsearch 8, ClickHouse 24, MinIO |
 | Hạ tầng | Docker Compose, Kubernetes (kind) + Helm, LocalStack (Lambda, S3, EventBridge), Keycloak 26 |
 | Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Serilog, Kibana |
-| Test | xUnit, MassTransit test harness, Testcontainers (Redis), NBomber (load test) |
+| Test | xUnit, MassTransit test harness, Testcontainers (Redis), NBomber (load test), Vitest (frontend) |
 | CI | GitHub Actions |
 
 ## Cấu trúc repo
@@ -178,6 +178,7 @@ dotnet test TicketFlow.slnx -c Release --no-build
 # Frontend
 pnpm install --frozen-lockfile
 pnpm lint
+pnpm test
 pnpm build
 ```
 
@@ -211,7 +212,7 @@ dotnet test src/Services/Ordering/TicketFlow.Ordering.Application.Tests         
 
 Tổng 111 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
 `tests/TicketFlow.FlashSale.LoadTests`) chạy tay với stack đang chạy, xem README trong thư mục đó.
-Frontend chưa có test, chỉ có ESLint và type check khi build. CI chạy lint, build, test cho mọi PR (`.github/workflows/ci.yml`).
+Frontend: 16 test Vitest (`pnpm test`) cho phần chạy phía server và logic thuần: server action giữ ghế, route soát vé, action tạo sự kiện của organizer, tính tổng tiền và áp trạng thái ghế real-time. Chưa có test giao diện (component, trình duyệt). CI chạy lint, build, test cho mọi PR (`.github/workflows/ci.yml`).
 
 ## Chạy backend bằng Docker Compose
 
@@ -296,7 +297,7 @@ Chạy trên Kubernetes (kind + Helm): xem `infrastructure/k8s/` và job `deploy
 - **Full stack nặng** (khoảng 21 container, cần khoảng 8 GB RAM cho Docker) và phần Lambda cần token LocalStack.
 - **Còn 6 lỗ hổng high trong dependency bắc cầu chỉ dùng lúc lint/build** (`brace-expansion` qua eslint, `browserslist`), bị khóa bởi range của package cha, xem `docs/SECURITY-AUDIT.md`.
 - **Secret dev nằm trong repo** (realm Keycloak, Helm values, appsettings). Không dùng lại cho môi trường thật.
-- **Frontend chưa có test tự động**; Gateway, Identity, Search, Notification, Recommendation, Analytics, Lambda chưa có test.
+- **Frontend chưa có test giao diện** (chỉ test server action và logic thuần); Gateway, Identity, Search, Notification, Recommendation, Analytics, Lambda chưa có test.
 - Lint .NET trong CI chỉ kiểm whitespace; `dotnet format` đầy đủ còn báo lệch thứ tự `using` ở nhiều file.
 - README chưa kèm ảnh chụp màn hình.
 
