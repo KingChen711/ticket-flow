@@ -128,7 +128,7 @@ dùng để soạn README này không dựng được toàn bộ stack (xem "H�
 | Nhóm | Dùng |
 |---|---|
 | Backend | .NET 10, ASP.NET Core Minimal API, gRPC, EF Core 10 + Npgsql, Marten, MassTransit 8 (RabbitMQ, Kafka Rider), Polly, YARP, SignalR, QuestPDF |
-| Frontend | Next.js 16 (App Router, Multi-Zones), React 19, Auth.js (next-auth 5 beta), Tailwind CSS 4, `@microsoft/signalr`, `jsQR`, pnpm workspace |
+| Frontend | Next.js 16.4 (App Router, Multi-Zones), React 19, Auth.js (next-auth 5 beta), Tailwind CSS 4, `@microsoft/signalr`, `jsQR`, pnpm workspace |
 | Dữ liệu | PostgreSQL 16, Redis 7, MongoDB 7, Elasticsearch 8, ClickHouse 24, MinIO |
 | Hạ tầng | Docker Compose, Kubernetes (kind) + Helm, LocalStack (Lambda, S3, EventBridge), Keycloak 26 |
 | Observability | OpenTelemetry, Jaeger, Prometheus, Grafana, Serilog, Kibana |
@@ -288,7 +288,7 @@ Chạy trên Kubernetes (kind + Helm): xem `infrastructure/k8s/` và job `deploy
 - **Ghi chéo nhiều store không nguyên tử ở vài chỗ**: ordering lưu Marten rồi mới publish `OrderSubmitted` (chưa có outbox); reservation chốt Redis rồi mới lưu Postgres; cấp inventory lưu Postgres rồi mới nạp Redis.
 - **Thanh toán giả lập, thông báo chỉ ghi log**, không gửi email/SMS thật.
 - **Full stack nặng** (khoảng 21 container, cần khoảng 8 GB RAM cho Docker) và phần Lambda cần token LocalStack.
-- **Dependency frontend có lỗ hổng đã biết** (`next`, `next-auth`) chưa được nâng cấp, xem `docs/SECURITY-AUDIT.md`.
+- **Còn 6 lỗ hổng high trong dependency bắc cầu chỉ dùng lúc lint/build** (`brace-expansion` qua eslint, `browserslist`), bị khóa bởi range của package cha, xem `docs/SECURITY-AUDIT.md`.
 - **Secret dev nằm trong repo** (realm Keycloak, Helm values, appsettings). Không dùng lại cho môi trường thật.
 - **Frontend chưa có test tự động**; Gateway, Identity, Search, Notification, Recommendation, Analytics, Lambda chưa có test.
 - Lint .NET trong CI chỉ kiểm whitespace; `dotnet format` đầy đủ còn báo lệch thứ tự `using` ở nhiều file.

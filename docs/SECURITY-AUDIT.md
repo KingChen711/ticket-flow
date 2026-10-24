@@ -82,6 +82,19 @@ pnpm audit
 pnpm lint && pnpm build   # rồi thử lại đăng nhập Keycloak trên cả 3 app
 ```
 
+### Cập nhật sau khi nâng cấp (PR 8)
+
+`next` 16.2.10 → 16.4.2, `eslint-config-next` → 16.4.2, `next-auth` 5.0.0-beta.31 → 5.0.0-beta.32, cùng các package
+bắc cầu được nâng trong range semver sẵn có. `pnpm audit` sau nâng cấp: **0 critical, 6 high, 2 moderate**. Phần còn lại:
+
+| Package | Bản | Vì sao chưa vá | Dùng lúc |
+|---|---|---|---|
+| `brace-expansion` | 5.0.7 | `minimatch` (qua `@typescript-eslint`) khóa range | lint |
+| `browserslist` | 4.28.6 | `@babel/helper-compilation-targets` (qua `styled-jsx`) khóa range | build |
+| `baseline-browser-mapping` (moderate) | 2.10.43 | `next` khóa range | build |
+
+Vá nốt cần `pnpm.overrides`, không làm để tránh ép version mà package cha chưa kiểm.
+
 ### NuGet (`dotnet list package --vulnerable --include-transitive`)
 
 | Package | Bản | Mức | Advisory | Project | Ghi chú |
