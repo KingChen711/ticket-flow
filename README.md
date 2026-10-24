@@ -205,11 +205,11 @@ dotnet test src/Services/Ordering/TicketFlow.Ordering.Application.Tests         
 | `Reservation.Application.Tests` | giữ ghế, giữ trùng, chốt, nhả, bù trừ, tình trạng ghế, tra khu ghế | 19 |
 | `Reservation.IntegrationTests` | Lua script trên Redis thật, nhiều người giành 1 ghế | 5 |
 | `Ordering.Domain.Tests` | dựng đơn hàng từ event | 11 |
-| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 23 |
+| `Ordering.Application.Tests` | handler đặt/xác nhận/hủy đơn, tính giá ở server, toàn bộ nhánh của `PurchaseSaga` | 24 |
 | `Payment.Domain.Tests`, `Payment.Infrastructure.Tests` | trạng thái giao dịch, pipeline Polly | 9 + 3 |
 | `Ticketing.Domain.Tests` | vé, check-in | 6 |
 
-Tổng 111 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
+Tổng 112 test. Load test NBomber (`src/Services/Reservation/TicketFlow.Reservation.LoadTests`,
 `tests/TicketFlow.FlashSale.LoadTests`) chạy tay với stack đang chạy, xem README trong thư mục đó.
 Frontend chưa có test, chỉ có ESLint và type check khi build. CI chạy lint, build, test cho mọi PR (`.github/workflows/ci.yml`).
 
@@ -291,7 +291,7 @@ Chạy trên Kubernetes (kind + Helm): xem `infrastructure/k8s/` và job `deploy
 ## Hạn chế đã biết
 
 - **Ghi chéo nhiều store không nguyên tử ở vài chỗ**: reservation chốt Redis rồi mới lưu Postgres; cấp inventory lưu Postgres rồi mới nạp Redis.
-- **Outbox của ordering gửi ít nhất một lần và giả định chỉ chạy 1 instance ordering**; consumer liên quan đã chịu được message lặp.
+- **Outbox của ordering gửi ít nhất một lần và giả định chỉ chạy 1 instance ordering**. Saga giữ instance đã kết thúc ở trạng thái `Final` để bỏ qua `OrderSubmitted` gửi lại, nên bảng saga lớn dần theo số đơn; message không đọc được bị để riêng (`FailedAt`) và chưa có cảnh báo hay cơ chế dọn.
 - **Thanh toán giả lập, thông báo chỉ ghi log**, không gửi email/SMS thật.
 - **Full stack nặng** (khoảng 21 container, cần khoảng 8 GB RAM cho Docker) và phần Lambda cần token LocalStack.
 - **Còn 6 lỗ hổng high trong dependency bắc cầu chỉ dùng lúc lint/build** (`brace-expansion` qua eslint, `browserslist`), bị khóa bởi range của package cha, xem `docs/SECURITY-AUDIT.md`.
